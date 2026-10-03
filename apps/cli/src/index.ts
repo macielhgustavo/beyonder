@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import { existsSync } from "node:fs";
-import { classifyEconomicState, createRuntime, loadConfig, type IntelligenceTaskType } from "@beyonder/runtime";
+import { randomUUID } from "node:crypto";
+import { classifyEconomicState, createRuntime, loadConfig, type IntelligenceTaskType, type Plan } from "@beyonder/runtime";
 import {
   AutopilotStateStore,
   buildComputeInventory,
@@ -265,6 +266,60 @@ models
     }, null, 2));
     runtime.sqlite.close();
   });
+
+const taskCommand = program.command("task").description("Run and inspect autonomous task executions");
+
+taskCommand
+  .command("run")
+  .argument("<objective>", "objective to execute")
+  .description("Run a bounded v0.4 task execution using the current safe deterministic plan path")
+  .action(async (objective: string) => {
+    const config = loadConfig();
+    const runtime = createBeyonderRuntime(config);
+    await runtime.ledger.initialize(config.startingCapitalUsd);
+    const summary = await runtime.ledger.summary(config.monthlyFixedCostUsd);
+    const economicState = classifyEconomicState(summary);
+    const inspection = await runtime.intelligence.inspect(objective);
+    const plan = singleStepObjectivePlan(inspection.task.id, objective);
+    const outcome = await runtime.taskExecutor.execute({
+      task: inspection.task,
+      plan,
+      economicState
+    });
+    console.log(JSON.stringify({
+      taskId: inspection.task.id,
+      executionId: outcome.execution.id,
+      status: outcome.status,
+      result: outcome.result,
+      stepsExecuted: outcome.execution.usage.steps,
+      toolInvocations: outcome.execution.usage.toolInvocations,
+      checkpoints: outcome.execution.checkpoints.length,
+      monetaryCostUsd: outcome.execution.usage.monetaryCostUsd,
+      shadowCostUsd: outcome.execution.usage.shadowCostUsd
+    }, null, 2));
+    runtime.sqlite.close();
+  });
+
+taskCommand
+  .command("inspect")
+  .argument("<taskId>", "task id to inspect in memory")
+  .description("Inspect persisted task memories for one task id")
+  .action(async (taskId: string) => {
+    const runtime = createBeyonderRuntime(loadConfig());
+    const memories = (await runtime.memoryStore.all())
+      .filter((memory) => memory.taskId === taskId)
+      .map((memory) => ({
+        id: memory.id,
+        kind: memory.kind,
+        source: memory.source,
+        importance: memory.importance,
+        utility: memory.utility,
+        createdAt: memory.createdAt,
+        content: memory.content
+      }));
+    console.log(JSON.stringify({ taskId, memories }, null, 2));
+    runtime.sqlite.close();
+  });
 const providers = program.command("providers").description("Manage compute providers");
 
 providers
@@ -372,6 +427,32 @@ function routeView(route: Awaited<ReturnType<ReturnType<typeof createRuntime>["m
     } : null,
     explored: route.explored,
     reason: route.reason
+  };
+}
+
+function singleStepObjectivePlan(taskId: string, objective: string): Plan {
+  const planId = `plan_${randomUUID()}`;
+  return {
+    id: planId,
+    taskId,
+    objective,
+    createdAt: new Date().toISOString(),
+    revision: 1,
+    assumptions: ["Temporary v0.4 task command path until planner/recovery branch provides structured planning."],
+    steps: [
+      {
+        id: "record-objective",
+        description: "Normalize and record the objective through the safe deterministic tool runtime.",
+        status: "PENDING",
+        expectedOutcome: "Objective accepted with zero side effects.",
+        allowedToolCapabilities: ["objective-normalization", "deterministic"],
+        action: {
+          id: `tool_${randomUUID()}`,
+          tool: "safe-objective",
+          arguments: { objective }
+        }
+      }
+    ]
   };
 }
 

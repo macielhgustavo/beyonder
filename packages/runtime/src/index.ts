@@ -16,6 +16,8 @@ export {
   createToolInputSchema
 } from "@beyonder/tools";
 export { createRuntimeToolExecutor, createRuntimeToolRegistry, RuntimeToolAuditSink, safeObjectiveTool } from "./tools/runtime-tools.js";
+export { AutonomousTaskExecutor } from "./tasks/task-executor.js";
+export { assertTaskStateTransition, canTransition, isTerminalTaskState, InvalidTaskStateTransitionError } from "./tasks/state-machine.js";
 export type { AppConfig } from "./config/env.js";
 export type {
   IntelligenceTask,
@@ -34,6 +36,24 @@ export type { ModelCapabilityEvidence, ModelCapabilityRequest, ModelCapabilitySo
 export type { PerformanceRepository } from "./models/performance-repository.js";
 export type { ModelCandidate, RouteDecision, QuotaSnapshot, HistoricalPerformance } from "./models/adaptive-types.js";
 export type { AgentDecision, AgentStepStatus, ModelMessage, ModelResponse } from "./types.js";
+export type {
+  AutonomousTaskOutcome,
+  CompletionStatus,
+  ExecutionCheckpoint,
+  Plan,
+  PlanStep,
+  PlanStepStatus,
+  StepActionDecision,
+  StepActionPlanner,
+  StepContext,
+  StepExecution,
+  TaskBudget,
+  TaskBudgetUsage,
+  TaskExecution,
+  TaskExecutionState,
+  TaskExecutorTelemetry
+} from "./tasks/contracts.js";
+export { DEFAULT_TASK_BUDGET } from "./tasks/contracts.js";
 export type {
   ToolAuditEventName,
   ToolAuditSink,

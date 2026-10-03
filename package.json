@@ -27,7 +27,8 @@
     "providers:resume": "tsx apps/cli/src/index.ts providers resume",
     "providers:discover": "tsx apps/cli/src/index.ts providers discover",
     "providers:inventory": "tsx apps/cli/src/index.ts providers inventory",
-    "providers:status": "tsx apps/cli/src/index.ts providers status"
+    "providers:status": "tsx apps/cli/src/index.ts providers status",
+    "providers:nvidia-smoke": "tsx packages/benchmark/src/models/nvidia-nim-smoke.ts"
   },
   "engines": {
     "node": ">=22.0.0",
@@ -37,7 +38,7 @@
     "@beyonder/compute": "workspace:*",
     "@beyonder/economy": "workspace:*",
     "@beyonder/runtime": "workspace:*",
-    "better-sqlite3": "^11.10.0",
+    "better-sqlite3": "^13.0.3",
     "commander": "^12.1.0",
     "dotenv": "^16.4.7",
     "drizzle-orm": "^0.39.3",

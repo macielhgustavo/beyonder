@@ -1,0 +1,51 @@
+import { describe, expect, it, vi } from "vitest";
+import { openDatabase } from "../db/client.js";
+import { StateStore } from "../memory/state-store.js";
+import { DeterministicFixtureOpportunitySource, GitHubPublicOpportunitySource } from "./sources.js";
+import { OpportunityEngine } from "./engine.js";
+import { normalizeOpportunity } from "./normalizer.js";
+import { StateOpportunityStore } from "./store.js";
+
+describe("opportunity engine", () => {
+  it("discovers, normalizes, persists and deduplicates fixture opportunities", async () => {
+    const { db, sqlite } = openDatabase(":memory:");
+    const store = new StateOpportunityStore(new StateStore(db));
+    const engine = new OpportunityEngine([new DeterministicFixtureOpportunitySource()], store);
+    const first = await engine.discover({ source: "fixture", limit: 3 });
+    const second = await engine.discover({ source: "fixture", limit: 3 });
+
+    expect(first.opportunities).toHaveLength(3);
+    expect(second.opportunities).toHaveLength(3);
+    expect(await engine.list()).toHaveLength(3);
+    expect(first.opportunities.find((item) => item.sourceItemId === "task-c")?.requirements.requiresPayment).toBe(true);
+    expect(first.opportunities.find((item) => item.sourceItemId === "task-a")?.status).toBe("NORMALIZED");
+    sqlite.close();
+  });
+
+  it("preserves unknown reward and creates a stable fingerprint", () => {
+    const normalized = normalizeOpportunity({ source: "fixture", title: "Unpriced work", description: "No amount is stated." }, "2026-10-03T00:00:00.000Z");
+    expect(normalized.reward).toBeUndefined();
+    expect(normalized.id).toMatch(/^opportunity:/);
+    expect(normalized.fingerprint).toHaveLength(24);
+  });
+
+  it("keeps explicit GitHub reward evidence and ignores ordinary issues", async () => {
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify([
+      { id: 1, html_url: "https://github.com/a/b/issues/1", title: "Help wanted", body: "Bounty: $25 for a tested fix.", labels: [{ name: "help wanted" }] },
+      { id: 2, html_url: "https://github.com/a/b/issues/2", title: "Question", body: "How does this work?", labels: [] }
+    ]), { status: 200 }));
+    const source = new GitHubPublicOpportunitySource({ repository: "a/b", fetchImpl: fetchImpl as typeof fetch });
+    const result = await source.discover();
+    expect(result.errors).toEqual([]);
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]?.reward?.amount).toBe(25);
+    expect(fetchImpl).toHaveBeenCalledOnce();
+  });
+
+  it("returns read-only source errors without throwing", async () => {
+    const source = new GitHubPublicOpportunitySource({ fetchImpl: async () => new Response("no", { status: 503 }) });
+    const result = await source.discover();
+    expect(result.items).toEqual([]);
+    expect(result.errors[0]).toContain("HTTP 503");
+  });
+});

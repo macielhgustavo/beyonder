@@ -17,6 +17,9 @@ import { createRuntimeToolExecutor, createRuntimeToolRegistry } from "./tools/ru
 import { AutonomousTaskExecutor } from "./tasks/task-executor.js";
 import { LlmPlanner } from "./tasks/llm-planner.js";
 import { StateTaskCheckpointStore } from "./tasks/checkpoints.js";
+import { StateOpportunityStore } from "./opportunities/store.js";
+import { OpportunityEngine } from "./opportunities/engine.js";
+import { DeterministicFixtureOpportunitySource, GitHubPublicOpportunitySource } from "./opportunities/sources.js";
 import type { ToolContext, ToolDescriptor, ToolExecutor, ToolRegistry } from "@beyonder/tools";
 
 export interface BeyonderRuntime {
@@ -38,6 +41,8 @@ export interface BeyonderRuntime {
   taskExecutor: AutonomousTaskExecutor;
   planner: LlmPlanner;
   checkpoints: StateTaskCheckpointStore;
+  opportunities: OpportunityEngine;
+  opportunityStore: StateOpportunityStore;
   agent: AgentLoop;
 }
 
@@ -62,6 +67,11 @@ export function createRuntime(config: AppConfig, options: RuntimeOptions = {}): 
   const getAvailableTools = (context: ToolContext = {}) => tools.getAvailableTools(context, toolExecutor.policy);
   const checkpoints = new StateTaskCheckpointStore(state);
   const planner = new LlmPlanner({ modelRouter, memory });
+  const opportunityStore = new StateOpportunityStore(state);
+  const opportunities = new OpportunityEngine([
+    new DeterministicFixtureOpportunitySource(),
+    new GitHubPublicOpportunitySource()
+  ], opportunityStore, audit);
   const taskExecutorWithPlanner = new AutonomousTaskExecutor({
     memory,
     modelRouter,
@@ -103,6 +113,8 @@ export function createRuntime(config: AppConfig, options: RuntimeOptions = {}): 
     taskExecutor: taskExecutorWithPlanner,
     planner,
     checkpoints,
+    opportunities,
+    opportunityStore,
     agent
   };
 }

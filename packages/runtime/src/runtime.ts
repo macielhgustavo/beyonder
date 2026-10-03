@@ -20,6 +20,7 @@ import { StateTaskCheckpointStore } from "./tasks/checkpoints.js";
 import { StateOpportunityStore } from "./opportunities/store.js";
 import { OpportunityEngine } from "./opportunities/engine.js";
 import { DeterministicFixtureOpportunitySource, GitHubPublicOpportunitySource } from "./opportunities/sources.js";
+import { OpportunityEvaluator, OpportunityQueue } from "./opportunities/evaluator.js";
 import type { ToolContext, ToolDescriptor, ToolExecutor, ToolRegistry } from "@beyonder/tools";
 
 export interface BeyonderRuntime {
@@ -43,6 +44,8 @@ export interface BeyonderRuntime {
   checkpoints: StateTaskCheckpointStore;
   opportunities: OpportunityEngine;
   opportunityStore: StateOpportunityStore;
+  opportunityEvaluator: OpportunityEvaluator;
+  opportunityQueue: OpportunityQueue;
   agent: AgentLoop;
 }
 
@@ -72,6 +75,8 @@ export function createRuntime(config: AppConfig, options: RuntimeOptions = {}): 
     new DeterministicFixtureOpportunitySource(),
     new GitHubPublicOpportunitySource()
   ], opportunityStore, audit);
+  const opportunityEvaluator = new OpportunityEvaluator({ memory }, opportunityStore);
+  const opportunityQueue = new OpportunityQueue(opportunityStore);
   const taskExecutorWithPlanner = new AutonomousTaskExecutor({
     memory,
     modelRouter,
@@ -115,6 +120,8 @@ export function createRuntime(config: AppConfig, options: RuntimeOptions = {}): 
     checkpoints,
     opportunities,
     opportunityStore,
+    opportunityEvaluator,
+    opportunityQueue,
     agent
   };
 }

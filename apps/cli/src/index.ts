@@ -6,6 +6,7 @@ import {
   classifyEconomicState,
   createRuntime,
   loadConfig,
+  OpportunityEvaluator,
   validatePlan,
   type IntelligenceTaskType
 } from "@beyonder/runtime";
@@ -412,6 +413,29 @@ opportunities
   .action(async (id: string) => {
     const runtime = createBeyonderRuntime(loadConfig());
     console.log(JSON.stringify(await runtime.opportunities.inspect(id), null, 2));
+    runtime.sqlite.close();
+  });
+
+opportunities
+  .command("evaluate")
+  .argument("<id>", "opportunity id")
+  .description("Evaluate value, feasibility, risk, and economic decision without external action")
+  .action(async (id: string) => {
+    const config = loadConfig();
+    const runtime = createBeyonderRuntime(config);
+    const opportunity = await runtime.opportunities.inspect(id);
+    if (!opportunity) {
+      console.log(JSON.stringify({ id, status: "NOT_FOUND" }, null, 2));
+      runtime.sqlite.close();
+      return;
+    }
+    await runtime.ledger.initialize(config.startingCapitalUsd);
+    const summary = await runtime.ledger.summary(config.monthlyFixedCostUsd);
+    const evaluation = await new OpportunityEvaluator({
+      memory: runtime.memory,
+      economicState: classifyEconomicState(summary)
+    }, runtime.opportunityStore).evaluate(opportunity);
+    console.log(JSON.stringify(evaluation, null, 2));
     runtime.sqlite.close();
   });
 

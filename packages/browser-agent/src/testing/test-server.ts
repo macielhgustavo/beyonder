@@ -50,7 +50,7 @@ export async function startBrowserTestServer(): Promise<BrowserTestServer> {
             <h1>Browser fixture</h1>
             <button type="button" aria-label="Documentation" onclick="location.href='/docs'">Documentation</button>
             <label>Search <input name="search" placeholder="Search docs"></label>
-            <button type="button" aria-label="Echo search" onclick="document.getElementById('echo').textContent=document.querySelector('[name=search]').value">Echo search</button>
+            <button type="button" onclick="document.getElementById('echo').textContent=document.querySelector('[name=search]').value">Echo search</button>
             <p id="echo"></p>
             <a href="/redirect">Redirect</a>
             <a href="/slow">Slow page</a>

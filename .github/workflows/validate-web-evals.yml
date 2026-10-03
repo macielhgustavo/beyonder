@@ -1,0 +1,24 @@
+name: validate-web-evals
+
+on:
+  push:
+    branches:
+      - feat/web-evals
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Typecheck web evals
+        run: pnpm exec tsc -b packages/web-evals/tsconfig.json --pretty false
+      - name: Test web evals
+        run: pnpm exec vitest run packages/web-evals/src

@@ -24,7 +24,7 @@ describe("Beyonder adaptive intelligence flow", () => {
           lastUpdatedAt: now,
           validation: {
             status: "validated",
-            models: ["groq-e2e-model"],
+            models: ["llama-3.3-70b-versatile"],
             latencyMs: 80,
             rateLimitHeaders: {
               "x-ratelimit-limit-requests": "1000",
@@ -40,7 +40,7 @@ describe("Beyonder adaptive intelligence flow", () => {
           lastUpdatedAt: now,
           validation: {
             status: "validated",
-            models: ["ovh-e2e-model"],
+            models: ["Meta-Llama-3_3-70B-Instruct"],
             latencyMs: 140,
             rateLimitHeaders: {
               "x-ratelimit-limit-requests": "1000",
@@ -54,7 +54,7 @@ describe("Beyonder adaptive intelligence flow", () => {
           classification: "KEYLESS",
           attempts: 1,
           lastUpdatedAt: now,
-          validation: { status: "validated", models: ["horde-e2e-model"], latencyMs: 500 }
+          validation: { status: "validated", models: ["anonymous-worker-pool"], latencyMs: 500 }
         }
       }
     });

@@ -1,4 +1,5 @@
 import { providers } from "./catalog.js";
+import { eligibleModelsForWorkload, modelsWithMetadata } from "./model-capabilities.js";
 import type { AutopilotStateFile, ComputeInventoryEntry, ProviderCatalogEntry } from "./types.js";
 
 export function buildComputeInventory(state: AutopilotStateFile): ComputeInventoryEntry[] {
@@ -11,6 +12,7 @@ function buildInventoryEntry(provider: ProviderCatalogEntry, state: AutopilotSta
   const human = progress?.state === "HUMAN_GATE";
   const skipped = progress?.state === "SKIPPED";
   const failed = progress?.state === "FAILED";
+  const models = progress?.validation?.models?.length ? progress.validation.models : provider.knownFreeModels;
   return {
     providerId: provider.id,
     providerName: provider.name,
@@ -22,7 +24,9 @@ function buildInventoryEntry(provider: ProviderCatalogEntry, state: AutopilotSta
             : provider.authType === "keyless" ? "keyless" : "missing-credential",
     auth: provider.authType,
     cost: provider.billingRisk ? "billing-risk" : provider.classification === "PAID_ONLY" ? "billing-risk" : "$0",
-    models: progress?.validation?.models?.length ? progress.validation.models : provider.knownFreeModels,
+    models,
+    modelMetadata: modelsWithMetadata(provider, models),
+    eligibleChatModels: eligibleModelsForWorkload(provider, models, "general_chat"),
     rpm: provider.freeTierLimits?.rpm,
     tpm: provider.freeTierLimits?.tpm,
     contextWindow: provider.freeTierLimits?.contextWindow,
@@ -41,7 +45,7 @@ function inferToolCalling(provider: ProviderCatalogEntry): ComputeInventoryEntry
 }
 
 function inferQuality(provider: ProviderCatalogEntry): ComputeInventoryEntry["qualityClass"] {
-  if (["groq", "cerebras", "gemini", "openrouter", "mistral", "nvidia-nim"].includes(provider.id)) return "high";
-  if (["kilo-gateway", "ovh", "ai-horde"].includes(provider.id)) return "medium";
+  if (["groq", "cerebras", "gemini", "openrouter", "mistral", "nvidia-nim", "cloudflare-workers-ai"].includes(provider.id)) return "high";
+  if (["kilo-gateway", "ovh", "ai-horde", "cohere", "huggingface"].includes(provider.id)) return "medium";
   return "unknown";
 }

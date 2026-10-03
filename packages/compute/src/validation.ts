@@ -112,7 +112,12 @@ async function extractModels(response: Response): Promise<string[]> {
   const result = "result" in body ? (body as { result?: unknown }).result : undefined;
   if (Array.isArray(result)) {
     return result
-      .map((item) => item && typeof item === "object" && "name" in item ? String((item as { name: unknown }).name) : undefined)
+      .map((item) => {
+        if (!item || typeof item !== "object") return undefined;
+        if ("name" in item) return String((item as { name: unknown }).name);
+        if ("id" in item) return String((item as { id: unknown }).id);
+        return undefined;
+      })
       .filter((id): id is string => Boolean(id));
   }
   return [];

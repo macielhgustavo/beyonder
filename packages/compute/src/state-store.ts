@@ -38,6 +38,10 @@ export class AutopilotStateStore {
       attempts: state === existing?.state ? existing.attempts : (existing?.attempts ?? 0) + 1,
       lastUpdatedAt: new Date().toISOString()
     };
+    if (state === "READY") {
+      delete progress.lastError;
+      delete progress.humanGate;
+    }
     file.providers[provider.id] = progress;
     await this.write(file);
     return progress;

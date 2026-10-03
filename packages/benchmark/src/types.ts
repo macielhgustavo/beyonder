@@ -16,10 +16,16 @@ export type BenchmarkExecutionStatus =
   | "PASS"
   | "FAIL"
   | "RATE_LIMITED"
+  | "AUTH_ERROR"
+  | "QUOTA_EXHAUSTED"
+  | "BILLING_REQUIRED"
   | "PROVIDER_ERROR"
   | "INVALID_ENDPOINT"
+  | "MODEL_UNAVAILABLE"
   | "TIMEOUT"
   | "UNAVAILABLE"
+  | "UNSUPPORTED"
+  | "UNKNOWN"
   | "SKIPPED";
 
 export interface BenchmarkCase {
@@ -106,8 +112,14 @@ export interface ProviderOperationalStats {
   rateLimited: number;
   timeouts: number;
   providerErrors: number;
+  authErrors: number;
+  quotaExhausted: number;
+  billingRequired: number;
   invalidEndpoint: number;
+  modelUnavailable: number;
   unavailable: number;
+  unsupported: number;
+  unknown: number;
   skipped: number;
   availabilityRate: number;
 }

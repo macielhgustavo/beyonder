@@ -1,4 +1,4 @@
-import { buildComputeInventory, getProvider, type CredentialBroker } from "@beyonder/compute";
+import { buildComputeInventory, getProvider, isModelEligibleForWorkload, type CredentialBroker } from "@beyonder/compute";
 import type { ModelTarget } from "../types.js";
 
 const UNSAFE_MODEL_MARKERS = ["verify-current", "auto"];
@@ -17,11 +17,12 @@ function targetsForEntry(entry: ComputeInventoryEntry, broker: CredentialBroker)
   if (!["healthy", "keyless"].includes(entry.status)) return [];
   if (provider.billingRisk || provider.classification === "PAID_ONLY") return [];
 
-  const apiKey = provider.authType === "keyless" ? undefined : broker.getProviderSecrets(provider.id)[0]?.value;
+  const apiKey = provider.authType === "keyless" ? undefined : apiKeyForProvider(provider.id, broker);
   if (provider.authType !== "keyless" && !apiKey) return [];
 
   return entry.models
     .filter((model) => isSafeModel(entry.providerId, model))
+    .filter((model) => isBenchmarkEligible(provider, model))
     .slice(0, 2)
     .map((model) => ({
       provider: entry.providerId,
@@ -32,6 +33,15 @@ function targetsForEntry(entry: ComputeInventoryEntry, broker: CredentialBroker)
       accountId: broker.getSecret(provider.id, "CLOUDFLARE_ACCOUNT_ID"),
       rateLimitDelayMs: rateLimitDelay(entry)
     }));
+}
+
+function apiKeyForProvider(providerId: string, broker: CredentialBroker): string | undefined {
+  if (providerId === "cloudflare-workers-ai") return broker.getSecret(providerId, "CLOUDFLARE_API_TOKEN");
+  return broker.getProviderSecrets(providerId)[0]?.value;
+}
+
+function isBenchmarkEligible(provider: NonNullable<ReturnType<typeof getProvider>>, model: string): boolean {
+  return isModelEligibleForWorkload(provider, model, "benchmark_text");
 }
 
 function isSafeModel(providerId: string, model: string): boolean {

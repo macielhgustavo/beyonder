@@ -28,3 +28,13 @@ test("account-id-and-token providers require all credential parts", () => {
   assert.equal(status.credentialStatus, "missing");
   assert.deepEqual(status.missingEnvVars, ["CLOUDFLARE_API_TOKEN"]);
 });
+
+test("broker recognizes NVIDIA_NIM_API_KEY without exposing the secret", () => {
+  const broker = new CredentialBroker({}, { NVIDIA_NIM_API_KEY: "nim-secret" });
+  const nvidia = getProvider("nvidia-nim");
+  assert.ok(nvidia);
+  const status = getProviderStatus(nvidia, broker);
+  assert.equal(status.credentialStatus, "present-env");
+  assert.equal(status.missingEnvVars.length, 0);
+  assert.deepEqual(broker.redactedSummary(), { "nvidia-nim": ["NVIDIA_NIM_API_KEY:env"] });
+});

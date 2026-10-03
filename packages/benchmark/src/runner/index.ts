@@ -97,7 +97,26 @@ function classifyFailure(error: unknown): {
   const errorCode = error instanceof BenchmarkRequestError ? error.errorCode : undefined;
 
   if (httpStatus === 429) return { status: "RATE_LIMITED", httpStatus, errorCode, failureReason: message };
-  if (httpStatus === 404) return { status: "INVALID_ENDPOINT", httpStatus, errorCode, failureReason: message };
+  if (httpStatus === 401 || httpStatus === 403) return { status: "AUTH_ERROR", httpStatus, errorCode, failureReason: message };
+  if (httpStatus === 402) {
+    return {
+      status: /quota|credit|depleted|exhaust/i.test(message) ? "QUOTA_EXHAUSTED" : "BILLING_REQUIRED",
+      httpStatus,
+      errorCode,
+      failureReason: message
+    };
+  }
+  if (httpStatus === 404) {
+    return {
+      status: /model|does not exist|not found/i.test(message) ? "MODEL_UNAVAILABLE" : "INVALID_ENDPOINT",
+      httpStatus,
+      errorCode,
+      failureReason: message
+    };
+  }
+  if (httpStatus === 400 && /model|unsupported|messages|chat|completion|template/i.test(message)) {
+    return { status: "UNSUPPORTED", httpStatus, errorCode, failureReason: message };
+  }
   if (httpStatus && httpStatus >= 500) return { status: "PROVIDER_ERROR", httpStatus, errorCode, failureReason: message };
   if (httpStatus === 408 || errorCode === "TIMEOUT" || /timed?\s*out|abort/i.test(message)) {
     return { status: "TIMEOUT", httpStatus, errorCode: errorCode ?? "TIMEOUT", failureReason: message };

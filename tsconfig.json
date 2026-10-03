@@ -8,6 +8,7 @@
     { "path": "packages/models" },
     { "path": "packages/tools" },
     { "path": "packages/audit" },
+    { "path": "packages/benchmark" },
     { "path": "packages/runtime" },
     { "path": "apps/cli" }
   ],

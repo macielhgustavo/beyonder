@@ -49,6 +49,10 @@ interface RouterDecisionSnapshot {
   modelUsage: Array<{ label: string; value: number }>;
 }
 
+type DecisionFactorCandidate =
+  | { label: string; value: number }
+  | { label: string; value: string };
+
 export class LocalDashboardDataSource implements DashboardDataSource {
   readonly provenance = "local" as const;
   private readonly dbPath: string;
@@ -366,15 +370,15 @@ function numberField(value: Record<string, unknown>, key: string): number | null
   return typeof field === "number" && Number.isFinite(field) ? field : null;
 }
 
-function factor(label: string, value: number | null) {
+function factor(label: string, value: number | null): DecisionFactorCandidate | null {
   return value == null ? null : { label, value };
 }
 
-function moneyFactor(label: string, value: number | null) {
+function moneyFactor(label: string, value: number | null): DecisionFactorCandidate | null {
   return value == null ? null : { label, value: `$${value.toFixed(4).replace(/\.?0+$/, "") || "0"}` };
 }
 
-function isFactor(value: { label: string; value: number | string } | null): value is { label: string; value: number | string } {
+function isFactor(value: DecisionFactorCandidate | null): value is DecisionFactorCandidate {
   return value !== null;
 }
 

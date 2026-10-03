@@ -200,7 +200,7 @@ function tool<T>(id: string, execute: ToolDefinition["execute"]): ToolDefinition
   } as ToolDefinition<T, unknown>;
 }
 
-class FixtureActionPlanner implements StepActionPlanner {
+export class FixtureActionPlanner implements StepActionPlanner {
   constructor(private readonly url: string) {}
 
   decide(context: StepContext) {
@@ -222,7 +222,7 @@ function findSessionId(context: StepContext): string | undefined {
   return text.match(/"sessionId":"([^"]+)"/)?.[1];
 }
 
-class FixtureSessionFactory implements BrowserSessionFactory {
+export class FixtureSessionFactory implements BrowserSessionFactory {
   readonly sessions: FixtureSession[] = [];
   async create(_policy: BrowserPolicy): Promise<BrowserSession> {
     const session = new FixtureSession();

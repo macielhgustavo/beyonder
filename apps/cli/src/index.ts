@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import { classifyEconomicState, createRuntime, loadConfig } from "@beyonder/runtime";
+import { classifyEconomicState, createRuntime, loadConfig, type IntelligenceTaskType } from "@beyonder/runtime";
 import {
   AutopilotStateStore,
   buildComputeInventory,
@@ -56,16 +56,24 @@ program
     runtime.sqlite.close();
   });
 
-program
-  .command("economy")
-  .description("Print ledger summary and recent entries")
+const economy = program.command("economy").description("Inspect ledger and shadow-economy state");
+
+economy.action(async () => {
+  const config = loadConfig();
+  const runtime = createRuntime(config);
+  await runtime.ledger.initialize(config.startingCapitalUsd);
+  const summary = await runtime.ledger.summary(config.monthlyFixedCostUsd);
+  const entries = await runtime.ledger.latest();
+  console.log(JSON.stringify({ economicState: classifyEconomicState(summary), summary, entries }, null, 2));
+  runtime.sqlite.close();
+});
+
+economy
+  .command("quotas")
+  .description("Print known and unknown provider quota signals used by shadow-cost accounting")
   .action(async () => {
-    const config = loadConfig();
-    const runtime = createRuntime(config);
-    await runtime.ledger.initialize(config.startingCapitalUsd);
-    const summary = await runtime.ledger.summary(config.monthlyFixedCostUsd);
-    const entries = await runtime.ledger.latest();
-    console.log(JSON.stringify({ economicState: classifyEconomicState(summary), summary, entries }, null, 2));
+    const runtime = createRuntime(loadConfig());
+    console.log(JSON.stringify(await runtime.modelRouter.quotas(), null, 2));
     runtime.sqlite.close();
   });
 
@@ -132,6 +140,65 @@ intelligence
     runtime.sqlite.close();
   });
 
+intelligence
+  .command("route")
+  .argument("<taskText>", "task text to route without inference")
+  .description("Dry-run adaptive routing and explain candidate utility")
+  .action(async (taskText: string) => {
+    const config = loadConfig();
+    const runtime = createRuntime(config);
+    await runtime.ledger.initialize(config.startingCapitalUsd);
+    const summary = await runtime.ledger.summary(config.monthlyFixedCostUsd);
+    const economicState = classifyEconomicState(summary);
+    const inspection = await runtime.intelligence.inspect(taskText);
+    const route = await runtime.modelRouter.route(inspection.task, economicState);
+    console.log(JSON.stringify(routeView(route), null, 2));
+    runtime.sqlite.close();
+  });
+
+const models = program.command("models").description("Inspect adaptive model rankings and historical performance");
+
+models
+  .command("rank")
+  .argument("<taskType>", "task type to rank")
+  .description("Rank available models for a task type without inference")
+  .action(async (taskTypeRaw: string) => {
+    const taskType = parseTaskType(taskTypeRaw);
+    const config = loadConfig();
+    const runtime = createRuntime(config);
+    await runtime.ledger.initialize(config.startingCapitalUsd);
+    const summary = await runtime.ledger.summary(config.monthlyFixedCostUsd);
+    const economicState = classifyEconomicState(summary);
+    const inspection = await runtime.intelligence.inspect(`Rank available intelligence for ${taskType} work`);
+    const task = { ...inspection.task, type: taskType };
+    const route = await runtime.modelRouter.route(task, economicState);
+    console.log(JSON.stringify(routeView(route), null, 2));
+    runtime.sqlite.close();
+  });
+
+models
+  .command("inspect")
+  .argument("<providerModel>", "provider/model reference")
+  .option("-t, --task-type <taskType>", "task type for historical capability", "chat")
+  .description("Inspect quota and real-outcome performance for one provider/model")
+  .action(async (providerModel: string, options: { taskType: string }) => {
+    const [provider, ...modelParts] = providerModel.split("/");
+    const model = modelParts.join("/");
+    if (!provider || !model) throw new Error("Expected provider/model.");
+    const taskType = parseTaskType(options.taskType);
+    const runtime = createRuntime(loadConfig());
+    const quotas = await runtime.modelRouter.quotas();
+    const performance = await runtime.modelRouter.performanceFor(provider, model, taskType);
+    console.log(JSON.stringify({
+      provider,
+      model,
+      taskType,
+      quota: quotas.find((entry) => entry.provider === provider) ?? null,
+      performance
+    }, null, 2));
+    runtime.sqlite.close();
+  });
+
 const providers = program.command("providers").description("Manage compute providers");
 
 providers
@@ -194,6 +261,45 @@ function printProviderProgress(results: Array<{ state: string; providerId: strin
     const error = result.lastError ? ` - ${redact(result.lastError)}` : "";
     console.log(`${result.state.padEnd(18)} ${result.providerId}${gate}${error}`);
   }
+}
+
+function parseTaskType(value: string): IntelligenceTaskType {
+  const valid: IntelligenceTaskType[] = [
+    "chat", "reasoning", "coding", "research", "extraction", "classification", "planning", "tool-use", "browser", "memory", "compression"
+  ];
+  if (!valid.includes(value as IntelligenceTaskType)) throw new Error(`Unknown task type: ${value}`);
+  return value as IntelligenceTaskType;
+}
+
+function routeView(route: Awaited<ReturnType<ReturnType<typeof createRuntime>["modelRouter"]["route"]>>) {
+  return {
+    task: {
+      type: route.task.type,
+      complexity: route.task.complexity,
+      risk: route.task.risk,
+      estimatedTokens: route.task.estimatedTokens
+    },
+    economicState: route.economicState,
+    candidates: route.candidates.map((candidate, index) => ({
+      rank: index + 1,
+      provider: candidate.provider,
+      model: candidate.model,
+      utility: candidate.utility,
+      predictedQuality: candidate.predictedQuality,
+      historicalSuccess: candidate.historicalSuccess,
+      monetaryCostUsd: candidate.monetaryCostUsd,
+      shadowCostUsd: candidate.shadowCostUsd,
+      effectiveResourceCost: candidate.effectiveResourceCost,
+      explanation: candidate.explanation
+    })),
+    selected: route.selected ? {
+      provider: route.selected.provider,
+      model: route.selected.model,
+      utility: route.selected.utility
+    } : null,
+    explored: route.explored,
+    reason: route.reason
+  };
 }
 
 await program.parseAsync();

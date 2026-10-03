@@ -12,7 +12,7 @@ jobs:
   validate-node24-and-live-nvidia:
     runs-on: ubuntu-24.04
     env:
-      NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+      NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY || secrets.NVIDIA_API_KEY }}
       BEYONDER_PROVIDER_STATE_PATH: /tmp/beyonder-nvidia-provider-state.json
       BEYONDER_BENCHMARK_DB_PATH: /tmp/beyonder-nvidia-benchmark.sqlite
     steps:

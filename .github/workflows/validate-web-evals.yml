@@ -18,6 +18,8 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - name: Install Playwright Chromium
+        run: pnpm --filter @beyonder/browser-agent exec playwright install chromium
       - name: Typecheck
         run: pnpm typecheck
       - name: Test web evals

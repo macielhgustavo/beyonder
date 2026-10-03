@@ -1,0 +1,30 @@
+{
+  "name": "@beyonder/control-center",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --hostname 127.0.0.1 --port 4187",
+    "build": "next build",
+    "start": "next start --hostname 127.0.0.1 --port 4187",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "smoke": "tsx tests/control-center-smoke.ts"
+  },
+  "dependencies": {
+    "@beyonder/compute": "workspace:*",
+    "@beyonder/runtime": "workspace:*",
+    "@beyonder/tools": "workspace:*",
+    "better-sqlite3": "^13.0.3",
+    "next": "^16.3.8",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.13.5",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.7"
+  }
+}

@@ -1,0 +1,122 @@
+name: validate-adaptive-economic-router
+
+on:
+  push:
+    branches:
+      - feat/adaptive-economic-router
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    env:
+      BEYONDER_DB_PATH: /tmp/beyonder-adaptive-ci.sqlite
+      BEYONDER_MODEL_PROVIDER: auto
+      BEYONDER_PROVIDER_STATE_PATH: /tmp/beyonder-adaptive-provider-state.json
+      BEYONDER_USE_SIMULATED_CAPITAL: "true"
+      BEYONDER_SIMULATED_CAPITAL_USD: "0"
+      BEYONDER_TOOLS_ENABLED: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Test full suite
+        run: pnpm test
+      - name: Seed three free provider candidates for dry routing
+        shell: bash
+        run: |
+          cat > "$BEYONDER_PROVIDER_STATE_PATH" <<'JSON'
+          {
+            "version": 1,
+            "updatedAt": "2026-10-03T00:00:00.000Z",
+            "providers": {
+              "groq": {
+                "providerId": "groq",
+                "state": "READY",
+                "classification": "AUTO_WITH_HUMAN_GATE",
+                "attempts": 1,
+                "lastUpdatedAt": "2026-10-03T00:00:00.000Z",
+                "validation": {
+                  "status": "validated",
+                  "models": ["groq-ci-model"],
+                  "latencyMs": 90,
+                  "rateLimitHeaders": {
+                    "x-ratelimit-limit-requests": "1000",
+                    "x-ratelimit-remaining-requests": "650"
+                  }
+                }
+              },
+              "ovh": {
+                "providerId": "ovh",
+                "state": "READY",
+                "classification": "AUTO_WITH_HUMAN_GATE",
+                "attempts": 1,
+                "lastUpdatedAt": "2026-10-03T00:00:00.000Z",
+                "validation": {
+                  "status": "validated",
+                  "models": ["ovh-ci-model"],
+                  "latencyMs": 160,
+                  "rateLimitHeaders": {
+                    "x-ratelimit-limit-requests": "1000",
+                    "x-ratelimit-remaining-requests": "850"
+                  }
+                }
+              },
+              "ai-horde": {
+                "providerId": "ai-horde",
+                "state": "READY",
+                "classification": "KEYLESS",
+                "attempts": 1,
+                "lastUpdatedAt": "2026-10-03T00:00:00.000Z",
+                "validation": {
+                  "status": "validated",
+                  "models": ["horde-ci-model"],
+                  "latencyMs": 600
+                }
+              }
+            }
+          }
+          JSON
+      - name: Dry-run adaptive routing with explanation and three candidates
+        shell: bash
+        run: |
+          output=$(pnpm -s beyonder intelligence route "Implement a TypeScript parser with tests")
+          echo "$output"
+          echo "$output" | grep -q '"rank": 3'
+          echo "$output" | grep -q '"shadowCostUsd"'
+          echo "$output" | grep -q '"effectiveResourceCost"'
+          echo "$output" | grep -q '"reason"'
+      - name: Dry-run model ranking
+        shell: bash
+        run: |
+          output=$(pnpm -s beyonder models rank coding)
+          echo "$output"
+          echo "$output" | grep -q '"selected"'
+          echo "$output" | grep -q '"utility"'
+      - name: Zero-cost end-to-end execution
+        shell: bash
+        run: |
+          output=$(pnpm -s beyonder run "Summarize readiness without side effects" --steps 1)
+          echo "$output"
+          echo "$output" | grep -q '"expectedCostUsd": 0'
+      - name: Quota CLI exposes known and unknown values
+        run: pnpm -s beyonder economy quotas
+      - name: Sensitive runtime paths are not versioned
+        shell: bash
+        run: |
+          tracked=$(git ls-files '.env' '.providers-vault/*' '*.sqlite' '*.sqlite3' '*.db')
+          if [ -n "$tracked" ]; then
+            echo "Sensitive runtime files are tracked:"
+            echo "$tracked"
+            exit 1
+          fi

@@ -63,8 +63,11 @@ export interface ExecutionAttempt {
 export interface Evaluation {
   score: number;
   passed: boolean;
+  confidence?: number;
+  method?: string;
   criteria?: Record<string, number | boolean | string>;
   notes?: string[];
+  issues?: string[];
 }
 
 export interface TaskOutcome {

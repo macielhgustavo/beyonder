@@ -4,11 +4,13 @@ import type { AppConfig } from "../config/env.js";
 import type { EconomicLedger } from "../economy/ledger.js";
 import { classifyEconomicState } from "../economy/economic-state.js";
 import type { IntelligenceLayer } from "../intelligence/intelligence-layer.js";
-import type { ExecutionAttempt, IntelligenceTask, TaskOutcome } from "../intelligence/contracts.js";
+import type { AdaptiveExecutionController } from "../intelligence/adaptive-execution-controller.js";
+import type { EvaluationLayer } from "../intelligence/evaluation-layer.js";
+import type { Evaluation, ExecutionAttempt, IntelligenceTask, TaskOutcome } from "../intelligence/contracts.js";
 import type { MemoryEngine } from "../memory/memory-engine.js";
 import type { StateStore } from "../memory/state-store.js";
 import type { ModelRouter } from "../models/model-router.js";
-import type { AgentDecision, AgentStepStatus, ToolCallResult } from "../types.js";
+import type { AgentDecision, AgentStepStatus, ModelMessage, ToolCallResult } from "../types.js";
 import type { Tool } from "../tools/tool-registry.js";
 
 export class AgentLoop {
@@ -19,6 +21,8 @@ export class AgentLoop {
     private readonly memory: MemoryEngine,
     private readonly intelligence: IntelligenceLayer,
     private readonly modelRouter: ModelRouter,
+    private readonly adaptiveExecution: AdaptiveExecutionController,
+    private readonly evaluator: EvaluationLayer,
     private readonly audit: AuditLog,
     private readonly tools: Map<string, Tool>
   ) {}
@@ -50,7 +54,7 @@ export class AgentLoop {
         attempts: [],
         success: false,
         error: "economic-state-halted",
-        evaluation: { score: 0, passed: false, notes: ["Execution stopped by the existing economic safety state."] },
+        evaluation: { score: 0, passed: false, confidence: 1, method: "economic-policy", notes: ["Execution stopped by the existing economic safety state."] },
         provider: "none",
         model: "none",
         tokens: 0,
@@ -69,40 +73,58 @@ export class AgentLoop {
       metadata: { taskType: task.type }
     });
 
-    const { decision, attempt } = await this.decide(stepNumber, economicState, summary, task, inspection.context.summary);
+    const adaptive = await this.adaptiveExecution.execute({
+      task,
+      economicState,
+      messages: buildMessages(stepNumber, economicState, summary, task, inspection.context.summary)
+    });
+    const attempts = adaptive.attempts.length > 0 ? adaptive.attempts : [deterministicAttempt(task)];
+    const monetaryCostUsd = attempts.reduce((sum, attempt) => sum + attempt.monetaryCostUsd, 0);
+    const shadowCostUsd = attempts.reduce((sum, attempt) => sum + attempt.shadowCostUsd, 0);
+    const decision: AgentDecision = adaptive.response
+      ? {
+          action: "model_guided_planning",
+          rationale: `${adaptive.response.content.slice(0, 420)} Route: ${adaptive.route.reason}.`,
+          expectedCostUsd: monetaryCostUsd
+        }
+      : {
+          action: "observe_and_preserve_capital",
+          rationale: `No acceptable routed model result; deterministic zero-spend behavior. ${adaptive.route.reason}.`,
+          expectedCostUsd: 0
+        };
+
     const tool = this.tools.get("safe-objective");
     const toolStartedAt = Date.now();
     const toolResult = await tool?.run(objective);
     const toolLatencyMs = Date.now() - toolStartedAt;
-    const success = toolResult?.ok ?? true;
+    const toolEvaluation = toolResult?.ok === false
+      ? { score: 0, passed: false, confidence: 1, method: "tool-result", issues: [toolResult.error ?? "safe tool failed"] } satisfies Evaluation
+      : this.evaluator.evaluate({ task, output: toolResult?.output ?? decision.rationale });
+    const evaluation = combineEvaluations(adaptive.evaluation, toolEvaluation);
+    const success = (toolResult?.ok ?? true) && evaluation.passed;
 
     await this.state.set("loop.step", stepNumber);
     await this.state.set("economy.state", economicState);
 
+    const lastAttempt = attempts.at(-1);
     const outcome: TaskOutcome = {
       task,
-      attempts: [attempt],
+      attempts,
       success,
-      result: toolResult?.output ?? decision.rationale,
+      result: toolResult?.output ?? adaptive.response?.content ?? decision.rationale,
       error: toolResult?.error,
-      evaluation: {
-        score: success ? 1 : 0,
-        passed: success,
-        criteria: {
-          safeExecution: success,
-          monetaryCostUsd: decision.expectedCostUsd
-        }
-      },
-      provider: attempt.provider ?? "none",
-      model: attempt.model ?? "none",
-      tokens: attempt.tokens ?? 0,
-      monetaryCostUsd: attempt.monetaryCostUsd,
-      shadowCostUsd: 0,
-      latencyMs: (attempt.latencyMs ?? 0) + toolLatencyMs,
+      evaluation,
+      provider: lastAttempt?.provider ?? "none",
+      model: lastAttempt?.model ?? "none",
+      tokens: attempts.reduce((sum, attempt) => sum + (attempt.tokens ?? 0), 0),
+      monetaryCostUsd,
+      shadowCostUsd,
+      latencyMs: attempts.reduce((sum, attempt) => sum + (attempt.latencyMs ?? 0), 0) + toolLatencyMs,
       tools: tool ? [tool.name] : [],
       completedAt: new Date().toISOString()
     };
     await this.memory.recordOutcome(outcome);
+    await this.modelRouter.recordOutcome(outcome);
 
     await this.audit.record("info", "agent.step.completed", {
       stepNumber,
@@ -116,15 +138,23 @@ export class AgentLoop {
         risk: task.risk,
         estimatedTokens: task.estimatedTokens
       },
+      routing: {
+        candidates: adaptive.route.candidates.length,
+        selected: adaptive.route.selected ? `${adaptive.route.selected.provider}/${adaptive.route.selected.model}` : null,
+        explored: adaptive.route.explored,
+        reason: adaptive.route.reason
+      },
       relevantMemoryCount: inspection.relevantMemories.length,
       toolResult,
+      evaluation,
       outcome: {
         success: outcome.success,
         provider: outcome.provider,
         model: outcome.model,
         monetaryCostUsd: outcome.monetaryCostUsd,
         shadowCostUsd: outcome.shadowCostUsd,
-        latencyMs: outcome.latencyMs
+        latencyMs: outcome.latencyMs,
+        attempts: outcome.attempts.length
       },
       summary
     });
@@ -133,105 +163,7 @@ export class AgentLoop {
       await this.ledger.record("expense", decision.expectedCostUsd, `Estimated model/tool cost: ${decision.action}`);
     }
 
-    return { status: "completed", decision, economicState, toolResult };
-  }
-
-  private async decide(
-    stepNumber: number,
-    economicState: string,
-    summary: unknown,
-    task: IntelligenceTask,
-    memoryContext: string
-  ): Promise<{ decision: AgentDecision; attempt: ExecutionAttempt }> {
-    const startedAt = new Date().toISOString();
-    const startedMs = Date.now();
-    try {
-      const response = await this.modelRouter.complete([
-        {
-          role: "system",
-          content: "You are an economic runtime controller. Prefer zero-cost/local actions. Return one concise next action."
-        },
-        {
-          role: "user",
-          content: JSON.stringify({
-            stepNumber,
-            economicState,
-            summary,
-            task: {
-              id: task.id,
-              type: task.type,
-              complexity: task.complexity,
-              risk: task.risk,
-              estimatedTokens: task.estimatedTokens,
-              requirements: task.requirements,
-              input: task.input
-            },
-            memoryContext
-          })
-        }
-      ]);
-      const completedAt = new Date().toISOString();
-      const attempt: ExecutionAttempt = {
-        id: `attempt_${nanoid()}`,
-        taskId: task.id,
-        attempt: 1,
-        provider: response.provider,
-        model: response.model,
-        startedAt,
-        completedAt,
-        latencyMs: Date.now() - startedMs,
-        tokens: response.provider === "none" ? 0 : task.estimatedTokens,
-        monetaryCostUsd: response.estimatedCostUsd,
-        shadowCostUsd: 0,
-        tools: [],
-        success: true
-      };
-
-      if (response.provider === "none") {
-        return {
-          decision: {
-            action: "observe_and_preserve_capital",
-            rationale: "No model provider is configured; use deterministic policy and avoid spend.",
-            expectedCostUsd: 0
-          },
-          attempt
-        };
-      }
-
-      return {
-        decision: {
-          action: "model_guided_planning",
-          rationale: response.content.slice(0, 500),
-          expectedCostUsd: response.estimatedCostUsd
-        },
-        attempt
-      };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      return {
-        decision: {
-          action: "observe_and_preserve_capital",
-          rationale: "Model routing failed; fall back to deterministic zero-spend behavior.",
-          expectedCostUsd: 0
-        },
-        attempt: {
-          id: `attempt_${nanoid()}`,
-          taskId: task.id,
-          attempt: 1,
-          provider: "none",
-          model: "none",
-          startedAt,
-          completedAt: new Date().toISOString(),
-          latencyMs: Date.now() - startedMs,
-          tokens: 0,
-          monetaryCostUsd: 0,
-          shadowCostUsd: 0,
-          tools: [],
-          success: false,
-          error: message
-        }
-      };
-    }
+    return { status: success ? "completed" : "failed", decision, economicState, toolResult };
   }
 
   async run(maxSteps = this.config.maxSteps, objective = "Preserve capital and prepare for useful work.") {
@@ -244,4 +176,66 @@ export class AgentLoop {
     }
     return results;
   }
+}
+
+function buildMessages(stepNumber: number, economicState: string, summary: unknown, task: IntelligenceTask, memoryContext: string): ModelMessage[] {
+  return [
+    {
+      role: "system",
+      content: "You are an economic runtime controller. Prefer sufficient zero-cost/local actions and obey the current economic policy. Return one concise next action."
+    },
+    {
+      role: "user",
+      content: JSON.stringify({
+        stepNumber,
+        economicState,
+        summary,
+        task: {
+          id: task.id,
+          type: task.type,
+          complexity: task.complexity,
+          risk: task.risk,
+          estimatedTokens: task.estimatedTokens,
+          requirements: task.requirements,
+          input: task.input
+        },
+        memoryContext
+      })
+    }
+  ];
+}
+
+function deterministicAttempt(task: IntelligenceTask): ExecutionAttempt {
+  const now = new Date().toISOString();
+  return {
+    id: `attempt_${nanoid()}`,
+    taskId: task.id,
+    attempt: 1,
+    provider: "none",
+    model: "none",
+    startedAt: now,
+    completedAt: now,
+    latencyMs: 0,
+    tokens: 0,
+    monetaryCostUsd: 0,
+    shadowCostUsd: 0,
+    tools: [],
+    success: true
+  };
+}
+
+function combineEvaluations(model: Evaluation | undefined, tool: Evaluation): Evaluation {
+  if (!model) return tool;
+  const score = Number(((model.score + tool.score) / 2).toFixed(6));
+  return {
+    score,
+    passed: model.passed && tool.passed,
+    confidence: Math.min(model.confidence ?? 0.7, tool.confidence ?? 0.7),
+    method: "model-and-tool",
+    criteria: {
+      modelScore: model.score,
+      toolScore: tool.score
+    },
+    issues: [...(model.issues ?? []), ...(tool.issues ?? [])]
+  };
 }

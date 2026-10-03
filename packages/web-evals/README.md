@@ -1,10 +1,12 @@
-# @beyonder/web-evals
+# Beyonder Web Evals
 
 Deterministic evaluation suite for measuring whether Beyonder can turn intelligence into correct, safe tool/browser actions.
 
+The code lives under `packages/web-evals`, but this branch intentionally excludes it from the pnpm workspace for now. That keeps the existing frozen lockfile untouched while `feat/browser-agent` and `feat/tool-runtime` evolve in parallel. The future integration step can add the package formally once those contracts stabilize.
+
 ## What this package measures
 
-The package deliberately keeps three concerns separate:
+The suite deliberately keeps three concerns separate:
 
 1. **Model capability** — whether the model selected the right tool, produced valid arguments, completed the task, and complied with policy.
 2. **Infrastructure reliability** — whether the tool/browser driver was actually available and executable.
@@ -73,7 +75,7 @@ The canonical driver contract receives both the `WebEvalCase` and the resolved l
 - `browser.fill`
 - `browser.submit`
 
-This package does **not** implement BrowserAgent or Tool Runtime.
+This suite does **not** implement BrowserAgent or Tool Runtime.
 
 ## Future BrowserAgent / Tool Runtime adapter
 
@@ -107,9 +109,11 @@ The result includes a driver ID, fixture version, optional tool fingerprint, and
 
 `NOT_EVALUATED` projects to benchmark `UNAVAILABLE` with `quality = null`, while timeout projects to `TIMEOUT` with `quality = null`. This preserves the BIB rule that infrastructure failure is not evidence of zero model capability.
 
-## Running
+## Running from the repository root
+
+The suite uses the root development toolchain without becoming a pnpm workspace importer in this branch:
 
 ```bash
-pnpm --filter @beyonder/web-evals typecheck
-pnpm --filter @beyonder/web-evals test
+pnpm exec tsc -b packages/web-evals/tsconfig.json --pretty false
+pnpm exec vitest run packages/web-evals/src
 ```

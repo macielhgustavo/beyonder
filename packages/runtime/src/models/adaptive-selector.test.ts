@@ -25,8 +25,10 @@ function task(overrides: Partial<IntelligenceTask> = {}): IntelligenceTask {
 }
 
 class FixedQuotaSource implements QuotaSource {
+  constructor(private readonly overrides: Record<string, Partial<QuotaSnapshot>> = {}) {}
+
   async get(provider: string, model?: string): Promise<QuotaSnapshot> {
-    return {
+    const base: QuotaSnapshot = {
       provider,
       model,
       requestsPerMinute: 60,
@@ -41,6 +43,7 @@ class FixedQuotaSource implements QuotaSource {
       health: "healthy",
       lastUpdatedAt: new Date().toISOString()
     };
+    return { ...base, ...(this.overrides[provider] ?? {}), provider, model };
   }
   async list(): Promise<QuotaSnapshot[]> { return []; }
 }
@@ -91,7 +94,7 @@ async function providerStatePath() {
         classification: "AUTO_WITH_HUMAN_GATE",
         attempts: 1,
         lastUpdatedAt: new Date().toISOString(),
-        validation: { status: "validated", models: ["groq-test-model"], latencyMs: 80 }
+        validation: { status: "validated", models: ["llama-3.3-70b-versatile"], latencyMs: 80 }
       },
       ovh: {
         providerId: "ovh",
@@ -99,7 +102,7 @@ async function providerStatePath() {
         classification: "AUTO_WITH_HUMAN_GATE",
         attempts: 1,
         lastUpdatedAt: new Date().toISOString(),
-        validation: { status: "validated", models: ["ovh-test-model"], latencyMs: 140 }
+        validation: { status: "validated", models: ["Meta-Llama-3_3-70B-Instruct"], latencyMs: 140 }
       },
       "ai-horde": {
         providerId: "ai-horde",
@@ -107,7 +110,7 @@ async function providerStatePath() {
         classification: "KEYLESS",
         attempts: 1,
         lastUpdatedAt: new Date().toISOString(),
-        validation: { status: "validated", models: ["horde-test-model"], latencyMs: 600 }
+        validation: { status: "validated", models: ["anonymous-worker-pool"], latencyMs: 600 }
       }
     }
   });
@@ -154,7 +157,7 @@ describe("AdaptiveModelSelector", () => {
       quotaSource: new FixedQuotaSource(),
       random: new SequenceRandom([0.99]),
       capabilitySource: new FixedCapabilitySource({
-        "ovh/ovh-test-model/coding": { score: 0.96, samples: 8, source: "BIB" }
+        "ovh/Meta-Llama-3_3-70B-Instruct/coding": { score: 0.96, samples: 8, source: "BIB" }
       })
     });
     const route = await selector.route(task(), "normal");
@@ -167,7 +170,7 @@ describe("AdaptiveModelSelector", () => {
     const selector = new AdaptiveModelSelector(path, {
       quotaSource: new FixedQuotaSource(),
       performanceRepository: new FixedPerformanceRepository({
-        "groq/groq-test-model/coding": performance("groq", "groq-test-model", "coding", 10, 0.8, 0.8)
+        "groq/llama-3.3-70b-versatile/coding": performance("groq", "llama-3.3-70b-versatile", "coding", 10, 0.8, 0.8)
       })
     });
     const route = await selector.route(task(), "normal");
@@ -183,10 +186,10 @@ describe("AdaptiveModelSelector", () => {
       quotaSource: new FixedQuotaSource(),
       telemetry,
       capabilitySource: new FixedCapabilitySource({
-        "groq/groq-test-model/coding": { score: 0.9, samples: 6, source: "BIB" }
+        "groq/llama-3.3-70b-versatile/coding": { score: 0.9, samples: 6, source: "BIB" }
       }),
       performanceRepository: new FixedPerformanceRepository({
-        "groq/groq-test-model/coding": performance("groq", "groq-test-model", "coding", 20, 0.6, 0.6)
+        "groq/llama-3.3-70b-versatile/coding": performance("groq", "llama-3.3-70b-versatile", "coding", 20, 0.6, 0.6)
       })
     });
     const route = await selector.route(task(), "normal");
@@ -202,19 +205,94 @@ describe("AdaptiveModelSelector", () => {
       quotaSource: new FixedQuotaSource(),
       random: new SequenceRandom([0.99]),
       capabilitySource: new FixedCapabilitySource({
-        "groq/groq-test-model/coding": { score: 0.55, samples: 8, source: "BIB" },
-        "ovh/ovh-test-model/coding": { score: 0.98, samples: 8, source: "BIB" }
+        "groq/llama-3.3-70b-versatile/coding": { score: 0.55, samples: 8, source: "BIB" },
+        "ovh/Meta-Llama-3_3-70B-Instruct/coding": { score: 0.98, samples: 8, source: "BIB" }
       }),
       performanceRepository: new FixedPerformanceRepository({
-        "groq/groq-test-model/coding": performance("groq", "groq-test-model", "coding", 0, 0.5, 0.5),
-        "ovh/ovh-test-model/coding": performance("ovh", "ovh-test-model", "coding", 0, 0.5, 0.5)
+        "groq/llama-3.3-70b-versatile/coding": performance("groq", "llama-3.3-70b-versatile", "coding", 0, 0.5, 0.5),
+        "ovh/Meta-Llama-3_3-70B-Instruct/coding": performance("ovh", "Meta-Llama-3_3-70B-Instruct", "coding", 0, 0.5, 0.5)
       })
     });
     const route = await selector.route(task(), "normal");
     expect(route.selected?.provider).toBe("ovh");
     expect(route.selected?.capabilityEvidence.bibScore).toBe(0.98);
   });
+
+  it("includes NVIDIA, Cloudflare, and Groq when healthy and chat-compatible", async () => {
+    const path = await providerStatePathFor({
+      groq: ["llama-3.3-70b-versatile"],
+      "nvidia-nim": ["qwen/qwen2.5-coder-32b-instruct"],
+      "cloudflare-workers-ai": ["@cf/meta/llama-3.3-70b-instruct-fp8-fast"]
+    });
+    const selector = new AdaptiveModelSelector(path, { quotaSource: new FixedQuotaSource(), random: new SequenceRandom([0.99]) });
+    const route = await selector.route(task({ type: "coding" }), "normal");
+    expect(route.candidates.map((candidate) => candidate.provider)).toEqual(expect.arrayContaining([
+      "groq",
+      "nvidia-nim",
+      "cloudflare-workers-ai"
+    ]));
+  });
+
+  it("penalizes rate-limited NVIDIA without treating capability as zero", async () => {
+    const path = await providerStatePathFor({
+      "nvidia-nim": ["qwen/qwen2.5-coder-32b-instruct"],
+      groq: ["llama-3.3-70b-versatile"]
+    });
+    const selector = new AdaptiveModelSelector(path, {
+      quotaSource: new FixedQuotaSource({
+        "nvidia-nim": { health: "unhealthy", requestQuotaRemaining: 0, resetAt: new Date(Date.now() + 60_000).toISOString() }
+      }),
+      capabilitySource: new FixedCapabilitySource({
+        "nvidia-nim/qwen/qwen2.5-coder-32b-instruct/coding": { score: 0.9, samples: 3, source: "BIB" }
+      })
+    });
+    const route = await selector.route(task({ type: "coding" }), "normal");
+    const nvidia = route.candidates.find((candidate) => candidate.provider === "nvidia-nim");
+    expect(nvidia?.capabilityEvidence.bibScore).toBe(0.9);
+    expect(nvidia?.predictedQuality).toBeGreaterThan(0);
+    expect(nvidia?.shadowCostUsd).toBeGreaterThan(0);
+  });
+
+  it("excludes incompatible Cloudflare models from candidates", async () => {
+    const path = await providerStatePathFor({
+      "cloudflare-workers-ai": ["@cf/baai/bge-base-en-v1.5", "@cf/openai/whisper"]
+    });
+    const selector = new AdaptiveModelSelector(path, { quotaSource: new FixedQuotaSource() });
+    const route = await selector.route(task({ type: "chat" }), "normal");
+    expect(route.candidates.some((candidate) => candidate.provider === "cloudflare-workers-ai")).toBe(false);
+  });
+
+  it("keeps free providers ahead of billing-risk providers and survival at zero money", async () => {
+    const path = await providerStatePathFor({
+      groq: ["llama-3.3-70b-versatile"],
+      reka: ["reka-flash-3"]
+    });
+    const selector = new AdaptiveModelSelector(path, { quotaSource: new FixedQuotaSource() });
+    const normal = await selector.route(task({ type: "chat" }), "normal");
+    expect(normal.candidates.map((candidate) => candidate.provider)).toContain("groq");
+    expect(normal.candidates.map((candidate) => candidate.provider)).not.toContain("reka");
+    const survival = await selector.route(task({ type: "chat" }), "survival");
+    expect(survival.candidates.every((candidate) => candidate.monetaryCostUsd === 0)).toBe(true);
+  });
 });
+
+async function providerStatePathFor(modelsByProvider: Record<string, string[]>) {
+  const dir = await mkdtemp(join(tmpdir(), "beyonder-router-"));
+  const path = join(dir, "providers.json");
+  const providers = Object.fromEntries(Object.entries(modelsByProvider).map(([providerId, models]) => [
+    providerId,
+    {
+      providerId,
+      state: "READY" as const,
+      classification: providerId === "reka" ? "PAID_ONLY" as const : "AUTO_WITH_HUMAN_GATE" as const,
+      attempts: 1,
+      lastUpdatedAt: new Date().toISOString(),
+      validation: { status: "validated" as const, models, latencyMs: 100 }
+    }
+  ]));
+  await new AutopilotStateStore(path).write({ version: 1, updatedAt: new Date().toISOString(), providers });
+  return path;
+}
 
 function performance(
   provider: string,

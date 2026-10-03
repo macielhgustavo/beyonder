@@ -1,4 +1,4 @@
-import { AutopilotStateStore, buildComputeInventory } from "@beyonder/compute";
+import { AutopilotStateStore, buildComputeInventory, getProvider, isModelEligibleForWorkload, type ModelWorkload } from "@beyonder/compute";
 import type { IntelligenceTask } from "../intelligence/contracts.js";
 import type { EconomicState } from "../types.js";
 import type { ModelCapabilitySource } from "./capability-source.js";
@@ -215,7 +215,11 @@ export class AdaptiveModelSelector {
     if (task.requirements.contextWindow && typeof entry.contextWindow === "number" && entry.contextWindow < task.requirements.contextWindow) return [];
     if (task.requirements.vision) return [];
     if (task.requirements.tools?.length && entry.toolCalling === "no") return [];
-    return entry.models.map((model) => ({ entry, model }));
+    const provider = getProvider(entry.providerId);
+    const workload = workloadForTask(task.type);
+    return entry.models
+      .filter((model) => provider ? isModelEligibleForWorkload(provider, model, workload) : true)
+      .map((model) => ({ entry, model }));
   }
 
   private async telemetry(level: "debug" | "info" | "warn" | "error", event: string, details: Record<string, unknown>) {
@@ -228,6 +232,11 @@ function capabilitiesFor(entry: InventoryEntry): string[] {
   if (entry.toolCalling === "yes") result.push("tool-calling");
   if (typeof entry.contextWindow === "number") result.push(`context:${entry.contextWindow}`);
   return result;
+}
+
+function workloadForTask(taskType: IntelligenceTask["type"]): ModelWorkload {
+  if (taskType === "coding") return "coding";
+  return "general_chat";
 }
 
 function serializeCandidate(candidate: ModelCandidate, taskId: string): Record<string, unknown> {

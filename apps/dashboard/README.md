@@ -28,11 +28,13 @@ CI uses `pnpm install --frozen-lockfile`, runs all three checks, boots the built
 
 `DashboardDataSource` is the stability boundary between UI and runtime internals.
 
-- `LocalDashboardDataSource` (default): reads the existing SQLite database in **read-only** mode. Current integration covers ledger summaries, persistent memories and audit events. It does not import Runtime, Memory Engine, Provider Runtime or Model Router internals.
+- `LocalDashboardDataSource` (default): reads the existing SQLite database in **read-only** mode. Current integration covers ledger summaries, persistent memories, audit events and Adaptive Router decision telemetry (`router.selected`, `router.candidate_scored`, `shadow_cost.calculated`). The dashboard reconstructs recent model decisions from those persisted events instead of importing router internals.
 - `MockDashboardDataSource`: opt-in development fixture (`BEYONDER_DASHBOARD_SOURCE=mock`). Every page displays a **DEMO DATA** marker.
 - `EmptyDashboardDataSource`: explicit no-data mode (`BEYONDER_DASHBOARD_SOURCE=empty`) for empty-state validation.
 
 `BEYONDER_DB_PATH` follows the runtime's existing DB path contract. Relative paths are resolved from the monorepo root.
+
+Database availability is not treated as a runtime heartbeat. Runtime health remains `UNKNOWN` until a stable health/heartbeat signal is exposed.
 
 ## Security boundary
 
@@ -40,16 +42,16 @@ The dashboard is read-only. It does not expose vault contents, cookies, password
 
 No wallet, payment, x402, unrestricted browser/shell, self-modification or multi-agent capability is implemented here.
 
-## Future integration points
+## Integration points
 
-| Runtime area | Dashboard adapter target |
+| Runtime area | Current state / dashboard adapter target |
 | --- | --- |
-| Memory Engine | `getMemories()` + working-memory adapter |
-| Adaptive Router | `ModelDecisionView` / `ModelDecisionInspector` |
-| BIB | `ModelView.capabilities` and benchmark availability |
-| Economy | quota, runway and shadow-spend fields |
-| Provider Runtime | `getProviders()` health/latency/quota telemetry |
-| Task runtime | `getTasks()` classification → outcome timeline |
-| Audit | already connected to local SQLite event stream |
+| Memory Engine | persisted memory is connected through `getMemories()`; working-memory telemetry can be added behind the same contract |
+| Adaptive Router | recent decisions are reconstructed from audit telemetry into `ModelDecisionView`; a future stable decision API can replace the audit adapter without UI changes |
+| BIB | `ModelView.capabilities` and benchmark availability are ready; benchmark data is intentionally not implemented here |
+| Economy | ledger is connected; quota, runway, current economic state and shadow-spend aggregates still need stable read signals |
+| Provider Runtime | `getProviders()` is ready for health/latency/quota telemetry; no fragile provider-state imports are used |
+| Task runtime | `getTasks()` is ready for classification → outcome timelines once task persistence has a stable read contract |
+| Audit | connected to the local SQLite event stream with search, filters, limits and redaction |
 
 The UI types are intentionally dashboard-owned so parallel runtime branches can evolve without forcing fragile imports into the web application.

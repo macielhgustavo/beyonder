@@ -21,6 +21,8 @@ import {
 } from "./contracts.js";
 import { DeterministicCompletionEvaluator, outcomeWithCompletion, type CompletionCriteria, type CompletionEvaluator } from "./completion.js";
 import { DefaultRecoveryPolicy, type RecoveryPolicy } from "./recovery.js";
+import type { Planner } from "./planner.js";
+import { validatePlan } from "./planner.js";
 import { assertTaskStateTransition, isTerminalTaskState } from "./state-machine.js";
 
 export interface TaskExecutorOptions {
@@ -30,6 +32,7 @@ export interface TaskExecutorOptions {
   getAvailableTools?: (context?: Parameters<ToolExecutor["execute"]>[1]) => Promise<StepContext["availableTools"]>;
   telemetry?: TaskExecutorTelemetry;
   actionPlanner?: StepActionPlanner;
+  planner?: Planner;
   recoveryPolicy?: RecoveryPolicy;
   completionEvaluator?: CompletionEvaluator;
   now?: () => number;
@@ -184,7 +187,18 @@ export class AutonomousTaskExecutor {
     stepExecution.completedAt = new Date(this.now()).toISOString();
     stepExecution.observationSummary = summarizeObservation(result);
 
-    if (result.success) {
+    if (result.success && isPolicyBlockedOutput(result.output)) {
+      step.status = "BLOCKED";
+      stepExecution.status = "BLOCKED";
+      execution.usage.consecutiveFailures = 0;
+      await this.transition(execution, "BLOCKED", { stepId: step.id, reason: "POLICY_DENIED" });
+      await this.telemetry("warn", "step.failed", {
+        taskId: execution.task.id,
+        planId: execution.plan.id,
+        stepId: step.id,
+        error: { code: "POLICY_DENIED", message: "The tool returned a policy-blocked result." }
+      });
+    } else if (result.success) {
       step.status = "COMPLETED";
       stepExecution.status = "COMPLETED";
       execution.usage.consecutiveFailures = 0;
@@ -226,7 +240,13 @@ export class AutonomousTaskExecutor {
         step.status = "FAILED";
         stepExecution.status = "FAILED";
         await this.transition(execution, "REPLANNING", { stepId: step.id, reason: recovery.reason });
-        await this.transition(execution, "FAILED", { stepId: step.id, reason: "replan-required" });
+        const revised = await this.replan(execution, request, step, recovery.reason);
+        if (revised) {
+          await this.transition(execution, "READY", { planId: revised.id, revision: revised.revision });
+          await this.transition(execution, "RUNNING", { planId: revised.id, revision: revised.revision });
+        } else {
+          await this.transition(execution, "FAILED", { stepId: step.id, reason: "replan-required" });
+        }
       } else {
         step.status = "FAILED";
         stepExecution.status = "FAILED";
@@ -248,6 +268,43 @@ export class AutonomousTaskExecutor {
     const decision = await this.options.actionPlanner?.decide(context);
     if (!decision) throw new Error(`Step '${context.currentStep.id}' has no action and no action planner is configured.`);
     return decision.call;
+  }
+
+  private async replan(execution: TaskExecution, request: ExecuteTaskRequest, failedStep: PlanStep, reason: string): Promise<Plan | undefined> {
+    const planner = this.options.planner;
+    if (!planner?.revisePlan) return undefined;
+    const availableTools = await this.availableTools(execution, request.economicState);
+    const revised = await planner.revisePlan({
+      objective: execution.plan.objective,
+      task: execution.task,
+      memoryContext: await this.retrieveMemory(execution.task, failedStep),
+      availableTools,
+      budget: execution.budget,
+      economicState: request.economicState,
+      previousPlan: execution.plan,
+      completedSteps: execution.plan.steps.filter((candidate) => candidate.status === "COMPLETED"),
+      failedStep,
+      observations: execution.steps.map((candidate) => candidate.observationSummary).filter((value): value is string => Boolean(value)),
+      reason
+    });
+    const validation = validatePlan(revised, { availableTools, budget: execution.budget });
+    if (!validation.valid || revised.revision <= execution.plan.revision) {
+      await this.telemetry("warn", "plan.revised", {
+        taskId: execution.task.id,
+        planId: execution.plan.id,
+        valid: false,
+        issues: validation.valid ? ["revision-not-incremented"] : validation.issues
+      });
+      return undefined;
+    }
+    execution.plan = clonePlan(revised);
+    await this.telemetry("info", "plan.revised", {
+      taskId: execution.task.id,
+      planId: revised.id,
+      revision: revised.revision,
+      preservedSteps: revised.steps.filter((candidate) => candidate.status === "COMPLETED").map((candidate) => candidate.id)
+    });
+    return revised;
   }
 
   private async retrieveMemory(task: IntelligenceTask, step: PlanStep): Promise<RetrievedMemory[]> {
@@ -360,6 +417,12 @@ function summarizeObservation(result: { success: boolean; output?: unknown; erro
   if (!result.success) return `${result.error?.code ?? "ERROR"}: ${result.error?.message ?? "Tool failed."}`.slice(0, 600);
   if (typeof result.output === "string") return result.output.slice(0, 600);
   return JSON.stringify(result.output ?? null).slice(0, 600);
+}
+
+function isPolicyBlockedOutput(output: unknown): boolean {
+  if (!output || typeof output !== "object") return false;
+  const candidate = output as { result?: { status?: unknown; policy?: { reason?: unknown } }; status?: unknown };
+  return candidate.status === "blocked" || candidate.result?.status === "blocked" || candidate.result?.policy?.reason === "payment-prohibited";
 }
 
 function noProgressCount(execution: TaskExecution, observation: string | undefined): number {

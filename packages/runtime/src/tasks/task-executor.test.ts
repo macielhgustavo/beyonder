@@ -135,6 +135,38 @@ describe("AutonomousTaskExecutor", () => {
     expect(execute).toHaveBeenCalledTimes(2);
   });
 
+  it("applies a validated revised plan after a replan decision", async () => {
+    const strictSchema = createToolInputSchema((input) => {
+      if (input && typeof input === "object" && (input as { value?: unknown }).value === "valid") {
+        return { success: true as const, data: input };
+      }
+      return { success: false as const, error: { message: "value must be valid" } };
+    });
+    const revised = {
+      ...plan([step("replacement")]),
+      id: "plan-2",
+      revision: 2,
+      steps: [{ ...step("replacement"), action: { id: "replacement-call", tool: "fixture.read", arguments: { value: "valid" } } }]
+    };
+    const registry = new ToolRegistry().register(definition({ inputSchema: strictSchema }));
+    const toolExecutor = new ToolExecutor(registry);
+    const outcome = await new AutonomousTaskExecutor({
+      toolExecutor,
+      getAvailableTools: (context) => registry.getAvailableTools(context, toolExecutor.policy),
+      planner: { createPlan: () => revised, revisePlan: () => revised }
+    }).execute({
+      task: task(),
+      plan: plan([{ ...step("invalid"), action: { id: "invalid-call", tool: "fixture.read", arguments: { value: "invalid" } } }]),
+      economicState: "survival",
+      budget: { maxReplans: 1 }
+    });
+
+    expect(outcome.status).toBe("COMPLETED");
+    expect(outcome.execution.plan.revision).toBe(2);
+    expect(outcome.execution.usage.replans).toBe(1);
+    expect(outcome.execution.steps).toHaveLength(2);
+  });
+
   it("stops when max steps is exhausted", async () => {
     const outcome = await run(plan([step("one"), step("two")]), [definition()], { maxSteps: 1 });
 
@@ -239,4 +271,3 @@ describe("AutonomousTaskExecutor", () => {
     expect(route).toHaveBeenCalledOnce();
   });
 });
-

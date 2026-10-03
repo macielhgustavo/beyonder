@@ -19,6 +19,8 @@ export { createRuntimeToolExecutor, createRuntimeToolRegistry, RuntimeToolAuditS
 export { AutonomousTaskExecutor } from "./tasks/task-executor.js";
 export { assertTaskStateTransition, canTransition, isTerminalTaskState, InvalidTaskStateTransitionError } from "./tasks/state-machine.js";
 export { DeterministicPlanner, safeObjectiveCall, validatePlan } from "./tasks/planner.js";
+export { LlmPlanner } from "./tasks/llm-planner.js";
+export { StateTaskCheckpointStore } from "./tasks/checkpoints.js";
 export { DefaultRecoveryPolicy } from "./tasks/recovery.js";
 export { DeterministicCompletionEvaluator, outcomeWithCompletion } from "./tasks/completion.js";
 export type { AppConfig } from "./config/env.js";
@@ -66,6 +68,8 @@ export type {
   ReplanRequest
 } from "./tasks/planner.js";
 export type { RecoveryDecision, RecoveryDecisionType, RecoveryPolicy, RecoveryRequest } from "./tasks/recovery.js";
+export type { LlmPlannerOptions, LlmPlannerResult } from "./tasks/llm-planner.js";
+export type { TaskCheckpointStore } from "./tasks/checkpoints.js";
 export type {
   CompletionCriteria,
   CompletionEvaluation,

@@ -1,7 +1,7 @@
 import type { AppConfig } from "../config/env.js";
 import type { IntelligenceTask, TaskOutcome } from "../intelligence/contracts.js";
 import type { EconomicState, ModelMessage, ModelResponse } from "../types.js";
-import { AutopilotStateStore, buildComputeInventory } from "@beyonder/compute";
+import { AutopilotStateStore, buildComputeInventory, getProvider } from "@beyonder/compute";
 import { AdaptiveModelSelector, type AdaptiveSelectorOptions } from "./adaptive-selector.js";
 import type { ModelCandidate, QuotaSnapshot, RouteDecision, RouterTelemetry } from "./adaptive-types.js";
 import { EmptyPerformanceRepository, type PerformanceRepository } from "./performance-repository.js";
@@ -75,6 +75,11 @@ export class ModelRouter {
       predictedQuality: candidate.predictedQuality,
       shadowCostUsd: candidate.shadowCostUsd
     });
+  }
+
+  async completeForPlanningCandidate(messages: ModelMessage[], candidate: ModelCandidate): Promise<ModelResponse> {
+    if (this.config.provider === "auto") return this.completeAutoCandidate(messages, candidate);
+    return this.completeForCandidate(messages, candidate);
   }
 
   async quotas() {
@@ -242,6 +247,37 @@ export class ModelRouter {
     if (!response.ok) throw new Error(`OpenAI-compatible request failed: ${response.status} ${await response.text()}`);
     const json = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
     return { content: json.choices?.[0]?.message?.content ?? "", provider: "openai-compatible", model: this.config.name, estimatedCostUsd: 0, raw: json };
+  }
+
+  private async completeAutoCandidate(messages: ModelMessage[], candidate: ModelCandidate): Promise<ModelResponse> {
+    const provider = getProvider(candidate.provider);
+    if (!provider?.openAiCompatibleEndpoint) throw new Error(`Provider ${candidate.provider} has no compatible completion endpoint.`);
+    const apiKey = provider.credentialEnvVars.map((name) => process.env[name]).find((value) => Boolean(value));
+    if (provider.credentialEnvVars.length > 0 && !apiKey) throw new Error(`Provider ${candidate.provider} credential is unavailable.`);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 20_000);
+    try {
+      const response = await fetch(`${provider.openAiCompatibleEndpoint.replace(/\/$/, "")}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {})
+        },
+        signal: controller.signal,
+        body: JSON.stringify({ model: candidate.model, messages, temperature: 0, max_tokens: 800, stream: false })
+      });
+      if (!response.ok) throw new Error(`Provider ${candidate.provider} returned HTTP ${response.status}.`);
+      const json = await response.json() as { choices?: Array<{ message?: { content?: string } }>; usage?: { total_tokens?: number } };
+      return {
+        content: json.choices?.[0]?.message?.content ?? "",
+        provider: candidate.provider,
+        model: candidate.model,
+        estimatedCostUsd: 0,
+        raw: { usage: json.usage }
+      };
+    } finally {
+      clearTimeout(timer);
+    }
   }
 }
 

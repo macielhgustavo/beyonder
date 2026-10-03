@@ -3,7 +3,6 @@ import { Command } from "commander";
 import { existsSync } from "node:fs";
 import {
   DEFAULT_TASK_BUDGET,
-  DeterministicPlanner,
   classifyEconomicState,
   createRuntime,
   loadConfig,
@@ -279,7 +278,7 @@ const taskCommand = program.command("task").description("Run and inspect autonom
 taskCommand
   .command("run")
   .argument("<objective>", "objective to execute")
-  .description("Run a bounded v0.4 task execution using the current safe deterministic plan path")
+  .description("Run a bounded v0.4 task execution using the routed structured planner")
   .action(async (objective: string) => {
     const config = loadConfig();
     const runtime = createBeyonderRuntime(config);
@@ -288,8 +287,7 @@ taskCommand
     const economicState = classifyEconomicState(summary);
     const inspection = await runtime.intelligence.inspect(objective);
     const availableTools = await runtime.getAvailableTools({ taskId: inspection.task.id, economicState });
-    const planner = new DeterministicPlanner();
-    const plan = await planner.createPlan({
+    const plan = await runtime.planner.createPlan({
       objective,
       task: inspection.task,
       memoryContext: inspection.relevantMemories,
@@ -312,10 +310,49 @@ taskCommand
       taskId: inspection.task.id,
       executionId: outcome.execution.id,
       status: outcome.status,
+      planner: runtime.planner.lastResult ? {
+        provider: runtime.planner.lastResult.provider,
+        model: runtime.planner.lastResult.model,
+        usedFallback: runtime.planner.lastResult.usedFallback,
+        revision: outcome.execution.plan.revision
+      } : undefined,
       result: outcome.result,
       stepsExecuted: outcome.execution.usage.steps,
       toolInvocations: outcome.execution.usage.toolInvocations,
       checkpoints: outcome.execution.checkpoints.length,
+      monetaryCostUsd: outcome.execution.usage.monetaryCostUsd,
+      shadowCostUsd: outcome.execution.usage.shadowCostUsd
+    }, null, 2));
+    runtime.sqlite.close();
+  });
+
+taskCommand
+  .command("resume")
+  .argument("<task-id>", "task id to resume from its latest checkpoint")
+  .description("Resume a non-terminal task without repeating completed steps")
+  .action(async (taskId: string) => {
+    const config = loadConfig();
+    const runtime = createBeyonderRuntime(config);
+    const checkpoint = await runtime.checkpoints.get(taskId);
+    if (!checkpoint) {
+      console.log(JSON.stringify({ taskId, status: "CHECKPOINT_NOT_FOUND" }, null, 2));
+      runtime.sqlite.close();
+      return;
+    }
+    const summary = await runtime.ledger.summary(config.monthlyFixedCostUsd);
+    const outcome = await runtime.taskExecutor.resume({
+      execution: checkpoint,
+      economicState: classifyEconomicState(summary)
+    });
+    console.log(JSON.stringify({
+      taskId,
+      executionId: outcome.execution.id,
+      status: outcome.status,
+      result: outcome.result,
+      completedSteps: outcome.execution.plan.steps.filter((step) => step.status === "COMPLETED").map((step) => step.id),
+      toolInvocations: outcome.execution.usage.toolInvocations,
+      retries: outcome.execution.usage.retries,
+      replans: outcome.execution.usage.replans,
       monetaryCostUsd: outcome.execution.usage.monetaryCostUsd,
       shadowCostUsd: outcome.execution.usage.shadowCostUsd
     }, null, 2));

@@ -23,6 +23,8 @@
     "web:evals:standard": "tsx packages/web-evals/src/cli.ts standard",
     "autonomy:smoke": "tsx packages/web-evals/src/autonomy-cli.ts",
     "hardening:smoke": "tsx packages/runtime/src/tasks/hardening-smoke.ts",
+    "opportunities:smoke": "tsx packages/web-evals/src/opportunity-cli.ts",
+    "opportunities:real-smoke": "tsx -e \"import('./packages/web-evals/src/opportunity.js').then(async ({runRealSourceReadOnlySmoke}) => console.log(JSON.stringify(await runRealSourceReadOnlySmoke(), null, 2)))\"",
     "start": "tsx apps/cli/src/index.ts",
     "beyonder": "tsx apps/cli/src/index.ts",
     "providers:autopilot": "tsx apps/cli/src/index.ts providers autopilot",

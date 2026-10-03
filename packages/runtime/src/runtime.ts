@@ -13,7 +13,8 @@ import { ModelRouter } from "./models/model-router.js";
 import { MemoryPerformanceRepository } from "./models/performance-repository.js";
 import type { ModelCapabilitySource } from "./models/capability-source.js";
 import { AgentLoop } from "./agent/agent-loop.js";
-import { createToolRegistry } from "./tools/tool-registry.js";
+import { createRuntimeToolExecutor, createRuntimeToolRegistry } from "./tools/runtime-tools.js";
+import type { ToolContext, ToolDescriptor, ToolExecutor, ToolRegistry } from "@beyonder/tools";
 
 export interface BeyonderRuntime {
   sqlite: Database.Database;
@@ -28,7 +29,9 @@ export interface BeyonderRuntime {
   modelRouter: ModelRouter;
   adaptiveExecution: AdaptiveExecutionController;
   audit: AuditLog;
-  tools: ReturnType<typeof createToolRegistry>;
+  tools: ToolRegistry;
+  toolExecutor: ToolExecutor;
+  getAvailableTools(context?: ToolContext): Promise<readonly ToolDescriptor[]>;
   agent: AgentLoop;
 }
 
@@ -48,7 +51,8 @@ export function createRuntime(config: AppConfig, options: RuntimeOptions = {}): 
   const audit = new AuditLog(db);
   const modelRouter = new ModelRouter(config.model, { performanceRepository: performance, capabilitySource: options.capabilitySource, telemetry: audit });
   const adaptiveExecution = new AdaptiveExecutionController(modelRouter, evaluation, audit);
-  const tools = createToolRegistry(config.tools);
+  const tools = createRuntimeToolRegistry(config.tools);
+  const toolExecutor = createRuntimeToolExecutor(tools, audit);
   const agent = new AgentLoop(
     config,
     ledger,
@@ -59,7 +63,7 @@ export function createRuntime(config: AppConfig, options: RuntimeOptions = {}): 
     adaptiveExecution,
     evaluation,
     audit,
-    tools
+    toolExecutor
   );
 
   return {
@@ -76,6 +80,8 @@ export function createRuntime(config: AppConfig, options: RuntimeOptions = {}): 
     adaptiveExecution,
     audit,
     tools,
+    toolExecutor,
+    getAvailableTools: (context = {}) => tools.getAvailableTools(context, toolExecutor.policy),
     agent
   };
 }

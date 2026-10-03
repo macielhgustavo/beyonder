@@ -1,0 +1,38 @@
+name: validate-tool-runtime-temp
+
+on:
+  push:
+    branches: [feat/tool-runtime]
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install and synchronize lockfile
+        run: pnpm install --no-frozen-lockfile
+      - name: Commit lockfile when workspace dependencies changed
+        shell: bash
+        run: |
+          if git diff --quiet -- pnpm-lock.yaml; then
+            echo "lockfile already synchronized"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add pnpm-lock.yaml
+            git commit -m "chore: sync tool runtime lockfile"
+            git push
+          fi
+      - run: pnpm typecheck
+      - run: pnpm test

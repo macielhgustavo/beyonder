@@ -1,4 +1,5 @@
 import { nanoid } from "nanoid";
+import type { ToolExecutor } from "@beyonder/tools";
 import type { AuditLog } from "../audit/audit-log.js";
 import type { AppConfig } from "../config/env.js";
 import type { EconomicLedger } from "../economy/ledger.js";
@@ -11,7 +12,6 @@ import type { MemoryEngine } from "../memory/memory-engine.js";
 import type { StateStore } from "../memory/state-store.js";
 import type { ModelRouter } from "../models/model-router.js";
 import type { AgentDecision, AgentStepStatus, ModelMessage, ToolCallResult } from "../types.js";
-import type { Tool } from "../tools/tool-registry.js";
 
 export class AgentLoop {
   constructor(
@@ -24,7 +24,7 @@ export class AgentLoop {
     private readonly adaptiveExecution: AdaptiveExecutionController,
     private readonly evaluator: EvaluationLayer,
     private readonly audit: AuditLog,
-    private readonly tools: Map<string, Tool>
+    private readonly toolExecutor: ToolExecutor
   ) {}
 
   async initialize() {
@@ -93,15 +93,24 @@ export class AgentLoop {
           expectedCostUsd: 0
         };
 
-    const tool = this.tools.get("safe-objective");
-    const toolStartedAt = Date.now();
-    const toolResult = await tool?.run(objective);
-    const toolLatencyMs = Date.now() - toolStartedAt;
-    const toolEvaluation = toolResult?.ok === false
+    const toolCall = {
+      id: `tool_${nanoid()}`,
+      tool: "safe-objective",
+      arguments: { objective }
+    };
+    const execution = await this.toolExecutor.execute<string>(toolCall, {
+      taskId: task.id,
+      economicState
+    });
+    const toolResult: ToolCallResult = execution.success
+      ? { ok: true, output: execution.output ?? "" }
+      : { ok: false, output: "", error: execution.error?.message ?? "Tool execution failed." };
+    const toolLatencyMs = execution.durationMs;
+    const toolEvaluation = toolResult.ok === false
       ? { score: 0, passed: false, confidence: 1, method: "tool-result", issues: [toolResult.error ?? "safe tool failed"] } satisfies Evaluation
-      : this.evaluator.evaluate({ task, output: toolResult?.output ?? decision.rationale });
+      : this.evaluator.evaluate({ task, output: toolResult.output });
     const evaluation = combineEvaluations(adaptive.evaluation, toolEvaluation);
-    const success = (toolResult?.ok ?? true) && evaluation.passed;
+    const success = toolResult.ok && evaluation.passed;
 
     await this.state.set("loop.step", stepNumber);
     await this.state.set("economy.state", economicState);
@@ -111,8 +120,8 @@ export class AgentLoop {
       task,
       attempts,
       success,
-      result: toolResult?.output ?? adaptive.response?.content ?? decision.rationale,
-      error: toolResult?.error,
+      result: toolResult.output || adaptive.response?.content || decision.rationale,
+      error: toolResult.error,
       evaluation,
       provider: lastAttempt?.provider ?? "none",
       model: lastAttempt?.model ?? "none",
@@ -120,7 +129,7 @@ export class AgentLoop {
       monetaryCostUsd,
       shadowCostUsd,
       latencyMs: attempts.reduce((sum, attempt) => sum + (attempt.latencyMs ?? 0), 0) + toolLatencyMs,
-      tools: tool ? [tool.name] : [],
+      tools: [toolCall.tool],
       completedAt: new Date().toISOString()
     };
     await this.memory.recordOutcome(outcome);

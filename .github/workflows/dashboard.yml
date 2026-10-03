@@ -1,0 +1,81 @@
+name: validate-dashboard
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - "apps/dashboard/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/dashboard.yml"
+  push:
+    branches: [feat/dashboard]
+    paths:
+      - "apps/dashboard/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/dashboard.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  dashboard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install workspace
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck dashboard
+        run: pnpm dashboard:typecheck
+      - name: Test dashboard
+        run: pnpm dashboard:test
+      - name: Build dashboard
+        run: pnpm dashboard:build
+      - name: Capture dashboard screenshots
+        env:
+          BEYONDER_DASHBOARD_SOURCE: mock
+        shell: bash
+        run: |
+          mkdir -p dashboard-screenshots
+          pnpm --filter @beyonder/dashboard start > /tmp/beyonder-dashboard.log 2>&1 &
+          DASHBOARD_PID=$!
+          trap 'kill "$DASHBOARD_PID" 2>/dev/null || true' EXIT
+
+          ready=0
+          for _ in {1..30}; do
+            if curl -fsS http://127.0.0.1:3000/ >/dev/null; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            cat /tmp/beyonder-dashboard.log
+            exit 1
+          fi
+
+          BROWSER="$(command -v google-chrome-stable || command -v google-chrome || command -v chromium || command -v chromium-browser || true)"
+          if [ -z "$BROWSER" ]; then
+            echo "No Chrome/Chromium executable found on runner"
+            exit 1
+          fi
+
+          "$BROWSER" --headless=new --no-sandbox --disable-dev-shm-usage --hide-scrollbars --window-size=1440,1100 --screenshot="$PWD/dashboard-screenshots/overview.png" http://127.0.0.1:3000/
+          "$BROWSER" --headless=new --no-sandbox --disable-dev-shm-usage --hide-scrollbars --window-size=1440,1100 --screenshot="$PWD/dashboard-screenshots/intelligence.png" http://127.0.0.1:3000/intelligence
+          "$BROWSER" --headless=new --no-sandbox --disable-dev-shm-usage --hide-scrollbars --window-size=1440,1100 --screenshot="$PWD/dashboard-screenshots/memory.png" http://127.0.0.1:3000/memory
+      - name: Upload dashboard screenshots
+        uses: actions/upload-artifact@v4
+        with:
+          name: beyonder-dashboard-screenshots
+          path: dashboard-screenshots/*.png
+          if-no-files-found: error

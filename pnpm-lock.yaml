@@ -142,6 +142,9 @@ importers:
       '@beyonder/browser-agent':
         specifier: workspace:*
         version: link:../browser-agent
+      '@beyonder/runtime':
+        specifier: workspace:*
+        version: link:../runtime
       '@beyonder/tools':
         specifier: workspace:*
         version: link:../tools

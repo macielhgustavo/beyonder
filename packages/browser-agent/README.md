@@ -4,7 +4,7 @@ Controlled, one-step browser capability for Beyonder. The BrowserAgent exposes s
 
 ## Architecture
 
-`BrowserAgent` owns session lifecycle and executes exactly one `BrowserAction` per call. `BrowserSession` is the browser-driver boundary; `PlaywrightBrowserSession` is the real implementation. `BrowserPolicyEngine` authorizes navigation/form/click behavior before execution, and Playwright request routing applies navigation policy again to redirects and subresources. `BrowserTelemetrySink` receives redacted audit events. `BrowserRuntimeToolAdapter` is intentionally small and structurally compatible with the current runtime Tool contract so the parallel Tool Runtime work can replace registration without coupling this package to the Intelligence Layer.
+`BrowserAgent` owns session lifecycle and executes exactly one `BrowserAction` per call. `BrowserSession` is the browser-driver boundary; `PlaywrightBrowserSession` is the real implementation. `BrowserPolicyEngine` authorizes navigation/form/click behavior before execution, and Playwright request routing applies navigation policy again to redirects and subresources. `BrowserTelemetrySink` receives redacted audit events. `createBrowserToolDefinitions` exposes explicit `@beyonder/tools` definitions so the runtime path is `ToolRegistry -> ToolPolicy -> ToolExecutor -> BrowserAgent` without a temporary adapter.
 
 ## Supported actions
 
@@ -17,6 +17,19 @@ Controlled, one-step browser capability for Beyonder. The BrowserAgent exposes s
 - `close`
 
 Targets are semantic (`role`/`name`, `label`, `text`, `placeholder`, `testId`). There is no model-provided JavaScript/evaluate action.
+
+## Tool Runtime integration
+
+The package exports one explicit tool per browser action:
+
+- `browser.open`, `browser.navigate`
+- `browser.observe`, `browser.extractText`, `browser.find`
+- `browser.click`, `browser.fill`
+- `browser.scroll`, `browser.back`
+- `browser.current`, `browser.waitFor`
+- `browser.screenshot`, `browser.close`
+
+Read/navigation/observation tools are `LOW` risk with `READ` side effects and are compatible with the default Tool Runtime policy. `browser.fill` is `MEDIUM/WRITE`; `browser.click` is `MEDIUM/EXTERNAL_ACTION`, so the default policy blocks them unless a trusted runtime installs a stricter contextual authorization policy. Browser policy still inspects actions before page execution, so `file://`, internal networks, payments, purchases, account creation, executable downloads, verification bypass, and submit controls remain blocked at the browser layer as well.
 
 ## Default policy
 

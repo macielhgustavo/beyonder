@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Recovery Fixture</title></head>
+<body>
+  <main>
+    <h1>Recovery target</h1>
+    <button id="correct-target" type="button">Reveal recovery code</button>
+    <p id="recovery-code" hidden>R-17</p>
+  </main>
+  <script>
+    document.querySelector('#correct-target').addEventListener('click', () => {
+      document.querySelector('#recovery-code').hidden = false;
+      document.body.dataset.recovered = 'true';
+    });
+  </script>
+</body>
+</html>

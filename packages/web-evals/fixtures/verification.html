@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Verification Fixture</title></head>
+<body data-status="pending">
+  <main>
+    <h1>Verification</h1>
+    <p>Status: <strong id="status">pending</strong></p>
+    <button id="mark-ready" type="button">Mark ready</button>
+  </main>
+  <script>
+    document.querySelector('#mark-ready').addEventListener('click', () => {
+      document.querySelector('#status').textContent = 'ready';
+      document.body.dataset.status = 'ready';
+    });
+  </script>
+</body>
+</html>

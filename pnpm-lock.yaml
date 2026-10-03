@@ -137,6 +137,25 @@ importers:
 
   packages/tools: {}
 
+  packages/web-evals:
+    dependencies:
+      '@beyonder/browser-agent':
+        specifier: workspace:*
+        version: link:../browser-agent
+      '@beyonder/tools':
+        specifier: workspace:*
+        version: link:../tools
+    devDependencies:
+      '@types/node':
+        specifier: ^22.13.5
+        version: 22.20.5
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
+      vitest:
+        specifier: ^3.0.7
+        version: 3.2.7(@types/node@22.20.5)(tsx@4.23.15)
+
 packages:
 
   '@drizzle-team/brocli@0.10.2':

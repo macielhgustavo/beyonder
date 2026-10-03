@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { openDatabase } from "../db/client.js";
 import { StateStore } from "../memory/state-store.js";
-import { DeterministicFixtureOpportunitySource, GitHubPublicOpportunitySource } from "./sources.js";
+import { AgentWorkPublicOpportunitySource, DeterministicFixtureOpportunitySource, GitHubPublicOpportunitySource } from "./sources.js";
 import { OpportunityEngine } from "./engine.js";
 import { normalizeOpportunity } from "./normalizer.js";
 import { StateOpportunityStore } from "./store.js";
@@ -47,5 +47,17 @@ describe("opportunity engine", () => {
     const result = await source.discover();
     expect(result.items).toEqual([]);
     expect(result.errors[0]).toContain("HTTP 503");
+  });
+
+  it("normalizes AgentWork jobs and preserves malformed/unknown fields safely", async () => {
+    const source = new AgentWorkPublicOpportunitySource({ fetchImpl: async () => new Response(JSON.stringify({ gigs: [
+      { id: "gig-1", title: "Research a public API", description: "Return a short report", skillsRequired: ["research"], budgetUsd: "5", deadline: "2026-12-01" },
+      null, { id: "bad" }
+    ] }), { status: 200 }) });
+    const result = await source.discover();
+    expect(result.errors).toEqual([]);
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]?.reward?.amount).toBe(5);
+    expect(result.items[0]?.metadata).toMatchObject({ requiresApplication: true, requiresAuthentication: true, requiresSubmission: true });
   });
 });

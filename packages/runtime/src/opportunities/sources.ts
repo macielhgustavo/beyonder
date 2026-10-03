@@ -81,6 +81,61 @@ export class GitHubPublicOpportunitySource implements OpportunitySource {
   }
 }
 
+export interface AgentWorkOpportunitySourceOptions {
+  apiBaseUrl?: string;
+  fetchImpl?: typeof fetch;
+}
+
+/** Public, read-only AgentWork catalog adapter. It never registers, applies, messages, or pays. */
+export class AgentWorkPublicOpportunitySource implements OpportunitySource {
+  readonly id = "agentwork-public";
+  private readonly apiBaseUrl: string;
+  private readonly fetchImpl: typeof fetch;
+
+  constructor(options: AgentWorkOpportunitySourceOptions = {}) {
+    this.apiBaseUrl = (options.apiBaseUrl ?? "https://agentwork.app/api").replace(/\/$/, "");
+    this.fetchImpl = options.fetchImpl ?? fetch;
+  }
+
+  async discover(context: OpportunitySourceContext = {}): Promise<OpportunityDiscoveryResult> {
+    const discoveredAt = context.now ?? new Date().toISOString();
+    try {
+      const response = await this.fetchImpl(`${this.apiBaseUrl}/gigs?status=open`, {
+        headers: { accept: "application/json", "user-agent": "beyonder-opportunity-readonly" }, signal: context.signal
+      });
+      if (!response.ok) return { sourceId: this.id, discoveredAt, items: [], errors: [`AgentWork returned HTTP ${response.status}.`] };
+      const payload = await response.json() as unknown;
+      const records = Array.isArray(payload) ? payload : (payload && typeof payload === "object" && Array.isArray((payload as { gigs?: unknown }).gigs) ? (payload as { gigs: unknown[] }).gigs : []);
+      const items = records.map((record) => agentWorkToRaw(record, this.id)).filter((item): item is RawOpportunity => item !== undefined);
+      return { sourceId: this.id, discoveredAt, items: items.slice(0, context.limit ?? items.length), errors: [] };
+    } catch (error) {
+      return { sourceId: this.id, discoveredAt, items: [], errors: [error instanceof Error ? error.message : String(error)] };
+    }
+  }
+}
+
+function agentWorkToRaw(value: unknown, source: string): RawOpportunity | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const item = value as Record<string, unknown>;
+  const title = typeof item.title === "string" ? item.title.trim() : "";
+  if (!title) return undefined;
+  const description = typeof item.description === "string" ? item.description : "";
+  const id = item.id ?? item.gigId ?? item.slug;
+  const skills = Array.isArray(item.skillsRequired) ? item.skillsRequired.filter((x): x is string => typeof x === "string") : [];
+  const budget = typeof item.budgetUsd === "number" ? item.budgetUsd : typeof item.budgetUsd === "string" && Number.isFinite(Number(item.budgetUsd)) ? Number(item.budgetUsd) : undefined;
+  return {
+    source, sourceItemId: id === undefined ? undefined : String(id),
+    sourceUrl: typeof item.url === "string" ? item.url : typeof item.slug === "string" ? `https://agentwork.app/gigs/${item.slug}` : "https://agentwork.app/gigs",
+    title, description, type: /code|software|typescript|api/i.test(`${title} ${description}`) ? "CODING" : /research|analysis/i.test(`${title} ${description}`) ? "RESEARCH" : "JOB",
+    reward: budget === undefined ? { type: "UNKNOWN" } : { amount: budget, currency: "USD", type: "FIXED" },
+    requiredCapabilities: skills.length ? skills : ["research"],
+    deadline: typeof item.deadline === "string" ? item.deadline : undefined,
+    metadata: { marketplace: "AgentWork", requiresApplication: true, requiresProposal: true, requiresAccount: true, requiresAuthentication: true, requiresSubmission: true, rewardExplicit: budget !== undefined, paymentMethod: "USDC", sourceApi: `${thisSourceBase(source)}/gigs` }
+  };
+}
+
+function thisSourceBase(source: string): string { return source === "agentwork-public" ? "https://agentwork.app/api" : source; }
+
 function githubIssueToRaw(issue: { id?: unknown; html_url?: unknown; title?: unknown; body?: unknown; labels?: Array<{ name?: unknown }> }, source: string): RawOpportunity | undefined {
   const title = typeof issue.title === "string" ? issue.title.trim() : "";
   if (!title) return undefined;

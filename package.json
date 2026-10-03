@@ -25,6 +25,8 @@
     "hardening:smoke": "tsx packages/runtime/src/tasks/hardening-smoke.ts",
     "opportunities:smoke": "tsx packages/web-evals/src/opportunity-cli.ts",
     "opportunities:real-smoke": "tsx -e \"import('./packages/web-evals/src/opportunity.js').then(async ({runRealSourceReadOnlySmoke}) => console.log(JSON.stringify(await runRealSourceReadOnlySmoke(), null, 2)))\"",
+    "marketplace:real-smoke": "tsx -e \"import('./packages/web-evals/src/opportunity.js').then(async ({runAgentWorkReadOnlySmoke}) => console.log(JSON.stringify(await runAgentWorkReadOnlySmoke(), null, 2)))\"",
+    "approvals:smoke": "tsx -e \"import('./packages/web-evals/src/opportunity.js').then(async ({runApprovalE2E}) => console.log(JSON.stringify(await runApprovalE2E(), null, 2)))\"",
     "start": "tsx apps/cli/src/index.ts",
     "beyonder": "tsx apps/cli/src/index.ts",
     "providers:autopilot": "tsx apps/cli/src/index.ts providers autopilot",

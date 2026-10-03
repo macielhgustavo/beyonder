@@ -53,8 +53,9 @@ export class OpportunityEvaluator {
     const requirements = opportunity.requirements;
     const missingCapabilities = requirements.requiredCapabilities.filter((capability) => !this.hasCapability(capability));
     const expired = opportunity.deadline ? new Date(opportunity.deadline).getTime() < now.getTime() : false;
-    const approvalRequired = requirements.requiresApplication || requirements.requiresExternalMessage || requirements.requiresAccount ||
-      requirements.requiresIdentityVerification || requirements.requiresPayment || requirements.requiresSubmission || requirements.requiredCapitalUsd > 0;
+    const approvalRequired = requirements.requiresApplication || requirements.requiresProposal || requirements.requiresExternalMessage || requirements.requiresAccount ||
+      requirements.requiresAuthentication || requirements.requiresIdentity || requirements.requiresIdentityVerification || requirements.requiresPayment ||
+      requirements.requiresWallet || requirements.requiresOnchainAction || requirements.requiresSubmission || requirements.requiredCapitalUsd > 0;
     const memorySignals = this.options.memory ? (await this.options.memory.retrieve({ query: `${opportunity.type} ${opportunity.title}`, taskType: opportunity.type, limit: 3 })).length : 0;
 
     if (expired) {
@@ -190,9 +191,9 @@ function durationEstimate(opportunity: Opportunity, fallback = 10): number {
 function riskEstimate(opportunity: Opportunity): number {
   const r = opportunity.requirements;
   let risk = 0.1;
-  if (r.requiresApplication || r.requiresExternalMessage || r.requiresSubmission) risk += 0.3;
-  if (r.requiresAccount || r.requiresIdentityVerification) risk += 0.4;
-  if (r.requiresPayment || r.requiredCapitalUsd > 0) risk += 0.5;
+  if (r.requiresApplication || r.requiresProposal || r.requiresExternalMessage || r.requiresSubmission) risk += 0.3;
+  if (r.requiresAccount || r.requiresAuthentication || r.requiresIdentity || r.requiresIdentityVerification) risk += 0.4;
+  if (r.requiresPayment || r.requiresWallet || r.requiresOnchainAction || r.requiredCapitalUsd > 0) risk += 0.5;
   return Math.min(1, risk);
 }
 

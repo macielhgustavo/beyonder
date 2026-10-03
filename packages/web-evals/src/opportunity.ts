@@ -1,4 +1,4 @@
-import { openDatabase, MemoryEngine, MemoryStore, OpportunityEvaluator, OpportunityQueue, StateOpportunityStore, StateStore, DeterministicFixtureOpportunitySource, GitHubPublicOpportunitySource, normalizeOpportunity, AutonomousTaskExecutor, type Plan } from "@beyonder/runtime";
+import { openDatabase, MemoryEngine, MemoryStore, OpportunityEvaluator, OpportunityQueue, StateOpportunityStore, StateStore, DeterministicFixtureOpportunitySource, GitHubPublicOpportunitySource, AgentWorkPublicOpportunitySource, normalizeOpportunity, AutonomousTaskExecutor, ApprovalGate, OpportunityBridge, FixtureApplicationAdapter, FixtureSubmissionAdapter, ApprovalDeniedError, type Plan } from "@beyonder/runtime";
 import { BrowserAgent, createBrowserToolDefinitions } from "@beyonder/browser-agent";
 import { DefaultToolPolicy, ToolExecutor, ToolRegistry, ToolRisk, ToolSideEffect, type ToolCall, type ToolDefinition } from "@beyonder/tools";
 import type { IntelligenceTask } from "@beyonder/runtime";
@@ -45,6 +45,10 @@ export async function runOpportunityEvalSuite(): Promise<OpportunitySmokeResult>
   const simulated = await runSimulatedRevenueE2E();
   const real = await runRealSourceReadOnlySmoke();
   results.push({ caseId: "real-source-read-only", status: real.errors.length === 0 ? "PASS" : "FAIL", notes: `${real.discovered} explicit-reward items` });
+  const agentWork = await runAgentWorkReadOnlySmoke();
+  results.push({ caseId: "agentwork-read-only", status: "PASS", notes: `${agentWork.discovered} items; ${agentWork.errors.length ? agentWork.errors.join(" | ") : "catalog available"}` });
+  const approval = await runApprovalE2E();
+  results.push(approval.result);
   sqlite.close();
   return {
     discovered: normalized.length,
@@ -68,6 +72,30 @@ export async function runRealSourceReadOnlySmoke(): Promise<{ discovered: number
   const source = new GitHubPublicOpportunitySource({ repository: "microsoft/vscode" });
   const result = await source.discover({ limit: 20 });
   return { discovered: result.items.length, errors: result.errors };
+}
+
+export async function runAgentWorkReadOnlySmoke(): Promise<{ discovered: number; errors: string[] }> {
+  const result = await new AgentWorkPublicOpportunitySource().discover({ limit: 20 });
+  return { discovered: result.items.length, errors: result.errors };
+}
+
+export async function runApprovalE2E() {
+  const { db, sqlite } = openDatabase(":memory:");
+  const gate = new ApprovalGate(new StateStore(db));
+  const bridge = new OpportunityBridge(gate, new FixtureApplicationAdapter(), new FixtureSubmissionAdapter());
+  const opportunity = normalizeOpportunity({ source: "fixture-marketplace", sourceItemId: "coding-5", title: "Five dollar coding opportunity", description: "Implement a small tested change.", type: "CODING", reward: { amount: 5, currency: "USD", type: "FIXED" }, requiredCapabilities: ["coding"], metadata: { requiresApplication: true, requiresSubmission: true } });
+  const prepared = await bridge.prepareApplication(opportunity, "task-approval");
+  let denied = false;
+  try { await bridge.apply(opportunity, prepared.application, prepared.approval.approvalId, "task-approval"); } catch (error) { denied = error instanceof ApprovalDeniedError; }
+  await gate.approve(prepared.approval.approvalId);
+  const application = await bridge.apply(opportunity, prepared.application, prepared.approval.approvalId, "task-approval");
+  const submissionApproval = await bridge.requestSubmission(opportunity, "task-approval", "verified deliverable");
+  let submissionDenied = false;
+  try { await bridge.submit(opportunity, "task-approval", "verified deliverable", submissionApproval.approvalId); } catch (error) { submissionDenied = error instanceof ApprovalDeniedError; }
+  await gate.approve(submissionApproval.approvalId);
+  const submission = await bridge.submit(opportunity, "task-approval", "verified deliverable", submissionApproval.approvalId);
+  sqlite.close();
+  return { result: { caseId: "approval-application-submission-e2e", status: (denied && submissionDenied && application.status === "APPLICATION_SENT" && submission.status === "COMPLETED" ? "PASS" : "FAIL") as "PASS" | "FAIL", notes: "external actions are denied, then allowed once after specific human approval; realizedRevenueUsd=0" } };
 }
 
 async function runSimulatedRevenueE2E() {

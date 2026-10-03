@@ -2,7 +2,16 @@ import Database from "better-sqlite3";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import type { DashboardDataSource } from "./source";
-import type { AuditEventView, AuditQuery, EconomyPoint, MemoryKind, MemoryQuery, MemoryView, PageQuery } from "./types";
+import type {
+  AuditEventView,
+  AuditQuery,
+  EconomyPoint,
+  MemoryKind,
+  MemoryQuery,
+  MemoryView,
+  ModelDecisionView,
+  PageQuery
+} from "./types";
 import { redactText, safeJsonObject } from "./redact";
 
 interface LedgerRow {
@@ -34,6 +43,12 @@ interface AuditRow {
   created_at: string;
 }
 
+interface RouterDecisionSnapshot {
+  decisions: ModelDecisionView[];
+  effectiveResourceCost: number | null;
+  modelUsage: Array<{ label: string; value: number }>;
+}
+
 export class LocalDashboardDataSource implements DashboardDataSource {
   readonly provenance = "local" as const;
   private readonly dbPath: string;
@@ -49,12 +64,18 @@ export class LocalDashboardDataSource implements DashboardDataSource {
     try {
       const memoryCount = tableExists(db, "memories")
         ? (db.prepare("SELECT COUNT(*) AS count FROM memories").get() as { count: number }).count
-        : 0;
+        : null;
       const recentErrors = tableExists(db, "audit_events")
         ? await this.getAuditEvents({ level: "error", limit: 5 })
         : [];
+      const router = tableExists(db, "audit_events")
+        ? readRouterDecisionSnapshot(db)
+        : emptyRouterDecisionSnapshot();
+
       return {
-        runtimeStatus: "online" as const,
+        // A readable database is not a runtime heartbeat. Stay UNKNOWN until a
+        // stable health/heartbeat contract exists instead of inferring ONLINE.
+        runtimeStatus: "unknown" as const,
         economicState: economy.economicState,
         capitalUsd: economy.capitalUsd,
         balanceUsd: economy.balanceUsd,
@@ -63,13 +84,13 @@ export class LocalDashboardDataSource implements DashboardDataSource {
         currentTask: null,
         requestsToday: null,
         monetaryCostUsd: economy.monetarySpendUsd,
-        effectiveResourceCost: null,
+        effectiveResourceCost: router.effectiveResourceCost,
         memoryCount,
         successRate: null,
         freeResources: null,
-        recentDecisions: [],
+        recentDecisions: router.decisions,
         recentErrors,
-        modelUsage: [],
+        modelUsage: router.modelUsage,
         provenance: this.provenance
       };
     } finally {
@@ -226,6 +247,141 @@ function tableExists(db: Database.Database, table: string) {
   return Boolean(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get(table));
 }
 
+function readRouterDecisionSnapshot(db: Database.Database): RouterDecisionSnapshot {
+  const selectedRows = db.prepare(
+    "SELECT id, level, event, details, created_at FROM audit_events WHERE event = 'router.selected' ORDER BY created_at DESC LIMIT 500"
+  ).all() as AuditRow[];
+
+  if (selectedRows.length === 0) return emptyRouterDecisionSnapshot();
+
+  // Candidate and shadow-cost telemetry is bounded. It is only needed to
+  // reconstruct explanations for the handful of most recent selections.
+  const candidateRows = db.prepare(
+    "SELECT id, level, event, details, created_at FROM audit_events WHERE event = 'router.candidate_scored' ORDER BY created_at DESC LIMIT 250"
+  ).all() as AuditRow[];
+  const shadowRows = db.prepare(
+    "SELECT id, level, event, details, created_at FROM audit_events WHERE event = 'shadow_cost.calculated' ORDER BY created_at DESC LIMIT 250"
+  ).all() as AuditRow[];
+
+  const parsedCandidates = candidateRows.map((row) => ({ row, details: safeJsonObject(row.details) }));
+  const parsedShadows = shadowRows.map((row) => ({ row, details: safeJsonObject(row.details) }));
+  const parsedSelected = selectedRows.map((row) => ({ row, details: safeJsonObject(row.details) }));
+
+  const decisions = parsedSelected.slice(0, 5).flatMap(({ row, details }) => {
+    const provider = textField(details, "provider");
+    const model = textField(details, "model");
+    if (!provider || !model) return [];
+
+    const taskId = textField(details, "taskId");
+    const matchingCandidates = taskId
+      ? parsedCandidates.filter((candidate) => textField(candidate.details, "taskId") === taskId)
+      : [];
+    const matchingShadow = taskId
+      ? parsedShadows.find((shadow) =>
+          textField(shadow.details, "taskId") === taskId &&
+          textField(shadow.details, "provider") === provider &&
+          textField(shadow.details, "model") === model
+        )
+      : undefined;
+
+    const reasons = [
+      factor("predicted capability", numberField(details, "predictedQuality")),
+      factor("historical success", numberField(details, "historicalSuccess")),
+      factor("reliability", numberField(details, "reliability")),
+      moneyFactor("monetary cost", numberField(details, "monetaryCostUsd"))
+    ].filter(isFactor);
+
+    const penalties = [
+      factor("quota scarcity", matchingShadow ? numberField(matchingShadow.details, "scarcity") : null),
+      factor("shadow cost", numberField(details, "shadowCostUsd")),
+      factor("latency", numberField(details, "latencyPenalty")),
+      factor("failure risk", numberField(details, "failureRisk"))
+    ].filter(isFactor);
+
+    const alternatives = uniqueAlternatives(matchingCandidates, provider, model).slice(0, 5);
+
+    return [{
+      id: row.id,
+      selectedLabel: `${model} / ${provider}`,
+      utility: numberField(details, "utility"),
+      reasons,
+      penalties,
+      alternatives,
+      decidedAt: row.created_at,
+      taskId: taskId ?? undefined,
+      provenance: "local" as const
+    }];
+  });
+
+  const usageCounts = new Map<string, number>();
+  for (const { details } of parsedSelected) {
+    const provider = textField(details, "provider");
+    const model = textField(details, "model");
+    if (!provider || !model) continue;
+    const label = `${model} / ${provider}`;
+    usageCounts.set(label, (usageCounts.get(label) ?? 0) + 1);
+  }
+  const usageTotal = [...usageCounts.values()].reduce((sum, count) => sum + count, 0);
+  const modelUsage = [...usageCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([label, count]) => ({ label, value: usageTotal ? Math.round((count / usageTotal) * 100) : 0 }));
+
+  return {
+    decisions,
+    effectiveResourceCost: numberField(parsedSelected[0].details, "effectiveResourceCost"),
+    modelUsage
+  };
+}
+
+function uniqueAlternatives(
+  candidates: Array<{ row: AuditRow; details: Record<string, unknown> }>,
+  selectedProvider: string,
+  selectedModel: string
+): ModelDecisionView["alternatives"] {
+  const byLabel = new Map<string, number | null>();
+  for (const candidate of candidates) {
+    const provider = textField(candidate.details, "provider");
+    const model = textField(candidate.details, "model");
+    if (!provider || !model || (provider === selectedProvider && model === selectedModel)) continue;
+    const label = `${model} / ${provider}`;
+    const utility = numberField(candidate.details, "utility");
+    const previous = byLabel.get(label);
+    if (previous === undefined || (utility != null && (previous == null || utility > previous))) {
+      byLabel.set(label, utility);
+    }
+  }
+  return [...byLabel.entries()]
+    .map(([label, utility]) => ({ label, utility }))
+    .sort((a, b) => (b.utility ?? -Infinity) - (a.utility ?? -Infinity));
+}
+
+function textField(value: Record<string, unknown>, key: string): string | null {
+  const field = value[key];
+  return typeof field === "string" && field.trim() ? redactText(field) : null;
+}
+
+function numberField(value: Record<string, unknown>, key: string): number | null {
+  const field = value[key];
+  return typeof field === "number" && Number.isFinite(field) ? field : null;
+}
+
+function factor(label: string, value: number | null) {
+  return value == null ? null : { label, value };
+}
+
+function moneyFactor(label: string, value: number | null) {
+  return value == null ? null : { label, value: `$${value.toFixed(4).replace(/\.?0+$/, "") || "0"}` };
+}
+
+function isFactor(value: { label: string; value: number | string } | null): value is { label: string; value: number | string } {
+  return value !== null;
+}
+
+function emptyRouterDecisionSnapshot(): RouterDecisionSnapshot {
+  return { decisions: [], effectiveResourceCost: null, modelUsage: [] };
+}
+
 function normalizeMemoryKind(kind: string): MemoryKind | null {
   if (["working", "episodic", "semantic", "procedural", "economic"].includes(kind)) return kind as MemoryKind;
   if (kind === "decision") return "episodic";
@@ -247,7 +403,7 @@ function parseKeywords(raw: string): string[] {
 
 function emptyOverview() {
   return {
-    runtimeStatus: "offline" as const,
+    runtimeStatus: "unknown" as const,
     economicState: "unknown" as const,
     capitalUsd: null,
     balanceUsd: null,

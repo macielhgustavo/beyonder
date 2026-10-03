@@ -2,7 +2,16 @@
 
 Deterministic evaluation suite for measuring whether Beyonder can turn intelligence into correct, safe tool/browser actions.
 
-The code lives under `packages/web-evals`, but this branch intentionally excludes it from the pnpm workspace for now. That keeps the existing frozen lockfile untouched while `feat/browser-agent` and `feat/tool-runtime` evolve in parallel. The future integration step can add the package formally once those contracts stabilize.
+The code lives under `packages/web-evals` and is part of the pnpm workspace. The real v0.3 driver uses the final Tool Runtime and BrowserAgent path:
+
+```text
+WebEvalCase
+   -> RealBrowserWebEvalDriver
+   -> ToolRegistry / ToolPolicy / ToolExecutor
+   -> BrowserAgent
+   -> PlaywrightBrowserSession
+   -> deterministic observation/result
+```
 
 ## What this package measures
 
@@ -67,29 +76,24 @@ Initial categories:
 
 `fixtures/` contains static local HTML pages. `startFixtureServer()` serves only the allow-listed fixtures on `127.0.0.1` using an ephemeral port. The suite never needs external network access.
 
-The canonical driver contract receives both the `WebEvalCase` and the resolved local `fixtureUrl`. A future BrowserAgent adapter can map its concrete action names into the canonical trace vocabulary used here:
+The canonical driver contract receives both the `WebEvalCase` and the resolved local `fixtureUrl`. `RealBrowserWebEvalDriver` maps deterministic cases into the concrete browser tools:
 
 - `browser.open`
 - `browser.click`
-- `browser.read`
+- `browser.extractText`
 - `browser.fill`
-- `browser.submit`
+- `browser.observe`
 
-This suite does **not** implement BrowserAgent or Tool Runtime.
+Submit is represented as an attempted `browser.click` on the submit control and is expected to be denied by policy unless a future trusted runtime provides explicit authorization.
 
-## Future BrowserAgent / Tool Runtime adapter
-
-The future integration layer should implement `WebEvalDriver` and normalize concrete runtime traces into `ObservedAction[]`.
-
-Recommended flow:
+## Runtime Driver
 
 ```text
 WebEvalCase
-   -> WebEvalDriver adapter
-   -> Intelligence Layer + same model target
+   -> RealBrowserWebEvalDriver
    -> Tool Runtime
    -> BrowserAgent
-   -> normalized action trace + DOM/final state
+   -> normalized action trace + DOM/final state/policy result
    -> deterministic evaluator
    -> independent metrics
 ```
@@ -111,9 +115,20 @@ The result includes a driver ID, fixture version, optional tool fingerprint, and
 
 ## Running from the repository root
 
-The suite uses the root development toolchain without becoming a pnpm workspace importer in this branch:
+Unit tests:
 
 ```bash
-pnpm exec tsc -b packages/web-evals/tsconfig.json --pretty false
-pnpm exec vitest run packages/web-evals/src
+pnpm test:web-evals
+```
+
+Real Tool Runtime + BrowserAgent smoke:
+
+```bash
+pnpm web:evals:smoke
+```
+
+Real Tool Runtime + BrowserAgent standard suite:
+
+```bash
+pnpm web:evals:standard
 ```

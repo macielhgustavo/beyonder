@@ -10,6 +10,10 @@
     "typecheck": "tsc -b --pretty false",
     "test": "vitest run src/**/*.test.ts"
   },
+  "dependencies": {
+    "@beyonder/browser-agent": "workspace:*",
+    "@beyonder/tools": "workspace:*"
+  },
   "devDependencies": {
     "@types/node": "^22.13.5",
     "typescript": "^5.7.3",

@@ -1,7 +1,6 @@
 packages:
   - "apps/*"
   - "packages/*"
-  - "!packages/web-evals"
 allowBuilds:
   better-sqlite3: true
   esbuild: true

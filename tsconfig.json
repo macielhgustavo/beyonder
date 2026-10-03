@@ -9,6 +9,7 @@
     { "path": "packages/tools" },
     { "path": "packages/audit" },
     { "path": "packages/browser-agent" },
+    { "path": "packages/web-evals" },
     { "path": "packages/runtime" },
     { "path": "packages/benchmark" },
     { "path": "apps/cli" }

@@ -11,19 +11,46 @@ describe("benchmark text reporters", () => {
     expect(formatBenchmarkReport(summaries)).toContain("coding");
     expect(formatRanking("coding", summaries)).toContain("1. a / groq");
   });
+
+  it("prints not evaluated models separately", () => {
+    const output = formatRanking("coding", [notEvaluated("ovh-model")]);
+    expect(output).toContain("NOT EVALUATED");
+    expect(output).toContain("RATE_LIMITED (HTTP 429)");
+    expect(output).not.toContain("quality: 0.00");
+  });
 });
 
-function summary(model: string, avgQuality: number): BenchmarkSummary {
+function summary(model: string, avgQuality: number | null): BenchmarkSummary {
   return {
     provider: "groq",
     model,
     category: "coding",
-    samples: 2,
+    evaluatedSamples: 2,
+    operationalFailures: 0,
     successes: 2,
     avgQuality,
     avgLatency: 100,
     avgCost: 0,
     medianLatency: 100,
+    lastTestedAt: new Date()
+  };
+}
+
+function notEvaluated(model: string): BenchmarkSummary {
+  return {
+    provider: "ovh",
+    model,
+    category: "coding",
+    evaluatedSamples: 0,
+    operationalFailures: 1,
+    successes: 0,
+    avgQuality: null,
+    avgLatency: null,
+    avgCost: 0,
+    medianLatency: null,
+    latestOperationalStatus: "RATE_LIMITED",
+    latestHttpStatus: 429,
+    latestFailureReason: "HTTP 429",
     lastTestedAt: new Date()
   };
 }

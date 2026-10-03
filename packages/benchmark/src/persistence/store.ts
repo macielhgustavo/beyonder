@@ -19,28 +19,32 @@ export class BenchmarkStore {
         provider TEXT NOT NULL,
         model TEXT NOT NULL,
         category TEXT NOT NULL,
-        quality REAL NOT NULL,
-        success INTEGER NOT NULL,
-        latency_ms INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'FAIL',
+        quality REAL,
+        success INTEGER,
+        latency_ms INTEGER,
         monetary_cost REAL NOT NULL DEFAULT 0,
         tokens INTEGER,
         attempts INTEGER NOT NULL DEFAULT 1,
-        error TEXT,
+        http_status INTEGER,
+        error_code TEXT,
+        failure_reason TEXT,
         timestamp TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS benchmark_results_lookup
         ON benchmark_results(provider, model, category, timestamp);
     `);
+    this.migrateLegacySchema();
   }
 
   saveResults(results: BenchmarkResult[]): void {
     const insert = this.sqlite.prepare(`
       INSERT INTO benchmark_results (
-        id, case_id, provider, model, category, quality, success, latency_ms,
-        monetary_cost, tokens, attempts, error, timestamp
+        id, case_id, provider, model, category, status, quality, success, latency_ms,
+        monetary_cost, tokens, attempts, http_status, error_code, failure_reason, timestamp
       ) VALUES (
-        @id, @caseId, @provider, @model, @category, @quality, @success,
-        @latencyMs, @monetaryCost, @tokens, @attempts, @error, @timestamp
+        @id, @caseId, @provider, @model, @category, @status, @quality, @success,
+        @latencyMs, @monetaryCost, @tokens, @attempts, @httpStatus, @errorCode, @failureReason, @timestamp
       )
     `);
     const transaction = this.sqlite.transaction((items: BenchmarkResult[]) => {
@@ -48,10 +52,14 @@ export class BenchmarkStore {
         insert.run({
           ...item,
           id: item.id ?? nanoid(),
-          success: item.success ? 1 : 0,
+          quality: item.quality,
+          success: item.success == null ? null : item.success ? 1 : 0,
+          latencyMs: item.latencyMs ?? null,
           timestamp: item.timestamp.toISOString(),
           tokens: item.tokens ?? null,
-          error: item.error ?? null
+          httpStatus: item.httpStatus ?? null,
+          errorCode: item.errorCode ?? null,
+          failureReason: item.failureReason ?? null
         });
       }
     });
@@ -68,13 +76,66 @@ export class BenchmarkStore {
   }
 
   getModelCapability(input: { provider: string; model: string; category: BenchmarkCategory }): BenchmarkSummary | null {
-    return this.summaries().find(
+    const summary = this.summaries().find(
       (summary) => summary.provider === input.provider && summary.model === input.model && summary.category === input.category
-    ) ?? null;
+    );
+    if (!summary || summary.evaluatedSamples === 0) return null;
+    return summary;
   }
 
   close(): void {
     this.sqlite.close();
+  }
+
+  private migrateLegacySchema(): void {
+    const columns = this.sqlite.prepare("PRAGMA table_info(benchmark_results)").all() as Array<{ name: string; notnull: 0 | 1 }>;
+    const byName = new Map(columns.map((column) => [column.name, column]));
+    if (byName.get("quality")?.notnull || byName.get("success")?.notnull || byName.get("latency_ms")?.notnull) {
+      this.sqlite.exec(`
+        ALTER TABLE benchmark_results RENAME TO benchmark_results_legacy;
+        CREATE TABLE benchmark_results (
+          id TEXT PRIMARY KEY,
+          case_id TEXT NOT NULL,
+          provider TEXT NOT NULL,
+          model TEXT NOT NULL,
+          category TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'FAIL',
+          quality REAL,
+          success INTEGER,
+          latency_ms INTEGER,
+          monetary_cost REAL NOT NULL DEFAULT 0,
+          tokens INTEGER,
+          attempts INTEGER NOT NULL DEFAULT 1,
+          http_status INTEGER,
+          error_code TEXT,
+          failure_reason TEXT,
+          timestamp TEXT NOT NULL
+        );
+        INSERT INTO benchmark_results (
+          id, case_id, provider, model, category, status, quality, success, latency_ms,
+          monetary_cost, tokens, attempts, failure_reason, timestamp
+        )
+        SELECT
+          id, case_id, provider, model, category,
+          CASE WHEN success = 1 THEN 'PASS' ELSE 'FAIL' END,
+          quality, success, latency_ms, monetary_cost, tokens, attempts, error, timestamp
+        FROM benchmark_results_legacy;
+        DROP TABLE benchmark_results_legacy;
+        CREATE INDEX IF NOT EXISTS benchmark_results_lookup
+          ON benchmark_results(provider, model, category, timestamp);
+      `);
+      return;
+    }
+    this.ensureColumn("status", "TEXT NOT NULL DEFAULT 'FAIL'");
+    this.ensureColumn("http_status", "INTEGER");
+    this.ensureColumn("error_code", "TEXT");
+    this.ensureColumn("failure_reason", "TEXT");
+  }
+
+  private ensureColumn(column: string, definition: string): void {
+    const columns = this.sqlite.prepare("PRAGMA table_info(benchmark_results)").all() as Array<{ name: string }>;
+    if (columns.some((entry) => entry.name === column)) return;
+    this.sqlite.exec(`ALTER TABLE benchmark_results ADD COLUMN ${column} ${definition}`);
   }
 }
 
@@ -84,13 +145,16 @@ interface StoredBenchmarkResult {
   provider: string;
   model: string;
   category: BenchmarkCategory;
-  quality: number;
-  success: 0 | 1;
-  latency_ms: number;
+  status: BenchmarkResult["status"];
+  quality: number | null;
+  success: 0 | 1 | null;
+  latency_ms: number | null;
   monetary_cost: number;
   tokens: number | null;
   attempts: number;
-  error: string | null;
+  http_status: number | null;
+  error_code: string | null;
+  failure_reason: string | null;
   timestamp: string;
 }
 
@@ -101,13 +165,16 @@ function fromRow(row: StoredBenchmarkResult): BenchmarkResult {
     provider: row.provider,
     model: row.model,
     category: row.category,
+    status: row.status,
     quality: row.quality,
-    success: Boolean(row.success),
-    latencyMs: row.latency_ms,
+    success: row.success == null ? null : Boolean(row.success),
+    latencyMs: row.latency_ms ?? undefined,
     monetaryCost: row.monetary_cost,
     tokens: row.tokens ?? undefined,
     attempts: row.attempts,
-    error: row.error ?? undefined,
+    httpStatus: row.http_status ?? undefined,
+    errorCode: row.error_code ?? undefined,
+    failureReason: row.failure_reason ?? undefined,
     timestamp: new Date(row.timestamp)
   };
 }

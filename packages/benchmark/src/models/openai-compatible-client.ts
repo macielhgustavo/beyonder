@@ -4,7 +4,9 @@ const REQUEST_TIMEOUT_MS = 20_000;
 
 export class OpenAiCompatibleBenchmarkClient implements BenchmarkModelClient {
   async complete(target: ModelTarget, messages: BenchmarkModelMessage[]): Promise<BenchmarkModelResponse> {
-    if (!target.baseUrl) throw new Error(`Provider ${target.provider} has no OpenAI-compatible endpoint.`);
+    if (!target.baseUrl) throw new BenchmarkRequestError(`Provider ${target.provider} has no OpenAI-compatible endpoint.`, {
+      errorCode: "MISSING_ENDPOINT"
+    });
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
     try {
@@ -19,7 +21,12 @@ export class OpenAiCompatibleBenchmarkClient implements BenchmarkModelClient {
           max_tokens: 256
         })
       });
-      if (!response.ok) throw new Error(`HTTP ${response.status} ${await response.text()}`);
+      if (!response.ok) {
+        throw new BenchmarkRequestError(`HTTP ${response.status} ${await response.text()}`, {
+          httpStatus: response.status,
+          errorCode: response.statusText || `HTTP_${response.status}`
+        });
+      }
       const json = (await response.json()) as {
         choices?: Array<{ message?: { content?: string } }>;
         usage?: { total_tokens?: number; totalTokens?: number };
@@ -32,9 +39,27 @@ export class OpenAiCompatibleBenchmarkClient implements BenchmarkModelClient {
         tokens: json.usage?.total_tokens ?? json.usage?.totalTokens,
         raw: json
       };
+    } catch (error) {
+      if (error instanceof BenchmarkRequestError) throw error;
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new BenchmarkRequestError("Request timed out.", { errorCode: "TIMEOUT" });
+      }
+      throw error;
     } finally {
       clearTimeout(timer);
     }
+  }
+}
+
+export class BenchmarkRequestError extends Error {
+  readonly httpStatus?: number;
+  readonly errorCode?: string;
+
+  constructor(message: string, details: { httpStatus?: number; errorCode?: string } = {}) {
+    super(message);
+    this.name = "BenchmarkRequestError";
+    this.httpStatus = details.httpStatus;
+    this.errorCode = details.errorCode;
   }
 }
 

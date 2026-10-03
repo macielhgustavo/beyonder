@@ -5,11 +5,12 @@ export { selectFreeModelTargets } from "./models/targets.js";
 export { BenchmarkStore } from "./persistence/store.js";
 export { formatBenchmarkReport, formatRanking } from "./reporters/text.js";
 export { runBenchmark } from "./runner/index.js";
-export { rankSummaries, summarizeResults } from "./scoring/index.js";
+export { notEvaluatedSummaries, rankSummaries, summarizeProviderOperations, summarizeResults } from "./scoring/index.js";
 export type {
   BenchmarkCase,
   BenchmarkCategory,
   BenchmarkEvaluator,
+  BenchmarkExecutionStatus,
   BenchmarkMode,
   BenchmarkModelClient,
   BenchmarkModelMessage,
@@ -18,5 +19,6 @@ export type {
   BenchmarkSummary,
   EvaluationResult,
   ModelTarget,
+  ProviderOperationalStats,
   TelemetrySink
 } from "./types.js";

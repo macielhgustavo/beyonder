@@ -12,6 +12,16 @@ export type BenchmarkEvaluator = "exact" | "json-schema" | "contains" | "code-te
 
 export type BenchmarkMode = "smoke" | "standard";
 
+export type BenchmarkExecutionStatus =
+  | "PASS"
+  | "FAIL"
+  | "RATE_LIMITED"
+  | "PROVIDER_ERROR"
+  | "INVALID_ENDPOINT"
+  | "TIMEOUT"
+  | "UNAVAILABLE"
+  | "SKIPPED";
+
 export interface BenchmarkCase {
   id: string;
   category: BenchmarkCategory;
@@ -34,13 +44,16 @@ export interface BenchmarkResult {
   provider: string;
   model: string;
   category: BenchmarkCategory;
-  quality: number;
-  success: boolean;
-  latencyMs: number;
+  status: BenchmarkExecutionStatus;
+  quality: number | null;
+  success: boolean | null;
+  latencyMs?: number;
   monetaryCost: number;
   tokens?: number;
   attempts: number;
-  error?: string;
+  httpStatus?: number;
+  errorCode?: string;
+  failureReason?: string;
   timestamp: Date;
 }
 
@@ -72,13 +85,31 @@ export interface BenchmarkSummary {
   provider: string;
   model: string;
   category: BenchmarkCategory;
-  samples: number;
+  evaluatedSamples: number;
+  operationalFailures: number;
   successes: number;
-  avgQuality: number;
-  avgLatency: number;
+  avgQuality: number | null;
+  avgLatency: number | null;
   avgCost: number;
-  medianLatency: number;
+  medianLatency: number | null;
+  latestOperationalStatus?: BenchmarkExecutionStatus;
+  latestFailureReason?: string;
+  latestHttpStatus?: number;
   lastTestedAt: Date;
+}
+
+export interface ProviderOperationalStats {
+  provider: string;
+  model: string;
+  requests: number;
+  successfulRequests: number;
+  rateLimited: number;
+  timeouts: number;
+  providerErrors: number;
+  invalidEndpoint: number;
+  unavailable: number;
+  skipped: number;
+  availabilityRate: number;
 }
 
 export interface BenchmarkModelClient {

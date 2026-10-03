@@ -139,7 +139,24 @@ const baseProviders: ProviderCatalogEntry[] = [
     credentialEnvVars: ["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"],
     humanRequirements: ["Cloudflare account", "account id", "token permission review", "possible CAPTCHA or 2FA"],
     openAiCompatibleEndpoint: "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1",
-    knownFreeModels: ["@cf/meta/llama-3.3-70b-instruct-fp8-fast", "@cf/mistral/mistral-7b-instruct-v0.1"],
+    knownFreeModels: [
+      "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+      "@cf/meta/llama-3.1-8b-instruct",
+      "@cf/mistral/mistral-7b-instruct-v0.1",
+      "@cf/baai/bge-base-en-v1.5",
+      "@cf/baai/bge-reranker-base",
+      "@cf/openai/whisper",
+      "@cf/stabilityai/stable-diffusion-xl-base-1.0"
+    ],
+    modelCatalog: [
+      { id: "@cf/meta/llama-3.3-70b-instruct-fp8-fast", capabilities: ["CHAT", "REASONING"], status: "AVAILABLE" },
+      { id: "@cf/meta/llama-3.1-8b-instruct", capabilities: ["CHAT", "REASONING"], status: "AVAILABLE" },
+      { id: "@cf/mistral/mistral-7b-instruct-v0.1", capabilities: ["CHAT"], status: "AVAILABLE" },
+      { id: "@cf/baai/bge-base-en-v1.5", capabilities: ["EMBEDDING"], status: "AVAILABLE" },
+      { id: "@cf/baai/bge-reranker-base", capabilities: ["RERANK"], status: "AVAILABLE" },
+      { id: "@cf/openai/whisper", capabilities: ["AUDIO"], status: "AVAILABLE" },
+      { id: "@cf/stabilityai/stable-diffusion-xl-base-1.0", capabilities: ["VISION"], status: "AVAILABLE" }
+    ],
     freeTier: "daily free allocation commonly described as neurons/day; verify-current",
     notes: ["Needs both account id and token; endpoint is account-specific."],
     automationStatus: "manual-only",
@@ -200,10 +217,26 @@ const baseProviders: ProviderCatalogEntry[] = [
     dashboardUrl: "https://build.nvidia.com",
     apiKeyUrl: "https://build.nvidia.com/explore/discover",
     authType: "bearer",
-    credentialEnvVars: ["NVIDIA_API_KEY", "NVIDIA_NIM_API_KEY"],
+    credentialEnvVars: ["NVIDIA_NIM_API_KEY", "NVIDIA_API_KEY"],
     humanRequirements: ["NVIDIA account", "phone verification reported", "possible CAPTCHA or 2FA"],
     openAiCompatibleEndpoint: "https://integrate.api.nvidia.com/v1",
-    knownFreeModels: ["meta/llama-3.3-70b-instruct", "nvidia/llama-3.1-nemotron-ultra-253b-v1"],
+    knownFreeModels: [
+      "deepseek-ai/deepseek-v4.1-flash",
+      "nvidia/llama-3.1-nemotron-ultra-253b-v1",
+      "nvidia/llama-3.1-nemotron-70b-instruct",
+      "qwen/qwen2.5-coder-32b-instruct",
+      "nvidia/nv-embedqa-e5-v5",
+      "nvidia/nv-rerankqa-mistral-4b-v3"
+    ],
+    modelCatalog: [
+      { id: "meta/llama-3.3-70b-instruct", capabilities: ["CHAT", "REASONING"], status: "MODEL_UNAVAILABLE", notes: ["NVIDIA API returned end-of-life for this model in October 2026."] },
+      { id: "deepseek-ai/deepseek-v4.1-flash", capabilities: ["CHAT", "REASONING", "CODING"], status: "AVAILABLE" },
+      { id: "nvidia/llama-3.1-nemotron-ultra-253b-v1", capabilities: ["CHAT", "REASONING"], status: "AVAILABLE" },
+      { id: "nvidia/llama-3.1-nemotron-70b-instruct", capabilities: ["CHAT", "REASONING"], status: "AVAILABLE" },
+      { id: "qwen/qwen2.5-coder-32b-instruct", capabilities: ["CHAT", "CODING"], status: "AVAILABLE" },
+      { id: "nvidia/nv-embedqa-e5-v5", capabilities: ["EMBEDDING"], status: "AVAILABLE" },
+      { id: "nvidia/nv-rerankqa-mistral-4b-v3", capabilities: ["RERANK"], status: "AVAILABLE" }
+    ],
     freeTier: "free credits/tier reported; requires current verification",
     notes: ["Phone verification means no reliable full automation."],
     automationStatus: "manual-only",
@@ -315,6 +348,7 @@ const baseProviders: ProviderCatalogEntry[] = [
     humanRequirements: ["optional account for priority"],
     openAiCompatibleEndpoint: "https://aihorde.net/api/openai/v1",
     knownFreeModels: ["anonymous-worker-pool"],
+    modelCatalog: [{ id: "anonymous-worker-pool", capabilities: ["CHAT"], status: "AVAILABLE" }],
     freeTier: "community-powered keyless queue; registered key improves priority",
     notes: ["Queue-based and slower; no tool calling; max_tokens constraints apply."],
     automationStatus: "automatable",
@@ -482,7 +516,11 @@ const metadata: Record<string, Partial<ProviderCatalogEntry>> = {
   zai: classified("MANUAL_REQUIRED", ["SMS_OR_PHONE", "KYC", "CAPTCHA"], "email"),
   huggingface: classified("AUTO_WITH_HUMAN_GATE", ["CAPTCHA", "TWO_FACTOR", "TERMS_CONSENT"], "api-key-page"),
   sambanova: { classification: "RETIRED", billingRisk: true, onboarding: blocked(["PAYMENT_METHOD"], "api-key-page") },
-  "nvidia-nim": { ...classified("AUTO_WITH_HUMAN_GATE", ["SMS_OR_PHONE", "CAPTCHA", "TWO_FACTOR"], "api-key-page"), billingRisk: true },
+  "nvidia-nim": {
+    ...classified("AUTO_WITH_HUMAN_GATE", ["SMS_OR_PHONE", "CAPTCHA", "TWO_FACTOR"], "api-key-page"),
+    billingRisk: false,
+    freeTierLimits: { rpm: "unknown", tpm: "unknown", quota: "Use only the currently authorized NIM API access; no automatic paid fallback or credit purchase." }
+  },
   "kilo-gateway": {
     classification: "KEYLESS",
     privacyNote: "Free prompts/outputs may be logged for training according to FreeLLMAPI registry notes.",

@@ -62,6 +62,38 @@ export type ValidationStatus =
   | "validated"
   | "failed";
 
+export type ModelCapability =
+  | "CHAT"
+  | "REASONING"
+  | "CODING"
+  | "EMBEDDING"
+  | "RERANK"
+  | "VISION"
+  | "AUDIO"
+  | "OTHER";
+
+export type ModelOperationalStatus =
+  | "READY"
+  | "AVAILABLE"
+  | "RATE_LIMITED"
+  | "AUTH_ERROR"
+  | "QUOTA_EXHAUSTED"
+  | "BILLING_REQUIRED"
+  | "INVALID_ENDPOINT"
+  | "MODEL_UNAVAILABLE"
+  | "UNSUPPORTED"
+  | "HUMAN_GATE"
+  | "PAID_ONLY"
+  | "UNKNOWN";
+
+export interface ModelCatalogEntry {
+  id: string;
+  capabilities: ModelCapability[];
+  status?: ModelOperationalStatus;
+  billingRisk?: boolean;
+  notes?: string[];
+}
+
 export interface CredentialMetadata {
   providerId: string;
   envVar: string;
@@ -83,6 +115,7 @@ export interface ProviderCatalogEntry {
   humanRequirements: string[];
   openAiCompatibleEndpoint?: string;
   knownFreeModels: string[];
+  modelCatalog?: ModelCatalogEntry[];
   freeTier: string;
   notes: string[];
   automationStatus: AutomationStatus;
@@ -166,6 +199,8 @@ export interface ComputeInventoryEntry {
   auth: AuthType;
   cost: "$0" | "unknown" | "billing-risk";
   models: string[];
+  modelMetadata: ModelCatalogEntry[];
+  eligibleChatModels: string[];
   rpm?: number | "unknown";
   tpm?: number | "unknown";
   contextWindow?: number | "unknown";

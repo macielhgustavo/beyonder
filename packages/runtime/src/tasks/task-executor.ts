@@ -19,6 +19,8 @@ import {
   type TaskExecutionState,
   type TaskExecutorTelemetry
 } from "./contracts.js";
+import { DeterministicCompletionEvaluator, outcomeWithCompletion, type CompletionCriteria, type CompletionEvaluator } from "./completion.js";
+import { DefaultRecoveryPolicy, type RecoveryPolicy } from "./recovery.js";
 import { assertTaskStateTransition, isTerminalTaskState } from "./state-machine.js";
 
 export interface TaskExecutorOptions {
@@ -28,6 +30,8 @@ export interface TaskExecutorOptions {
   getAvailableTools?: (context?: Parameters<ToolExecutor["execute"]>[1]) => Promise<StepContext["availableTools"]>;
   telemetry?: TaskExecutorTelemetry;
   actionPlanner?: StepActionPlanner;
+  recoveryPolicy?: RecoveryPolicy;
+  completionEvaluator?: CompletionEvaluator;
   now?: () => number;
   id?: () => string;
 }
@@ -37,6 +41,7 @@ export interface ExecuteTaskRequest {
   plan: Plan;
   economicState: EconomicState;
   budget?: Partial<TaskBudget>;
+  completionCriteria?: CompletionCriteria;
   signal?: AbortSignal;
 }
 
@@ -55,10 +60,14 @@ const EMPTY_USAGE: TaskBudgetUsage = {
 export class AutonomousTaskExecutor {
   private readonly now: () => number;
   private readonly id: () => string;
+  private readonly recoveryPolicy: RecoveryPolicy;
+  private readonly completionEvaluator: CompletionEvaluator;
 
   constructor(private readonly options: TaskExecutorOptions) {
     this.now = options.now ?? Date.now;
     this.id = options.id ?? (() => nanoid());
+    this.recoveryPolicy = options.recoveryPolicy ?? new DefaultRecoveryPolicy();
+    this.completionEvaluator = options.completionEvaluator ?? new DeterministicCompletionEvaluator();
   }
 
   async execute(request: ExecuteTaskRequest): Promise<AutonomousTaskOutcome> {
@@ -96,7 +105,7 @@ export class AutonomousTaskExecutor {
       await this.runStep(execution, step, request);
     }
 
-    const outcome = toOutcome(execution);
+    const outcome = outcomeWithCompletion(toOutcome(execution), this.completionEvaluator.evaluate(execution, request.completionCriteria));
     await this.recordMemory(outcome);
     await this.options.modelRouter?.recordOutcome(toTaskOutcome(outcome));
     return outcome;
@@ -183,23 +192,45 @@ export class AutonomousTaskExecutor {
       await this.telemetry("info", "step.completed", { taskId: execution.task.id, planId: execution.plan.id, stepId: step.id });
     } else {
       stepExecution.error = result.error?.message ?? "tool execution failed";
-      const blocked = result.error?.code === "POLICY_DENIED";
-      const retryable = isRetryable(result.error?.code);
       execution.usage.consecutiveFailures += 1;
-      if (blocked) {
+      const recovery = this.recoveryPolicy.decide({
+        step,
+        failure: {
+          code: result.error?.code,
+          message: result.error?.message ?? "Tool execution failed."
+        },
+        attemptCount: stepExecution.attempt,
+        previousObservations: execution.steps.map((candidate) => candidate.observationSummary).filter((value): value is string => Boolean(value)),
+        remainingBudget: remainingBudget(execution)
+      });
+      await this.telemetry("info", "recovery.decision", {
+        taskId: execution.task.id,
+        planId: execution.plan.id,
+        stepId: step.id,
+        decision: recovery.type,
+        reason: recovery.reason
+      });
+
+      if (recovery.type === "BLOCK") {
         step.status = "BLOCKED";
         stepExecution.status = "BLOCKED";
         await this.transition(execution, "BLOCKED", { stepId: step.id, reason: result.error?.code });
-      } else if (retryable && execution.usage.retries < execution.budget.maxRetries) {
+      } else if (recovery.type === "RETRY" && execution.usage.retries < execution.budget.maxRetries) {
         execution.usage.retries += 1;
         step.status = "PENDING";
         stepExecution.status = "FAILED";
         await this.transition(execution, "RECOVERING", { stepId: step.id, reason: result.error?.code });
         await this.transition(execution, "RUNNING", { stepId: step.id, decision: "retry" });
+      } else if (recovery.type === "REPLAN" && execution.usage.replans < execution.budget.maxReplans) {
+        execution.usage.replans += 1;
+        step.status = "FAILED";
+        stepExecution.status = "FAILED";
+        await this.transition(execution, "REPLANNING", { stepId: step.id, reason: recovery.reason });
+        await this.transition(execution, "FAILED", { stepId: step.id, reason: "replan-required" });
       } else {
         step.status = "FAILED";
         stepExecution.status = "FAILED";
-        await this.transition(execution, "FAILED", { stepId: step.id, reason: result.error?.code ?? "step-failed" });
+        await this.transition(execution, "FAILED", { stepId: step.id, reason: recovery.reason });
       }
       await this.telemetry("warn", "step.failed", { taskId: execution.task.id, planId: execution.plan.id, stepId: step.id, error: result.error });
     }
@@ -337,10 +368,6 @@ function noProgressCount(execution: TaskExecution, observation: string | undefin
   const currentAction = JSON.stringify(execution.steps.at(-1)?.toolCall ?? {});
   const previousAction = JSON.stringify(execution.steps.at(-2)?.toolCall ?? {});
   return previous === observation && currentAction === previousAction ? execution.usage.noProgressSteps + 1 : 0;
-}
-
-function isRetryable(code: string | undefined): boolean {
-  return code === "TIMEOUT" || code === "UNAVAILABLE" || code === "EXECUTION_ERROR";
 }
 
 function numeric(value: unknown): number {

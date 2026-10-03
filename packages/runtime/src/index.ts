@@ -18,6 +18,9 @@ export {
 export { createRuntimeToolExecutor, createRuntimeToolRegistry, RuntimeToolAuditSink, safeObjectiveTool } from "./tools/runtime-tools.js";
 export { AutonomousTaskExecutor } from "./tasks/task-executor.js";
 export { assertTaskStateTransition, canTransition, isTerminalTaskState, InvalidTaskStateTransitionError } from "./tasks/state-machine.js";
+export { DeterministicPlanner, safeObjectiveCall, validatePlan } from "./tasks/planner.js";
+export { DefaultRecoveryPolicy } from "./tasks/recovery.js";
+export { DeterministicCompletionEvaluator, outcomeWithCompletion } from "./tasks/completion.js";
 export type { AppConfig } from "./config/env.js";
 export type {
   IntelligenceTask,
@@ -54,6 +57,21 @@ export type {
   TaskExecutorTelemetry
 } from "./tasks/contracts.js";
 export { DEFAULT_TASK_BUDGET } from "./tasks/contracts.js";
+export type {
+  Planner,
+  PlanRequest,
+  PlanValidationCode,
+  PlanValidationIssue,
+  PlanValidationResult,
+  ReplanRequest
+} from "./tasks/planner.js";
+export type { RecoveryDecision, RecoveryDecisionType, RecoveryPolicy, RecoveryRequest } from "./tasks/recovery.js";
+export type {
+  CompletionCriteria,
+  CompletionEvaluation,
+  CompletionEvaluationStatus,
+  CompletionEvaluator
+} from "./tasks/completion.js";
 export type {
   ToolAuditEventName,
   ToolAuditSink,

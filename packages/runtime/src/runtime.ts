@@ -11,6 +11,7 @@ import { MemoryStore } from "./memory/memory-store.js";
 import { StateStore } from "./memory/state-store.js";
 import { ModelRouter } from "./models/model-router.js";
 import { MemoryPerformanceRepository } from "./models/performance-repository.js";
+import type { ModelCapabilitySource } from "./models/capability-source.js";
 import { AgentLoop } from "./agent/agent-loop.js";
 import { createToolRegistry } from "./tools/tool-registry.js";
 
@@ -31,7 +32,11 @@ export interface BeyonderRuntime {
   agent: AgentLoop;
 }
 
-export function createRuntime(config: AppConfig): BeyonderRuntime {
+export interface RuntimeOptions {
+  capabilitySource?: ModelCapabilitySource;
+}
+
+export function createRuntime(config: AppConfig, options: RuntimeOptions = {}): BeyonderRuntime {
   const { db, sqlite } = openDatabase(config.dbPath);
   const ledger = new EconomicLedger(db);
   const state = new StateStore(db);
@@ -41,7 +46,7 @@ export function createRuntime(config: AppConfig): BeyonderRuntime {
   const evaluation = new EvaluationLayer();
   const performance = new MemoryPerformanceRepository(memoryStore);
   const audit = new AuditLog(db);
-  const modelRouter = new ModelRouter(config.model, { performanceRepository: performance, telemetry: audit });
+  const modelRouter = new ModelRouter(config.model, { performanceRepository: performance, capabilitySource: options.capabilitySource, telemetry: audit });
   const adaptiveExecution = new AdaptiveExecutionController(modelRouter, evaluation, audit);
   const tools = createToolRegistry(config.tools);
   const agent = new AgentLoop(

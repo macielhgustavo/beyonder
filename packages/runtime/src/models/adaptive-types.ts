@@ -1,5 +1,6 @@
 import type { EconomicState } from "../types.js";
 import type { IntelligenceTask, IntelligenceTaskType } from "../intelligence/contracts.js";
+import type { ModelCapabilityEvidence } from "./capability-source.js";
 
 export type ProviderHealth = "healthy" | "keyless" | "unhealthy" | "unknown";
 export type QuotaValue = number | "unknown";
@@ -36,6 +37,15 @@ export interface HistoricalPerformance {
   updatedAt?: string;
 }
 
+export interface CapabilityPredictionEvidence {
+  bibScore: number | null;
+  bibSamples: number;
+  realScore: number | null;
+  realSamples: number;
+  predictedScore: number;
+  source: "metadata" | "BIB" | "outcomes" | "BIB + outcomes";
+}
+
 export interface CandidateExplanation {
   positives: Array<{ signal: string; value: number | string }>;
   penalties: Array<{ signal: string; value: number | string }>;
@@ -59,6 +69,8 @@ export interface ModelCandidate {
   utility: number;
   quota: QuotaSnapshot;
   performance: HistoricalPerformance;
+  benchmarkCapability: ModelCapabilityEvidence | null;
+  capabilityEvidence: CapabilityPredictionEvidence;
   explanation: CandidateExplanation;
 }
 

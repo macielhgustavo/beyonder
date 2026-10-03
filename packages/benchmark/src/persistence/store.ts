@@ -67,7 +67,8 @@ export class BenchmarkStore {
   }
 
   listResults(): BenchmarkResult[] {
-    const rows = this.sqlite.prepare("SELECT * FROM benchmark_results ORDER BY timestamp DESC").all() as StoredBenchmarkResult[];
+    const statement = this.sqlite.prepare("SELECT * FROM benchmark_results ORDER BY timestamp DESC");
+    const rows = statement.all() as StoredBenchmarkResult[];
     return rows.map(fromRow);
   }
 
@@ -88,7 +89,8 @@ export class BenchmarkStore {
   }
 
   private migrateLegacySchema(): void {
-    const columns = this.sqlite.prepare("PRAGMA table_info(benchmark_results)").all() as Array<{ name: string; notnull: 0 | 1 }>;
+    const tableInfo = this.sqlite.prepare("PRAGMA table_info(benchmark_results)");
+    const columns = tableInfo.all() as Array<{ name: string; notnull: 0 | 1 }>;
     const byName = new Map(columns.map((column) => [column.name, column]));
     if (byName.get("quality")?.notnull || byName.get("success")?.notnull || byName.get("latency_ms")?.notnull) {
       this.sqlite.exec(`
@@ -124,18 +126,48 @@ export class BenchmarkStore {
         CREATE INDEX IF NOT EXISTS benchmark_results_lookup
           ON benchmark_results(provider, model, category, timestamp);
       `);
+      this.repairLegacyOperationalFailures();
       return;
     }
     this.ensureColumn("status", "TEXT NOT NULL DEFAULT 'FAIL'");
     this.ensureColumn("http_status", "INTEGER");
     this.ensureColumn("error_code", "TEXT");
     this.ensureColumn("failure_reason", "TEXT");
+    this.repairLegacyOperationalFailures();
   }
 
   private ensureColumn(column: string, definition: string): void {
-    const columns = this.sqlite.prepare("PRAGMA table_info(benchmark_results)").all() as Array<{ name: string }>;
+    const tableInfo = this.sqlite.prepare("PRAGMA table_info(benchmark_results)");
+    const columns = tableInfo.all() as Array<{ name: string }>;
     if (columns.some((entry) => entry.name === column)) return;
     this.sqlite.exec(`ALTER TABLE benchmark_results ADD COLUMN ${column} ${definition}`);
+  }
+
+  private repairLegacyOperationalFailures(): void {
+    this.sqlite.exec(`
+      UPDATE benchmark_results
+      SET status = 'RATE_LIMITED', quality = NULL, success = NULL, http_status = 429
+      WHERE status = 'FAIL' AND failure_reason LIKE '%HTTP 429%';
+
+      UPDATE benchmark_results
+      SET status = 'INVALID_ENDPOINT', quality = NULL, success = NULL, http_status = 404
+      WHERE status = 'FAIL' AND failure_reason LIKE '%HTTP 404%';
+
+      UPDATE benchmark_results
+      SET status = 'TIMEOUT', quality = NULL, success = NULL
+      WHERE status = 'FAIL' AND lower(failure_reason) LIKE '%timeout%';
+
+      UPDATE benchmark_results
+      SET status = 'PROVIDER_ERROR', quality = NULL, success = NULL
+      WHERE status = 'FAIL' AND (
+        failure_reason LIKE '%HTTP 500%' OR
+        failure_reason LIKE '%HTTP 501%' OR
+        failure_reason LIKE '%HTTP 502%' OR
+        failure_reason LIKE '%HTTP 503%' OR
+        failure_reason LIKE '%HTTP 504%' OR
+        failure_reason LIKE '%HTTP 505%'
+      );
+    `);
   }
 }
 

@@ -60,6 +60,15 @@ function candidate(provider: string, model: string, predictedQuality: number, ut
       avgShadowCostUsd: 0,
       avgAttempts: 0
     },
+    benchmarkCapability: null,
+    capabilityEvidence: {
+      bibScore: null,
+      bibSamples: 0,
+      realScore: null,
+      realSamples: 0,
+      predictedScore: predictedQuality,
+      source: "metadata"
+    },
     explanation: { positives: [], penalties: [], constraints: [] }
   };
 }

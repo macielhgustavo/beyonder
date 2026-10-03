@@ -69,8 +69,14 @@ export function summarizeProviderOperations(results: BenchmarkResult[]): Provide
       rateLimited: countStatus(items, "RATE_LIMITED"),
       timeouts: countStatus(items, "TIMEOUT"),
       providerErrors: countStatus(items, "PROVIDER_ERROR"),
+      authErrors: countStatus(items, "AUTH_ERROR"),
+      quotaExhausted: countStatus(items, "QUOTA_EXHAUSTED"),
+      billingRequired: countStatus(items, "BILLING_REQUIRED"),
       invalidEndpoint: countStatus(items, "INVALID_ENDPOINT"),
+      modelUnavailable: countStatus(items, "MODEL_UNAVAILABLE"),
       unavailable: countStatus(items, "UNAVAILABLE"),
+      unsupported: countStatus(items, "UNSUPPORTED"),
+      unknown: countStatus(items, "UNKNOWN"),
       skipped: countStatus(items, "SKIPPED"),
       availabilityRate: items.length ? successfulRequests / items.length : 0
     };

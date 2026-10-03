@@ -41,4 +41,48 @@ describe("free model target selection", () => {
     );
     expect(targets.filter((target) => target.provider === "openrouter").map((target) => target.model)).toEqual(["deepseek/deepseek-r1:free"]);
   });
+
+  it("filters Cloudflare and NVIDIA models to chat-compatible BIB targets", () => {
+    const targets = selectFreeModelTargets(
+      {
+        version: 1,
+        updatedAt: new Date().toISOString(),
+        providers: {
+          "cloudflare-workers-ai": {
+            providerId: "cloudflare-workers-ai",
+            state: "READY",
+            classification: "MANUAL_REQUIRED",
+            attempts: 1,
+            lastUpdatedAt: new Date().toISOString(),
+            validation: {
+              status: "validated",
+              models: ["@cf/baai/bge-base-en-v1.5", "@cf/meta/llama-3.3-70b-instruct-fp8-fast", "@cf/openai/whisper"]
+            }
+          },
+          "nvidia-nim": {
+            providerId: "nvidia-nim",
+            state: "READY",
+            classification: "AUTO_WITH_HUMAN_GATE",
+            attempts: 1,
+            lastUpdatedAt: new Date().toISOString(),
+            validation: {
+              status: "validated",
+              models: ["nvidia/nv-rerankqa-mistral-4b-v3", "qwen/qwen2.5-coder-32b-instruct"]
+            }
+          }
+        }
+      },
+      new CredentialBroker({}, {
+        CLOUDFLARE_ACCOUNT_ID: "account",
+        CLOUDFLARE_API_TOKEN: "cf-secret",
+        NVIDIA_NIM_API_KEY: "nim-secret"
+      })
+    );
+    expect(targets.filter((target) => target.provider === "cloudflare-workers-ai").map((target) => target.model)).toEqual([
+      "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+    ]);
+    expect(targets.filter((target) => target.provider === "nvidia-nim").map((target) => target.model)).toEqual([
+      "qwen/qwen2.5-coder-32b-instruct"
+    ]);
+  });
 });

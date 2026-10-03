@@ -48,10 +48,26 @@ describe("benchmark runner", () => {
     expect(results[0].quality).toBeNull();
   });
 
-  it("maps HTTP 404 to INVALID_ENDPOINT", async () => {
-    const results = await runBenchmark({ mode: "smoke", targets: [target], client: new HttpErrorClient(404) });
+  it("maps HTTP 404 model failures to MODEL_UNAVAILABLE", async () => {
+    const results = await runBenchmark({ mode: "smoke", targets: [target], client: new HttpErrorClient(404, "HTTP 404 model not found") });
+    expect(results[0].status).toBe("MODEL_UNAVAILABLE");
+    expect(results[0].quality).toBeNull();
+  });
+
+  it("maps HTTP 404 endpoint failures to INVALID_ENDPOINT", async () => {
+    const results = await runBenchmark({ mode: "smoke", targets: [target], client: new HttpErrorClient(404, "HTTP 404 endpoint missing") });
     expect(results[0].status).toBe("INVALID_ENDPOINT");
     expect(results[0].quality).toBeNull();
+  });
+
+  it("maps auth, quota, and billing failures without capability scoring", async () => {
+    const auth = await runBenchmark({ mode: "smoke", targets: [target], client: new HttpErrorClient(401) });
+    const quota = await runBenchmark({ mode: "smoke", targets: [target], client: new HttpErrorClient(402, "HTTP 402 credits depleted") });
+    const billing = await runBenchmark({ mode: "smoke", targets: [target], client: new HttpErrorClient(402, "HTTP 402 payment required") });
+    expect(auth[0].status).toBe("AUTH_ERROR");
+    expect(quota[0].status).toBe("QUOTA_EXHAUSTED");
+    expect(billing[0].status).toBe("BILLING_REQUIRED");
+    expect([auth[0], quota[0], billing[0]].every((result) => result.quality === null && result.success === null)).toBe(true);
   });
 
   it("maps HTTP 500 to PROVIDER_ERROR", async () => {
@@ -94,10 +110,10 @@ class RateLimitedClient implements BenchmarkModelClient {
 }
 
 class HttpErrorClient implements BenchmarkModelClient {
-  constructor(private readonly status: number) {}
+  constructor(private readonly status: number, private readonly message = `HTTP ${status}`) {}
 
   async complete(_target: ModelTarget, _messages: BenchmarkModelMessage[]): Promise<BenchmarkModelResponse> {
-    throw new BenchmarkRequestError(`HTTP ${this.status}`, { httpStatus: this.status });
+    throw new BenchmarkRequestError(this.message, { httpStatus: this.status });
   }
 }
 

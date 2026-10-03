@@ -24,6 +24,7 @@ import { DefaultRecoveryPolicy, type RecoveryPolicy } from "./recovery.js";
 import type { Planner } from "./planner.js";
 import { validatePlan } from "./planner.js";
 import { assertTaskStateTransition, isTerminalTaskState } from "./state-machine.js";
+import type { TaskCheckpointStore } from "./checkpoints.js";
 
 export interface TaskExecutorOptions {
   memory?: MemoryEngine;
@@ -35,6 +36,7 @@ export interface TaskExecutorOptions {
   planner?: Planner;
   recoveryPolicy?: RecoveryPolicy;
   completionEvaluator?: CompletionEvaluator;
+  checkpointStore?: TaskCheckpointStore;
   now?: () => number;
   id?: () => string;
 }
@@ -44,6 +46,13 @@ export interface ExecuteTaskRequest {
   plan: Plan;
   economicState: EconomicState;
   budget?: Partial<TaskBudget>;
+  completionCriteria?: CompletionCriteria;
+  signal?: AbortSignal;
+}
+
+export interface ResumeTaskRequest {
+  execution: TaskExecution;
+  economicState: EconomicState;
   completionCriteria?: CompletionCriteria;
   signal?: AbortSignal;
 }
@@ -87,7 +96,32 @@ export class AutonomousTaskExecutor {
       startedAt: new Date(this.now()).toISOString()
     };
 
-    await this.transition(execution, "READY", { planId: execution.plan.id });
+    return this.runExecution(execution, request);
+  }
+
+  async resume(request: ResumeTaskRequest): Promise<AutonomousTaskOutcome> {
+    const execution = cloneExecution(request.execution);
+    if (isTerminalTaskState(execution.state)) throw new Error(`Task '${execution.task.id}' is already terminal: ${execution.state}.`);
+    for (const step of execution.plan.steps) {
+      if (step.status === "RUNNING") step.status = "PENDING";
+    }
+    execution.state = "READY";
+    execution.completedAt = undefined;
+    execution.error = undefined;
+    return this.runExecution(execution, {
+      task: execution.task,
+      plan: execution.plan,
+      economicState: request.economicState,
+      completionCriteria: request.completionCriteria,
+      signal: request.signal,
+      budget: execution.budget
+    });
+  }
+
+  private async runExecution(execution: TaskExecution, request: ExecuteTaskRequest): Promise<AutonomousTaskOutcome> {
+    if (execution.state === "CREATED" || execution.state === "PLANNING") {
+      await this.transition(execution, "READY", { planId: execution.plan.id });
+    }
     await this.transition(execution, "RUNNING", { objective: execution.plan.objective });
 
     while (!isTerminalTaskState(execution.state)) {
@@ -255,7 +289,7 @@ export class AutonomousTaskExecutor {
       await this.telemetry("warn", "step.failed", { taskId: execution.task.id, planId: execution.plan.id, stepId: step.id, error: result.error });
     }
 
-    this.checkpoint(execution, stepExecution.observationSummary);
+    await this.checkpoint(execution, stepExecution.observationSummary);
 
     if (!isTerminalTaskState(execution.state) && execution.usage.noProgressSteps >= execution.budget.maxNoProgressSteps) {
       await this.transition(execution, "FAILED", { reason: "NO_PROGRESS", noProgressSteps: execution.usage.noProgressSteps });
@@ -315,7 +349,7 @@ export class AutonomousTaskExecutor {
     return this.options.getAvailableTools?.({ taskId: execution.task.id, economicState }) ?? [];
   }
 
-  private checkpoint(execution: TaskExecution, observationSummary?: string) {
+  private async checkpoint(execution: TaskExecution, observationSummary?: string) {
     const checkpoint: ExecutionCheckpoint = {
       taskId: execution.task.id,
       planId: execution.plan.id,
@@ -330,7 +364,8 @@ export class AutonomousTaskExecutor {
       timestamp: new Date(this.now()).toISOString()
     };
     execution.checkpoints.push(checkpoint);
-    void this.telemetry("info", "task.checkpoint", { ...checkpoint });
+    await this.options.checkpointStore?.save(execution);
+    await this.telemetry("info", "task.checkpoint", { ...checkpoint });
   }
 
   private async finish(execution: TaskExecution, state: TaskExecutionState, reason?: string) {
@@ -376,6 +411,10 @@ function clonePlan(plan: Plan): Plan {
     ...plan,
     steps: plan.steps.map((step) => ({ ...step, dependencies: step.dependencies ? [...step.dependencies] : undefined }))
   };
+}
+
+function cloneExecution(execution: TaskExecution): TaskExecution {
+  return JSON.parse(JSON.stringify(execution)) as TaskExecution;
 }
 
 function budgetTerminalState(execution: TaskExecution, signal?: AbortSignal): { state: TaskExecutionState; reason: string } | null {

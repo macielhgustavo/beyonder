@@ -22,6 +22,7 @@
     "web:evals:smoke": "tsx packages/web-evals/src/cli.ts smoke",
     "web:evals:standard": "tsx packages/web-evals/src/cli.ts standard",
     "autonomy:smoke": "tsx packages/web-evals/src/autonomy-cli.ts",
+    "hardening:smoke": "tsx packages/runtime/src/tasks/hardening-smoke.ts",
     "start": "tsx apps/cli/src/index.ts",
     "beyonder": "tsx apps/cli/src/index.ts",
     "providers:autopilot": "tsx apps/cli/src/index.ts providers autopilot",

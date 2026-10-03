@@ -15,6 +15,8 @@ import type { ModelCapabilitySource } from "./models/capability-source.js";
 import { AgentLoop } from "./agent/agent-loop.js";
 import { createRuntimeToolExecutor, createRuntimeToolRegistry } from "./tools/runtime-tools.js";
 import { AutonomousTaskExecutor } from "./tasks/task-executor.js";
+import { LlmPlanner } from "./tasks/llm-planner.js";
+import { StateTaskCheckpointStore } from "./tasks/checkpoints.js";
 import type { ToolContext, ToolDescriptor, ToolExecutor, ToolRegistry } from "@beyonder/tools";
 
 export interface BeyonderRuntime {
@@ -34,6 +36,8 @@ export interface BeyonderRuntime {
   toolExecutor: ToolExecutor;
   getAvailableTools(context?: ToolContext): Promise<readonly ToolDescriptor[]>;
   taskExecutor: AutonomousTaskExecutor;
+  planner: LlmPlanner;
+  checkpoints: StateTaskCheckpointStore;
   agent: AgentLoop;
 }
 
@@ -56,12 +60,16 @@ export function createRuntime(config: AppConfig, options: RuntimeOptions = {}): 
   const tools = createRuntimeToolRegistry(config.tools);
   const toolExecutor = createRuntimeToolExecutor(tools, audit);
   const getAvailableTools = (context: ToolContext = {}) => tools.getAvailableTools(context, toolExecutor.policy);
-  const taskExecutor = new AutonomousTaskExecutor({
+  const checkpoints = new StateTaskCheckpointStore(state);
+  const planner = new LlmPlanner({ modelRouter, memory });
+  const taskExecutorWithPlanner = new AutonomousTaskExecutor({
     memory,
     modelRouter,
     toolExecutor,
     getAvailableTools,
-    telemetry: audit
+    telemetry: audit,
+    planner,
+    checkpointStore: checkpoints
   });
   const agent = new AgentLoop(
     config,
@@ -92,7 +100,9 @@ export function createRuntime(config: AppConfig, options: RuntimeOptions = {}): 
     tools,
     toolExecutor,
     getAvailableTools,
-    taskExecutor,
+    taskExecutor: taskExecutorWithPlanner,
+    planner,
+    checkpoints,
     agent
   };
 }

@@ -12,7 +12,7 @@ jobs:
   validate-node24-bib-and-nvidia:
     runs-on: ubuntu-24.04
     env:
-      NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY || secrets.NVIDIA_API_KEY }}
+      NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -34,48 +34,55 @@ jobs:
           set -euo pipefail
           rm -f /tmp/beyonder-bib-lifecycle.sqlite*
           cat >/tmp/bib-lifecycle-smoke.ts <<'TS'
-          import { runBenchmark } from "./packages/benchmark/src/runner/index.ts";
-          import { BenchmarkStore } from "./packages/benchmark/src/persistence/store.ts";
+          import { runBenchmark } from "/home/runner/work/beyonder/beyonder/packages/benchmark/src/runner/index.ts";
+          import { BenchmarkStore } from "/home/runner/work/beyonder/beyonder/packages/benchmark/src/persistence/store.ts";
 
-          let completed = false;
-          const results = await runBenchmark({
-            mode: "smoke",
-            targets: [{
-              provider: "lifecycle-smoke",
-              providerName: "Lifecycle Smoke",
-              model: "mock-instruct",
-              baseUrl: "http://127.0.0.1"
-            }],
-            client: {
-              async complete(target) {
-                return {
-                  content: "",
-                  provider: target.provider,
-                  model: target.model,
-                  estimatedCostUsd: 0
-                };
-              }
-            },
-            telemetry: {
-              async emit(event) {
-                if (event === "benchmark.completed") {
-                  completed = true;
-                  console.log("benchmark.completed");
+          async function main() {
+            let completed = false;
+            const results = await runBenchmark({
+              mode: "smoke",
+              targets: [{
+                provider: "lifecycle-smoke",
+                providerName: "Lifecycle Smoke",
+                model: "mock-instruct",
+                baseUrl: "http://127.0.0.1"
+              }],
+              client: {
+                async complete(target) {
+                  return {
+                    content: "",
+                    provider: target.provider,
+                    model: target.model,
+                    estimatedCostUsd: 0
+                  };
+                }
+              },
+              telemetry: {
+                async emit(event) {
+                  if (event === "benchmark.completed") {
+                    completed = true;
+                    console.log("benchmark.completed");
+                  }
                 }
               }
-            }
-          });
+            });
 
-          if (!completed || results.length === 0) process.exit(3);
-          const path = "/tmp/beyonder-bib-lifecycle.sqlite";
-          const store = new BenchmarkStore(path);
-          store.saveResults(results);
-          store.close();
-          store.close();
-          const reopened = new BenchmarkStore(path);
-          if (reopened.listResults().length !== results.length) process.exit(4);
-          reopened.close();
-          reopened.close();
+            if (!completed || results.length === 0) process.exit(3);
+            const path = "/tmp/beyonder-bib-lifecycle.sqlite";
+            const store = new BenchmarkStore(path);
+            store.saveResults(results);
+            store.close();
+            store.close();
+            const reopened = new BenchmarkStore(path);
+            if (reopened.listResults().length !== results.length) process.exit(4);
+            reopened.close();
+            reopened.close();
+          }
+
+          main().catch((error) => {
+            console.error(error);
+            process.exit(5);
+          });
           TS
           set +e
           pnpm exec tsx /tmp/bib-lifecycle-smoke.ts

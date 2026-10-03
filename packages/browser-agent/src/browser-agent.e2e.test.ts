@@ -62,7 +62,7 @@ suite("BrowserAgent Playwright deterministic integration", () => {
 
     await agent.execute(sessionId, { type: "navigate", url: `${server.baseUrl}/` });
     const blocked = await agent.execute(sessionId, { type: "click", target: { role: "button", name: "Save changes" } });
-    expect(blocked).toMatchObject({ status: "blocked", policy: { reason: "authorization-required" } });
+    expect(blocked).toMatchObject({ status: "blocked", policy: { reason: "submit-disabled" } });
     expect(server.getPostCount()).toBe(0);
 
     const purchase = await agent.execute(sessionId, { type: "click", target: { role: "button", name: "Purchase" }, authorizationId: "ignored" });

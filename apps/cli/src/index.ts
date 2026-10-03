@@ -1,8 +1,15 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import { existsSync } from "node:fs";
-import { randomUUID } from "node:crypto";
-import { classifyEconomicState, createRuntime, loadConfig, type IntelligenceTaskType, type Plan } from "@beyonder/runtime";
+import {
+  DEFAULT_TASK_BUDGET,
+  DeterministicPlanner,
+  classifyEconomicState,
+  createRuntime,
+  loadConfig,
+  validatePlan,
+  type IntelligenceTaskType
+} from "@beyonder/runtime";
 import {
   AutopilotStateStore,
   buildComputeInventory,
@@ -280,10 +287,25 @@ taskCommand
     const summary = await runtime.ledger.summary(config.monthlyFixedCostUsd);
     const economicState = classifyEconomicState(summary);
     const inspection = await runtime.intelligence.inspect(objective);
-    const plan = singleStepObjectivePlan(inspection.task.id, objective);
+    const availableTools = await runtime.getAvailableTools({ taskId: inspection.task.id, economicState });
+    const planner = new DeterministicPlanner();
+    const plan = await planner.createPlan({
+      objective,
+      task: inspection.task,
+      memoryContext: inspection.relevantMemories,
+      availableTools,
+      budget: DEFAULT_TASK_BUDGET,
+      economicState
+    });
+    const validation = validatePlan(plan, { availableTools, budget: DEFAULT_TASK_BUDGET });
+    if (!validation.valid) {
+      console.log(JSON.stringify({ status: "INVALID_PLAN", issues: validation.issues }, null, 2));
+      runtime.sqlite.close();
+      return;
+    }
     const outcome = await runtime.taskExecutor.execute({
       task: inspection.task,
-      plan,
+      plan: validation.plan,
       economicState
     });
     console.log(JSON.stringify({
@@ -427,32 +449,6 @@ function routeView(route: Awaited<ReturnType<ReturnType<typeof createRuntime>["m
     } : null,
     explored: route.explored,
     reason: route.reason
-  };
-}
-
-function singleStepObjectivePlan(taskId: string, objective: string): Plan {
-  const planId = `plan_${randomUUID()}`;
-  return {
-    id: planId,
-    taskId,
-    objective,
-    createdAt: new Date().toISOString(),
-    revision: 1,
-    assumptions: ["Temporary v0.4 task command path until planner/recovery branch provides structured planning."],
-    steps: [
-      {
-        id: "record-objective",
-        description: "Normalize and record the objective through the safe deterministic tool runtime.",
-        status: "PENDING",
-        expectedOutcome: "Objective accepted with zero side effects.",
-        allowedToolCapabilities: ["objective-normalization", "deterministic"],
-        action: {
-          id: `tool_${randomUUID()}`,
-          tool: "safe-objective",
-          arguments: { objective }
-        }
-      }
-    ]
   };
 }
 

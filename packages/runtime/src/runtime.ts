@@ -3,6 +3,7 @@ import type { AppConfig } from "./config/env.js";
 import type Database from "better-sqlite3";
 import { openDatabase, type Db } from "./db/client.js";
 import { EconomicLedger } from "./economy/ledger.js";
+import { IntelligenceLayer } from "./intelligence/intelligence-layer.js";
 import { MemoryEngine } from "./memory/memory-engine.js";
 import { MemoryStore } from "./memory/memory-store.js";
 import { StateStore } from "./memory/state-store.js";
@@ -17,6 +18,7 @@ export interface BeyonderRuntime {
   state: StateStore;
   memory: MemoryEngine;
   memoryStore: MemoryStore;
+  intelligence: IntelligenceLayer;
   modelRouter: ModelRouter;
   audit: AuditLog;
   tools: ReturnType<typeof createToolRegistry>;
@@ -29,10 +31,11 @@ export function createRuntime(config: AppConfig): BeyonderRuntime {
   const state = new StateStore(db);
   const memoryStore = new MemoryStore(db);
   const memory = new MemoryEngine(memoryStore);
+  const intelligence = new IntelligenceLayer(memory);
   const modelRouter = new ModelRouter(config.model);
   const audit = new AuditLog(db);
   const tools = createToolRegistry(config.tools);
-  const agent = new AgentLoop(config, ledger, state, memory, modelRouter, audit, tools);
+  const agent = new AgentLoop(config, ledger, state, memory, intelligence, modelRouter, audit, tools);
 
-  return { sqlite, db, ledger, state, memory, memoryStore, modelRouter, audit, tools, agent };
+  return { sqlite, db, ledger, state, memory, memoryStore, intelligence, modelRouter, audit, tools, agent };
 }

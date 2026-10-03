@@ -11,7 +11,15 @@ export const memories = sqliteTable("memories", {
   kind: text("kind").notNull(),
   content: text("content").notNull(),
   importance: integer("importance").notNull().default(1),
-  createdAt: text("created_at").notNull()
+  confidence: real("confidence").notNull().default(1),
+  utility: real("utility").notNull().default(0.5),
+  createdAt: text("created_at").notNull(),
+  lastAccessedAt: text("last_accessed_at"),
+  accessCount: integer("access_count").notNull().default(0),
+  source: text("source"),
+  taskId: text("task_id"),
+  keywords: text("keywords").notNull().default("[]"),
+  metadata: text("metadata").notNull().default("{}")
 });
 
 export const ledgerEntries = sqliteTable("ledger_entries", {

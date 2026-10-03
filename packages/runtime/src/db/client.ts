@@ -24,7 +24,15 @@ export function openDatabase(path: string): { sqlite: Database.Database; db: Db 
       kind TEXT NOT NULL,
       content TEXT NOT NULL,
       importance INTEGER NOT NULL DEFAULT 1,
-      created_at TEXT NOT NULL
+      confidence REAL NOT NULL DEFAULT 1,
+      utility REAL NOT NULL DEFAULT 0.5,
+      created_at TEXT NOT NULL,
+      last_accessed_at TEXT,
+      access_count INTEGER NOT NULL DEFAULT 0,
+      source TEXT,
+      task_id TEXT,
+      keywords TEXT NOT NULL DEFAULT '[]',
+      metadata TEXT NOT NULL DEFAULT '{}'
     );
     CREATE TABLE IF NOT EXISTS ledger_entries (
       id TEXT PRIMARY KEY,
@@ -43,8 +51,23 @@ export function openDatabase(path: string): { sqlite: Database.Database; db: Db 
     );
   `);
 
+  ensureColumn(sqlite, "memories", "confidence", "REAL NOT NULL DEFAULT 1");
+  ensureColumn(sqlite, "memories", "utility", "REAL NOT NULL DEFAULT 0.5");
+  ensureColumn(sqlite, "memories", "last_accessed_at", "TEXT");
+  ensureColumn(sqlite, "memories", "access_count", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn(sqlite, "memories", "source", "TEXT");
+  ensureColumn(sqlite, "memories", "task_id", "TEXT");
+  ensureColumn(sqlite, "memories", "keywords", "TEXT NOT NULL DEFAULT '[]'");
+  ensureColumn(sqlite, "memories", "metadata", "TEXT NOT NULL DEFAULT '{}'");
+
   return {
     sqlite,
     db: drizzle(sqlite, { schema })
   };
+}
+
+function ensureColumn(sqlite: Database.Database, table: string, column: string, definition: string) {
+  const columns = sqlite.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (columns.some((entry) => entry.name === column)) return;
+  sqlite.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
 }

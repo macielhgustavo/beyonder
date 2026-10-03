@@ -14,7 +14,7 @@ import {
 
 const program = new Command();
 
-program.name("beyonder").description("Beyonder autonomous economic agent").version("0.1.0");
+program.name("beyonder").description("Beyonder autonomous economic agent").version("0.2.0");
 
 program
   .command("run")
@@ -66,6 +66,69 @@ program
     const summary = await runtime.ledger.summary(config.monthlyFixedCostUsd);
     const entries = await runtime.ledger.latest();
     console.log(JSON.stringify({ economicState: classifyEconomicState(summary), summary, entries }, null, 2));
+    runtime.sqlite.close();
+  });
+
+const memory = program.command("memory").description("Inspect Beyonder memory");
+
+memory
+  .command("stats")
+  .description("Print memory counts by category")
+  .action(async () => {
+    const runtime = createRuntime(loadConfig());
+    console.log(JSON.stringify(await runtime.memory.stats(), null, 2));
+    runtime.sqlite.close();
+  });
+
+memory
+  .command("search")
+  .description("Search memory using lexical, recency, importance, and utility scoring")
+  .argument("<query>", "memory query")
+  .option("-l, --limit <limit>", "maximum memories to return", "6")
+  .action(async (query: string, options: { limit: string }) => {
+    const runtime = createRuntime(loadConfig());
+    const results = await runtime.memory.retrieve({ query, limit: Number(options.limit) });
+    console.log(
+      JSON.stringify(
+        results.map((entry) => ({
+          id: entry.id,
+          type: entry.kind,
+          score: entry.score,
+          importance: entry.importance,
+          utility: entry.utility,
+          accessCount: entry.accessCount,
+          content: entry.content
+        })),
+        null,
+        2
+      )
+    );
+    runtime.sqlite.close();
+  });
+
+const intelligence = program.command("intelligence").description("Inspect Intelligence Layer decisions without executing a model");
+
+intelligence
+  .command("inspect")
+  .argument("<taskText>", "task text to classify")
+  .description("Classify a task, estimate complexity, and retrieve relevant memory")
+  .action(async (taskText: string) => {
+    const runtime = createRuntime(loadConfig());
+    const inspection = await runtime.intelligence.inspect(taskText);
+    console.log(
+      JSON.stringify(
+        {
+          type: inspection.task.type,
+          complexity: inspection.task.complexity,
+          risk: inspection.task.risk,
+          estimatedTokens: inspection.task.estimatedTokens,
+          requirements: inspection.task.requirements,
+          relevantMemories: inspection.relevantMemories.length
+        },
+        null,
+        2
+      )
+    );
     runtime.sqlite.close();
   });
 

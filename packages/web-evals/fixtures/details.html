@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Details Fixture</title></head>
+<body>
+  <main>
+    <h1>Build</h1>
+    <button id="show-details" type="button">Show details</button>
+    <section id="details" hidden>
+      <p>Build number: <strong id="build-number">4821</strong></p>
+      <p>Channel: stable</p>
+    </section>
+  </main>
+  <script>
+    document.querySelector('#show-details').addEventListener('click', () => {
+      document.querySelector('#details').hidden = false;
+      document.body.dataset.detailsVisible = 'true';
+    });
+  </script>
+</body>
+</html>

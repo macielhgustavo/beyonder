@@ -19,8 +19,10 @@ import { LlmPlanner } from "./tasks/llm-planner.js";
 import { StateTaskCheckpointStore } from "./tasks/checkpoints.js";
 import { StateOpportunityStore } from "./opportunities/store.js";
 import { OpportunityEngine } from "./opportunities/engine.js";
-import { DeterministicFixtureOpportunitySource, GitHubPublicOpportunitySource } from "./opportunities/sources.js";
+import { DeterministicFixtureOpportunitySource, GitHubPublicOpportunitySource, AgentWorkPublicOpportunitySource } from "./opportunities/sources.js";
 import { OpportunityEvaluator, OpportunityQueue } from "./opportunities/evaluator.js";
+import { ApprovalGate } from "./opportunities/approval.js";
+import { FixtureApplicationAdapter, FixtureSubmissionAdapter, OpportunityBridge } from "./opportunities/bridge.js";
 import type { ToolContext, ToolDescriptor, ToolExecutor, ToolRegistry } from "@beyonder/tools";
 
 export interface BeyonderRuntime {
@@ -46,6 +48,8 @@ export interface BeyonderRuntime {
   opportunityStore: StateOpportunityStore;
   opportunityEvaluator: OpportunityEvaluator;
   opportunityQueue: OpportunityQueue;
+  approvals: ApprovalGate;
+  opportunityBridge: OpportunityBridge;
   agent: AgentLoop;
 }
 
@@ -73,10 +77,13 @@ export function createRuntime(config: AppConfig, options: RuntimeOptions = {}): 
   const opportunityStore = new StateOpportunityStore(state);
   const opportunities = new OpportunityEngine([
     new DeterministicFixtureOpportunitySource(),
-    new GitHubPublicOpportunitySource()
+    new GitHubPublicOpportunitySource(),
+    new AgentWorkPublicOpportunitySource()
   ], opportunityStore, audit);
   const opportunityEvaluator = new OpportunityEvaluator({ memory }, opportunityStore);
   const opportunityQueue = new OpportunityQueue(opportunityStore);
+  const approvals = new ApprovalGate(state, audit);
+  const opportunityBridge = new OpportunityBridge(approvals, new FixtureApplicationAdapter(), new FixtureSubmissionAdapter(), audit);
   const taskExecutorWithPlanner = new AutonomousTaskExecutor({
     memory,
     modelRouter,
@@ -122,6 +129,8 @@ export function createRuntime(config: AppConfig, options: RuntimeOptions = {}): 
     opportunityStore,
     opportunityEvaluator,
     opportunityQueue,
+    approvals,
+    opportunityBridge,
     agent
   };
 }

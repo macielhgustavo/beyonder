@@ -9,10 +9,15 @@ export function normalizeOpportunity(raw: RawOpportunity, discoveredAt = new Dat
     requiredCapabilities: unique(raw.requiredCapabilities ?? []),
     constraints: unique(raw.constraints ?? []),
     requiresApplication: booleanMetadata(metadata, "requiresApplication"),
+    requiresProposal: booleanMetadata(metadata, "requiresProposal") || booleanMetadata(metadata, "requiresApplication"),
     requiresExternalMessage: booleanMetadata(metadata, "requiresExternalMessage"),
     requiresAccount: booleanMetadata(metadata, "requiresAccount"),
+    requiresAuthentication: booleanMetadata(metadata, "requiresAuthentication"),
+    requiresIdentity: booleanMetadata(metadata, "requiresIdentity") || booleanMetadata(metadata, "requiresIdentityVerification"),
     requiresIdentityVerification: booleanMetadata(metadata, "requiresIdentityVerification"),
     requiresPayment: booleanMetadata(metadata, "requiresPayment"),
+    requiresWallet: booleanMetadata(metadata, "requiresWallet"),
+    requiresOnchainAction: booleanMetadata(metadata, "requiresOnchainAction"),
     requiresSubmission: booleanMetadata(metadata, "requiresSubmission"),
     requiredCapitalUsd: numberMetadata(metadata, "requiredCapitalUsd")
   };

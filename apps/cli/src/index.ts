@@ -384,6 +384,48 @@ const providers = program.command("providers").description("Manage compute provi
 
 const opportunities = program.command("opportunities").description("Discover and inspect economic opportunities without taking external action");
 
+const approvals = program.command("approvals").description("Inspect and decide explicit, single-use external-action approvals");
+
+approvals
+  .command("list")
+  .description("List approval requests")
+  .action(async () => {
+    const runtime = createBeyonderRuntime(loadConfig());
+    console.log(JSON.stringify(await runtime.approvals.list(), null, 2));
+    runtime.sqlite.close();
+  });
+
+approvals
+  .command("inspect")
+  .argument("<approval-id>", "approval id")
+  .description("Inspect one approval request")
+  .action(async (approvalId: string) => {
+    const runtime = createBeyonderRuntime(loadConfig());
+    console.log(JSON.stringify(await runtime.approvals.inspect(approvalId) ?? { approvalId, status: "NOT_FOUND" }, null, 2));
+    runtime.sqlite.close();
+  });
+
+approvals
+  .command("approve")
+  .argument("<approval-id>", "approval id")
+  .description("Approve exactly one pending external action")
+  .action(async (approvalId: string) => {
+    const runtime = createBeyonderRuntime(loadConfig());
+    console.log(JSON.stringify(await runtime.approvals.approve(approvalId), null, 2));
+    runtime.sqlite.close();
+  });
+
+approvals
+  .command("reject")
+  .argument("<approval-id>", "approval id")
+  .option("--reason <reason>", "human reason")
+  .description("Reject exactly one pending external action")
+  .action(async (approvalId: string, options: { reason?: string }) => {
+    const runtime = createBeyonderRuntime(loadConfig());
+    console.log(JSON.stringify(await runtime.approvals.reject(approvalId, options.reason), null, 2));
+    runtime.sqlite.close();
+  });
+
 opportunities
   .command("discover")
   .option("-s, --source <source>", "source id", "fixture")

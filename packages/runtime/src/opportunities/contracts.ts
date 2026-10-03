@@ -16,10 +16,15 @@ export interface OpportunityRequirements {
   requiredCapabilities: string[];
   constraints: string[];
   requiresApplication: boolean;
+  requiresProposal: boolean;
   requiresExternalMessage: boolean;
   requiresAccount: boolean;
+  requiresAuthentication: boolean;
+  requiresIdentity: boolean;
   requiresIdentityVerification: boolean;
   requiresPayment: boolean;
+  requiresWallet: boolean;
+  requiresOnchainAction: boolean;
   requiresSubmission: boolean;
   requiredCapitalUsd: number;
 }
@@ -64,6 +69,17 @@ export interface RawOpportunity {
   metadata?: Record<string, unknown>;
 }
 
+export interface PreparedApplication {
+  opportunityId: string;
+  proposalText: string;
+  executionPlan: string[];
+  estimatedDelivery: string;
+  requiredCapabilities: string[];
+  expectedCostUsd: number;
+  risks: string[];
+  preparedAt: string;
+}
+
 export interface OpportunityDiscoveryResult {
   sourceId: string;
   discoveredAt: string;
@@ -87,4 +103,3 @@ export interface OpportunityDiscoveryContext {
   limit?: number;
   signal?: AbortSignal;
 }
-

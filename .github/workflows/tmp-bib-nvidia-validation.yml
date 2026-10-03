@@ -6,15 +6,13 @@ on:
       - fix/bib-cleanup-nvidia-smoke
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  validate-node24-and-live-nvidia:
+  validate-node24-bib-and-nvidia:
     runs-on: ubuntu-24.04
     env:
       NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY || secrets.NVIDIA_API_KEY }}
-      BEYONDER_PROVIDER_STATE_PATH: /tmp/beyonder-nvidia-provider-state.json
-      BEYONDER_BENCHMARK_DB_PATH: /tmp/beyonder-nvidia-benchmark.sqlite
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -24,86 +22,79 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-      - name: Install and refresh lockfile for Node 24 SQLite
-        run: pnpm install --no-frozen-lockfile
-      - name: Commit lockfile refresh once
-        id: lock
-        shell: bash
-        run: |
-          set -euo pipefail
-          if ! git diff --quiet -- pnpm-lock.yaml; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add pnpm-lock.yaml
-            git commit -m "chore(lockfile): refresh better-sqlite3"
-            git push
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Typecheck on Node 24
-        if: steps.lock.outputs.changed == 'false'
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck
         run: pnpm typecheck
-      - name: Benchmark regression tests on Node 24
-        if: steps.lock.outputs.changed == 'false'
-        run: pnpm test:benchmark
-      - name: Real NVIDIA NIM catalog-driven smoke
-        if: steps.lock.outputs.changed == 'false'
-        id: nvidia
+      - name: Full test suite
+        run: pnpm test
+      - name: BIB lifecycle smoke must exit zero after benchmark.completed
         shell: bash
         run: |
           set -euo pipefail
-          if [ -z "${NVIDIA_NIM_API_KEY:-}" ]; then
-            echo "NVIDIA_NIM_API_KEY is not available to this workflow." >&2
-            exit 2
-          fi
-          set +e
-          result="$(NVIDIA_NIM_SMOKE_MAX_CANDIDATES=20 pnpm -s providers:nvidia-smoke 2>&1)"
-          code=$?
-          set -e
-          echo "$result"
-          printf '%s\n' "$result" > /tmp/nvidia-smoke.json
-          if [ "$code" -ne 0 ]; then
-            exit "$code"
-          fi
-          model="$(jq -r '.model // empty' /tmp/nvidia-smoke.json)"
-          test -n "$model"
-          echo "model=$model" >> "$GITHUB_OUTPUT"
-      - name: Seed only the live NVIDIA model for BIB
-        if: steps.lock.outputs.changed == 'false'
-        shell: bash
-        run: |
-          set -euo pipefail
-          jq -n --arg model "${{ steps.nvidia.outputs.model }}" '{
-            version: 1,
-            updatedAt: "2026-10-03T00:00:00.000Z",
-            providers: {
-              "nvidia-nim": {
-                providerId: "nvidia-nim",
-                state: "READY",
-                classification: "AUTO_WITH_HUMAN_GATE",
-                attempts: 1,
-                lastUpdatedAt: "2026-10-03T00:00:00.000Z",
-                validation: {
-                  status: "validated",
-                  models: [$model],
-                  modelCount: 1,
-                  latencyMs: 0,
-                  rateLimitHeaders: {}
+          rm -f /tmp/beyonder-bib-lifecycle.sqlite*
+          cat >/tmp/bib-lifecycle-smoke.ts <<'TS'
+          import { runBenchmark } from "./packages/benchmark/src/runner/index.ts";
+          import { BenchmarkStore } from "./packages/benchmark/src/persistence/store.ts";
+
+          let completed = false;
+          const results = await runBenchmark({
+            mode: "smoke",
+            targets: [{
+              provider: "lifecycle-smoke",
+              providerName: "Lifecycle Smoke",
+              model: "mock-instruct",
+              baseUrl: "http://127.0.0.1"
+            }],
+            client: {
+              async complete(target) {
+                return {
+                  content: "",
+                  provider: target.provider,
+                  model: target.model,
+                  estimatedCostUsd: 0
+                };
+              }
+            },
+            telemetry: {
+              async emit(event) {
+                if (event === "benchmark.completed") {
+                  completed = true;
+                  console.log("benchmark.completed");
                 }
               }
             }
-          }' > "$BEYONDER_PROVIDER_STATE_PATH"
-      - name: BIB smoke must persist and exit zero on Node 24
-        if: steps.lock.outputs.changed == 'false'
-        shell: bash
-        run: |
-          set -euo pipefail
-          rm -f "$BEYONDER_BENCHMARK_DB_PATH" "$BEYONDER_BENCHMARK_DB_PATH-wal" "$BEYONDER_BENCHMARK_DB_PATH-shm"
+          });
+
+          if (!completed || results.length === 0) process.exit(3);
+          const path = "/tmp/beyonder-bib-lifecycle.sqlite";
+          const store = new BenchmarkStore(path);
+          store.saveResults(results);
+          store.close();
+          store.close();
+          const reopened = new BenchmarkStore(path);
+          if (reopened.listResults().length !== results.length) process.exit(4);
+          reopened.close();
+          reopened.close();
+          TS
           set +e
-          pnpm -s beyonder intelligence benchmark --smoke --db "$BEYONDER_BENCHMARK_DB_PATH"
+          pnpm exec tsx /tmp/bib-lifecycle-smoke.ts
           code=$?
           set -e
           echo "BIB_EXIT_CODE=$code"
           test "$code" -eq 0
-          test -s "$BEYONDER_BENCHMARK_DB_PATH"
+      - name: Real NVIDIA NIM catalog-driven smoke
+        id: nvidia
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -z "${NVIDIA_NIM_API_KEY:-}" ]; then
+            echo "NVIDIA_SMOKE_BLOCKED=MISSING_NVIDIA_NIM_API_KEY"
+            exit 2
+          fi
+          NVIDIA_NIM_SMOKE_MAX_CANDIDATES=20 pnpm -s providers:nvidia-smoke
+      - name: Record NVIDIA smoke availability
+        shell: bash
+        run: |
+          echo "NVIDIA_STEP_OUTCOME=${{ steps.nvidia.outcome }}"

@@ -86,6 +86,33 @@ export interface AgentWorkOpportunitySourceOptions {
   fetchImpl?: typeof fetch;
 }
 
+export interface OpenBountyOpportunitySourceOptions { apiBaseUrl?: string; fetchImpl?: typeof fetch; }
+export class OpenBountyPublicOpportunitySource implements OpportunitySource {
+  readonly id = "openbounty-public";
+  private readonly apiBaseUrl: string;
+  private readonly fetchImpl: typeof fetch;
+  constructor(options: OpenBountyOpportunitySourceOptions = {}) { this.apiBaseUrl = (options.apiBaseUrl ?? "https://www.openbounty.app/api/v1").replace(/\/$/, ""); this.fetchImpl = options.fetchImpl ?? fetch; }
+  async discover(context: OpportunitySourceContext = {}): Promise<OpportunityDiscoveryResult> {
+    const discoveredAt = context.now ?? new Date().toISOString();
+    try {
+      const response = await this.fetchImpl(`${this.apiBaseUrl}/bounties?limit=${Math.min(context.limit ?? 20, 100)}`, { headers: { accept: "application/json", "user-agent": "beyonder-opportunity-readonly" }, signal: context.signal });
+      if (!response.ok) return { sourceId: this.id, discoveredAt, items: [], errors: [`Open Bounty returned HTTP ${response.status}.`] };
+      const payload = await response.json() as unknown;
+      if (!payload || typeof payload !== "object" || !Array.isArray((payload as { data?: unknown }).data)) return { sourceId: this.id, discoveredAt, items: [], errors: ["Open Bounty returned a malformed payload."] };
+      const items = (payload as { data: unknown[] }).data.map((item) => openBountyToRaw(item, this.id)).filter((item): item is RawOpportunity => item !== undefined);
+      return { sourceId: this.id, discoveredAt, items, errors: [] };
+    } catch (error) { return { sourceId: this.id, discoveredAt, items: [], errors: [error instanceof Error ? error.message : String(error)] }; }
+  }
+}
+
+function openBountyToRaw(value: unknown, source: string): RawOpportunity | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const item = value as Record<string, unknown>; const title = typeof item.title === "string" ? item.title.trim() : ""; if (!title) return undefined;
+  const reward = typeof item.rewardUsdc === "string" && Number.isFinite(Number(item.rewardUsdc)) ? { amount: Number(item.rewardUsdc), currency: "USDC", type: "FIXED" as const } : typeof item.price === "number" ? { amount: item.price, currency: "USDC", type: "FIXED" as const } : { type: "UNKNOWN" as const };
+  const description = [item.description, item.completionCriteria].filter((x): x is string => typeof x === "string").join("\n\n");
+  return { source, sourceItemId: item.id === undefined ? undefined : String(item.id), sourceUrl: typeof item.id === "number" || typeof item.id === "string" ? `https://www.openbounty.app/bounties/${item.id}` : "https://www.openbounty.app/bounties", title, description, type: /code|software|api|research|data/i.test(`${title} ${description}`) ? "RESEARCH" : "BOUNTY", reward, deadline: typeof item.expiresAt === "string" ? item.expiresAt : undefined, requiredCapabilities: [typeof item.category === "string" ? item.category.toLowerCase() : "research"], metadata: { marketplace: "Open Bounty", requiresApplication: true, requiresProposal: true, requiresAccount: true, requiresAuthentication: true, requiresIdentity: true, requiresSubmission: true, requiresWallet: true, requiresOnchainAction: true, paymentNetwork: typeof item.paymentNetwork === "string" ? item.paymentNetwork : "eip155:8453", paymentMetadata: item.payment } };
+}
+
 /** Public, read-only AgentWork catalog adapter. It never registers, applies, messages, or pays. */
 export class AgentWorkPublicOpportunitySource implements OpportunitySource {
   readonly id = "agentwork-public";

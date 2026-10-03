@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { openDatabase } from "../db/client.js";
 import { StateStore } from "../memory/state-store.js";
-import { AgentWorkPublicOpportunitySource, DeterministicFixtureOpportunitySource, GitHubPublicOpportunitySource } from "./sources.js";
+import { AgentWorkPublicOpportunitySource, DeterministicFixtureOpportunitySource, GitHubPublicOpportunitySource, OpenBountyPublicOpportunitySource } from "./sources.js";
 import { OpportunityEngine } from "./engine.js";
 import { normalizeOpportunity } from "./normalizer.js";
 import { StateOpportunityStore } from "./store.js";
@@ -59,5 +59,16 @@ describe("opportunity engine", () => {
     expect(result.items).toHaveLength(1);
     expect(result.items[0]?.reward?.amount).toBe(5);
     expect(result.items[0]?.metadata).toMatchObject({ requiresApplication: true, requiresAuthentication: true, requiresSubmission: true });
+  });
+
+  it("discovers explicit Open Bounty rewards without enabling mutation", async () => {
+    const source = new OpenBountyPublicOpportunitySource({ fetchImpl: async () => new Response(JSON.stringify({ data: [{ id: 42, title: "Research a public API", description: "Return a report", category: "Research", rewardUsdc: "5", expiresAt: "2026-12-01T00:00:00.000Z" }] }), { status: 200 }) });
+    const result = await source.discover();
+    expect(result.errors).toEqual([]); expect(result.items[0]?.reward).toMatchObject({ amount: 5, currency: "USDC" }); expect(result.items[0]?.metadata).toMatchObject({ requiresWallet: true, requiresOnchainAction: true });
+  });
+
+  it("preserves an HTTP failure as a source error", async () => {
+    const result = await new OpenBountyPublicOpportunitySource({ fetchImpl: async () => new Response("down", { status: 503 }) }).discover();
+    expect(result.items).toEqual([]); expect(result.errors[0]).toContain("HTTP 503");
   });
 });

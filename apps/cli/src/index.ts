@@ -384,6 +384,18 @@ const providers = program.command("providers").description("Manage compute provi
 
 const opportunities = program.command("opportunities").description("Discover and inspect economic opportunities without taking external action");
 
+const work = program.command("work").description("Manage persistent real-work runs without bypassing approval gates");
+
+work.command("list").description("List work runs").action(async () => { const runtime = createBeyonderRuntime(loadConfig()); console.log(JSON.stringify(await runtime.workRunManager.list(), null, 2)); runtime.sqlite.close(); });
+work.command("inspect").argument("<work-run-id>").description("Inspect one work run").action(async (id: string) => { const runtime = createBeyonderRuntime(loadConfig()); console.log(JSON.stringify(await runtime.workRunManager.inspect(id) ?? { id, status: "NOT_FOUND" }, null, 2)); runtime.sqlite.close(); });
+work.command("status").argument("<work-run-id>").description("Show current work-run state").action(async (id: string) => { const runtime = createBeyonderRuntime(loadConfig()); const run = await runtime.workRunManager.inspect(id); console.log(JSON.stringify(run ? { id: run.id, state: run.state, opportunityId: run.opportunityId, taskId: run.taskId, estimatedRewardUsd: run.estimatedRewardUsd, simulatedRewardUsd: run.simulatedRewardUsd ?? 0, realizedRewardUsd: run.realizedRewardUsd, monetaryCostUsd: run.monetaryCostUsd, shadowCostUsd: run.shadowCostUsd } : { id, status: "NOT_FOUND" }, null, 2)); runtime.sqlite.close(); });
+work.command("start").argument("<opportunity-id>").description("Create a work run and prepare its application").action(async (opportunityId: string) => { const runtime = createBeyonderRuntime(loadConfig()); const created = await runtime.workRunManager.start(opportunityId); const run = await runtime.workRunManager.prepareApplication(created.id); console.log(JSON.stringify(run, null, 2)); runtime.sqlite.close(); });
+work.command("send-application").argument("<work-run-id>").description("Send an approved application through the configured adapter").action(async (id: string) => { const runtime = createBeyonderRuntime(loadConfig()); console.log(JSON.stringify(await runtime.workRunManager.sendApplication(id), null, 2)); runtime.sqlite.close(); });
+work.command("settlement").argument("<work-run-id>").description("Inspect settlement state and realized revenue").action(async (id: string) => { const runtime = createBeyonderRuntime(loadConfig()); const run = await runtime.workRunManager.inspect(id); console.log(JSON.stringify({ workRunId: id, state: run?.state, settlement: run?.settlement, realizedRewardUsd: run?.realizedRewardUsd ?? 0 }, null, 2)); runtime.sqlite.close(); });
+work.command("record-settlement").argument("<work-run-id>").requiredOption("--amount <amount>", "explicit settled amount").requiredOption("--currency <currency>", "USD or USDC").option("--source <source>", "provenance source").option("--reference <reference>", "external payment reference").option("--observed-at <timestamp>", "observation timestamp").description("Record explicit settlement evidence; never mark paid without provenance").action(async (id: string, options: { amount: string; currency: string; source?: string; reference?: string; observedAt?: string }) => { const runtime = createBeyonderRuntime(loadConfig()); const run = await runtime.workRunManager.recordSettlement(id, { type: options.reference ? "EXTERNAL_REFERENCE" : "MANUAL_CONFIRMED", amount: Number(options.amount), currency: options.currency, source: options.source, externalReference: options.reference, observedAt: options.observedAt ?? new Date().toISOString() }); console.log(JSON.stringify(run, null, 2)); runtime.sqlite.close(); });
+
+economy.command("revenue").description("Report realized versus simulated revenue from persistent work runs").action(async () => { const runtime = createBeyonderRuntime(loadConfig()); const runs = await runtime.workRunManager.list(); console.log(JSON.stringify({ realizedRevenueUsd: runs.reduce((sum, run) => sum + run.realizedRewardUsd, 0), simulatedRevenueUsd: runs.reduce((sum, run) => sum + (run.simulatedRewardUsd ?? 0), 0), activeWork: runs.filter((run) => !["COMPLETED", "FAILED", "CANCELLED", "EXPIRED"].includes(run.state)).length, awaitingApproval: runs.filter((run) => ["AWAITING_APPLICATION_APPROVAL", "AWAITING_SUBMISSION_APPROVAL"].includes(run.state)).length, awaitingSettlement: runs.filter((run) => run.state === "AWAITING_SETTLEMENT").length, totalRealMonetaryCostUsd: runs.reduce((sum, run) => sum + run.monetaryCostUsd, 0) }, null, 2)); runtime.sqlite.close(); });
+
 const approvals = program.command("approvals").description("Inspect and decide explicit, single-use external-action approvals");
 
 approvals
@@ -478,6 +490,15 @@ opportunities
       economicState: classifyEconomicState(summary)
     }, runtime.opportunityStore).evaluate(opportunity);
     console.log(JSON.stringify(evaluation, null, 2));
+    runtime.sqlite.close();
+  });
+
+opportunities
+  .command("health")
+  .description("Show operational health and reliability history for discovery sources")
+  .action(async () => {
+    const runtime = createBeyonderRuntime(loadConfig());
+    console.log(JSON.stringify(await runtime.sourceReliability.all(), null, 2));
     runtime.sqlite.close();
   });
 

@@ -2,8 +2,8 @@ import type { AuditLog } from "../audit/audit-log.js";
 import type { Opportunity, PreparedApplication } from "./contracts.js";
 import { ApprovalGate, type ApprovalRequest } from "./approval.js";
 
-export interface ApplicationAdapter { apply(opportunity: Opportunity, application: PreparedApplication): Promise<{ status: "APPLICATION_SENT"; externalId?: string }>; }
-export interface SubmissionAdapter { submit(opportunity: Opportunity, taskId: string, deliverable: string): Promise<{ status: "COMPLETED"; evidence: string }>; }
+export interface ApplicationAdapter { apply(opportunity: Opportunity, application: PreparedApplication, context?: { idempotencyKey: string }): Promise<{ status: "APPLICATION_SENT"; externalId?: string }>; }
+export interface SubmissionAdapter { submit(opportunity: Opportunity, taskId: string, deliverable: string, context?: { idempotencyKey: string }): Promise<{ status: "COMPLETED"; evidence: string }>; }
 export class FixtureApplicationAdapter implements ApplicationAdapter { async apply(opportunity: Opportunity) { return { status: "APPLICATION_SENT" as const, externalId: `fixture-application:${opportunity.id}` }; } }
 export class FixtureSubmissionAdapter implements SubmissionAdapter { async submit(opportunity: Opportunity, taskId: string) { return { status: "COMPLETED" as const, evidence: `fixture-submission:${opportunity.id}:${taskId}` }; } }
 
@@ -28,7 +28,7 @@ export class OpportunityBridge {
 
   async apply(opportunity: Opportunity, application: PreparedApplication, approvalId: string, taskId?: string) {
     await this.gate.consume(approvalId, "APPLY_TO_OPPORTUNITY", opportunity.id, taskId);
-    const result = await this.application.apply(opportunity, application);
+    const result = await this.application.apply(opportunity, application, { idempotencyKey: `opportunity:${opportunity.id}:application` });
     await this.audit?.record("info", "opportunity.application_sent", { opportunityId: opportunity.id, approvalId, ...result });
     return result;
   }
@@ -41,7 +41,7 @@ export class OpportunityBridge {
 
   async submit(opportunity: Opportunity, taskId: string, deliverable: string, approvalId: string) {
     await this.gate.consume(approvalId, "SUBMIT_DELIVERABLE", opportunity.id, taskId);
-    const result = await this.submission.submit(opportunity, taskId, deliverable);
+    const result = await this.submission.submit(opportunity, taskId, deliverable, { idempotencyKey: `opportunity:${opportunity.id}:task:${taskId}:submission` });
     await this.audit?.record("info", "deliverable.submitted", { opportunityId: opportunity.id, taskId, approvalId, evidence: result.evidence, realizedRewardUsd: 0 });
     return result;
   }

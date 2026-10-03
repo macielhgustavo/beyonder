@@ -19,10 +19,12 @@ import { LlmPlanner } from "./tasks/llm-planner.js";
 import { StateTaskCheckpointStore } from "./tasks/checkpoints.js";
 import { StateOpportunityStore } from "./opportunities/store.js";
 import { OpportunityEngine } from "./opportunities/engine.js";
-import { DeterministicFixtureOpportunitySource, GitHubPublicOpportunitySource, AgentWorkPublicOpportunitySource } from "./opportunities/sources.js";
+import { DeterministicFixtureOpportunitySource, GitHubPublicOpportunitySource, AgentWorkPublicOpportunitySource, OpenBountyPublicOpportunitySource } from "./opportunities/sources.js";
 import { OpportunityEvaluator, OpportunityQueue } from "./opportunities/evaluator.js";
 import { ApprovalGate } from "./opportunities/approval.js";
 import { FixtureApplicationAdapter, FixtureSubmissionAdapter, OpportunityBridge } from "./opportunities/bridge.js";
+import { SourceReliabilityStore } from "./opportunities/source-health.js";
+import { StateWorkRunStore, WorkRunManager } from "./opportunities/work-run.js";
 import type { ToolContext, ToolDescriptor, ToolExecutor, ToolRegistry } from "@beyonder/tools";
 
 export interface BeyonderRuntime {
@@ -50,6 +52,9 @@ export interface BeyonderRuntime {
   opportunityQueue: OpportunityQueue;
   approvals: ApprovalGate;
   opportunityBridge: OpportunityBridge;
+  sourceReliability: SourceReliabilityStore;
+  workRuns: StateWorkRunStore;
+  workRunManager: WorkRunManager;
   agent: AgentLoop;
 }
 
@@ -75,15 +80,19 @@ export function createRuntime(config: AppConfig, options: RuntimeOptions = {}): 
   const checkpoints = new StateTaskCheckpointStore(state);
   const planner = new LlmPlanner({ modelRouter, memory });
   const opportunityStore = new StateOpportunityStore(state);
+  const sourceReliability = new SourceReliabilityStore(state);
   const opportunities = new OpportunityEngine([
     new DeterministicFixtureOpportunitySource(),
     new GitHubPublicOpportunitySource(),
-    new AgentWorkPublicOpportunitySource()
-  ], opportunityStore, audit);
+    new AgentWorkPublicOpportunitySource(),
+    new OpenBountyPublicOpportunitySource()
+  ], opportunityStore, audit, sourceReliability);
   const opportunityEvaluator = new OpportunityEvaluator({ memory }, opportunityStore);
   const opportunityQueue = new OpportunityQueue(opportunityStore);
   const approvals = new ApprovalGate(state, audit);
   const opportunityBridge = new OpportunityBridge(approvals, new FixtureApplicationAdapter(), new FixtureSubmissionAdapter(), audit);
+  const workRuns = new StateWorkRunStore(state);
+  const workRunManager = new WorkRunManager(workRuns, opportunityStore, opportunityBridge, approvals, audit, memory);
   const taskExecutorWithPlanner = new AutonomousTaskExecutor({
     memory,
     modelRouter,
@@ -131,6 +140,9 @@ export function createRuntime(config: AppConfig, options: RuntimeOptions = {}): 
     opportunityQueue,
     approvals,
     opportunityBridge,
+    sourceReliability,
+    workRuns,
+    workRunManager,
     agent
   };
 }

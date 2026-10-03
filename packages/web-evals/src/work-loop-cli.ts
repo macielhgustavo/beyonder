@@ -1,0 +1,42 @@
+import { openDatabase, StateStore, StateOpportunityStore, StateWorkRunStore, ApprovalGate, OpportunityBridge, FixtureApplicationAdapter, FixtureSubmissionAdapter, WorkRunManager, OpportunityEvaluator, normalizeOpportunity, AutonomousTaskExecutor, type Plan } from "@beyonder/runtime";
+import { DefaultToolPolicy, ToolExecutor, ToolRegistry, ToolRisk, ToolSideEffect, createToolInputSchema, type ToolDefinition } from "@beyonder/tools";
+
+const { db, sqlite } = openDatabase(":memory:");
+const state = new StateStore(db);
+const opportunityStore = new StateOpportunityStore(state);
+const workRuns = new StateWorkRunStore(state);
+const approvals = new ApprovalGate(state);
+const bridge = new OpportunityBridge(approvals, new FixtureApplicationAdapter(), new FixtureSubmissionAdapter());
+const manager = new WorkRunManager(workRuns, opportunityStore, bridge, approvals);
+const opportunity = normalizeOpportunity({ source: "fixture-marketplace", sourceItemId: "five-dollar", sourceUrl: "https://fixture.invalid/jobs/five-dollar", title: "Five dollar coding opportunity", description: "Implement and test a small TypeScript change.", type: "CODING", reward: { amount: 5, currency: "USD", type: "FIXED" }, requiredCapabilities: ["coding"], metadata: { requiresApplication: true, requiresSubmission: true } }, "2026-10-03T00:00:00.000Z");
+await opportunityStore.upsert(opportunity);
+const evaluation = await new OpportunityEvaluator({ economicState: "survival" }, opportunityStore).evaluate(opportunity);
+const created = await manager.start(opportunity.id);
+let run = await manager.prepareApplication(created.id);
+let deniedApplication = false;
+try { await manager.sendApplication(run.id); } catch { deniedApplication = true; }
+await approvals.approve(run.application!.approvalId!);
+run = await manager.sendApplication(run.id);
+run = await manager.markWorkAvailable(run.id);
+run = await manager.beginExecution(run.id, "task-five-dollar");
+const schema = createToolInputSchema((input) => ({ success: true as const, data: input }));
+const definition: ToolDefinition = { id: "fixture.work", name: "Fixture work", description: "Complete deterministic work", inputSchema: schema, risk: ToolRisk.LOW, sideEffects: ToolSideEffect.READ, capabilities: ["fixture"], execute: async (input) => ({ output: { ok: true, input } }) };
+const registry = new ToolRegistry().register(definition);
+const executor = new ToolExecutor(registry, { policy: new DefaultToolPolicy() });
+const taskExecutor = new AutonomousTaskExecutor({ toolExecutor: executor, getAvailableTools: (context) => registry.getAvailableTools(context, executor.policy) });
+const task = { id: "task-five-dollar", input: "Complete the coding opportunity", type: "coding" as const, complexity: 0.2, risk: 0.1, estimatedTokens: 100, requirements: {} };
+const plan: Plan = { id: "plan-five-dollar", taskId: task.id, objective: task.input, createdAt: new Date().toISOString(), revision: 1, steps: [{ id: "work", description: "Complete work", status: "PENDING", allowedToolCapabilities: ["fixture"], action: { id: "call-work", tool: "fixture.work", arguments: { value: "done" } } }] };
+const execution = await taskExecutor.execute({ task, plan, economicState: "normal" });
+run = await manager.completeExecution(run.id, { taskId: task.id, status: execution.status, plan, completedSteps: ["work"], retries: 0, replans: 0, monetaryCostUsd: execution.execution.usage.monetaryCostUsd, shadowCostUsd: execution.execution.usage.shadowCostUsd, completionEvidence: execution.result });
+run = await manager.createDeliverable(run.id, { type: "CODE", summary: "Tested TypeScript change", text: "fixture deliverable" });
+run = await manager.verifyDeliverable(run.id, "PASS", "fixture verification passed");
+run = await manager.requestSubmissionApproval(run.id);
+let deniedSubmission = false;
+try { await manager.submit(run.id); } catch { deniedSubmission = true; }
+const submissionApprovalId = run.deliverable!.metadata!.submissionApprovalId as string;
+await approvals.approve(submissionApprovalId);
+run = await manager.submit(run.id);
+const beforeSettlement = run.realizedRewardUsd;
+run = await manager.recordSettlement(run.id, { type: "EXTERNAL_REFERENCE", amount: 5, currency: "USD", source: "fixture-marketplace", externalReference: "fixture-payment-5", observedAt: new Date().toISOString() });
+console.log(JSON.stringify({ evaluation: { feasibility: evaluation.feasibility, decision: evaluation.decision }, workRunId: run.id, deniedApplication, deniedSubmission, state: run.state, submittedState: "AWAITING_SETTLEMENT", realizedBeforeEvidence: beforeSettlement, realizedAfterEvidence: run.realizedRewardUsd, settlement: run.settlement, executionStatus: execution.status, monetaryCostUsd: run.monetaryCostUsd }, null, 2));
+sqlite.close();

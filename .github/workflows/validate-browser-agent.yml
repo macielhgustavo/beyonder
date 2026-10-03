@@ -1,0 +1,38 @@
+name: validate-browser-agent
+
+on:
+  push:
+    branches:
+      - feat/browser-agent
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install workspace
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Test full suite
+        run: pnpm test
+      - name: Install Playwright for browser validation
+        run: pnpm add -D playwright@1.55.0 --filter @beyonder/browser-agent --lockfile=false
+      - name: Install Chromium
+        run: pnpm --filter @beyonder/browser-agent exec playwright install --with-deps chromium
+      - name: Deterministic Playwright integration
+        env:
+          BEYONDER_BROWSER_E2E: "1"
+        run: pnpm exec vitest run packages/browser-agent/src/browser-agent.e2e.test.ts
+      - name: Read-only public smoke
+        run: pnpm -s browser:smoke

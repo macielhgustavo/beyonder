@@ -1,1 +1,1 @@
-{"extends":"../../tsconfig.base.json","compilerOptions":{"rootDir":"src","outDir":"dist","tsBuildInfoFile":"dist/tsconfig.tsbuildinfo"},"references":[{"path":"../../packages/runtime"},{"path":"../../packages/compute"},{"path":"../../packages/credentials"}]}
+{"extends":"../../tsconfig.base.json","compilerOptions":{"rootDir":"src","outDir":"dist","tsBuildInfoFile":"dist/tsconfig.tsbuildinfo"},"references":[{"path":"../../packages/runtime"},{"path":"../../packages/compute"},{"path":"../../packages/credentials"},{"path":"../../packages/benchmark"}]}

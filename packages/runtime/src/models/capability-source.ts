@@ -2,15 +2,29 @@ import type { IntelligenceTaskType } from "../intelligence/contracts.js";
 import type { HistoricalPerformance } from "./adaptive-types.js";
 import { ROUTER_CONFIG } from "./router-config.js";
 
+export interface ModelCapabilityRequest {
+  provider: string;
+  model: string;
+  taskType: IntelligenceTaskType;
+}
+
+export interface ModelCapabilityEvidence {
+  score: number;
+  samples: number;
+  source: "BIB";
+  updatedAt?: string;
+}
+
 export interface ModelCapabilitySource {
-  getCapabilityScore(input: {
-    provider: string;
-    model: string;
-    taskType: IntelligenceTaskType;
-  }): Promise<number | null>;
+  getCapability(input: ModelCapabilityRequest): Promise<ModelCapabilityEvidence | null>;
+  getCapabilityScore(input: ModelCapabilityRequest): Promise<number | null>;
 }
 
 export class NullCapabilitySource implements ModelCapabilitySource {
+  async getCapability(): Promise<ModelCapabilityEvidence | null> {
+    return null;
+  }
+
   async getCapabilityScore(): Promise<number | null> {
     return null;
   }

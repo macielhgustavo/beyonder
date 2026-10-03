@@ -118,6 +118,7 @@ export class ModelRouter {
       lastUpdatedAt: "unknown"
     };
     const predictedQuality = performance.samples > 0 ? performance.avgEvaluationScore : ROUTER_CONFIG.qualityClassDefaults.unknown;
+    const realScore = performance.samples > 0 ? Math.min(1, Math.max(0, (performance.avgEvaluationScore + performance.successRate) / 2)) : null;
     const failureRisk = performance.samples > 0 ? performance.failures / performance.samples : 0.08;
     const reliability = 1 - failureRisk;
     const latencyPenalty = performance.avgLatencyMs > 0
@@ -157,6 +158,15 @@ export class ModelRouter {
       utility,
       quota,
       performance,
+      benchmarkCapability: null,
+      capabilityEvidence: {
+        bibScore: null,
+        bibSamples: 0,
+        realScore,
+        realSamples: performance.samples,
+        predictedScore: predictedQuality,
+        source: performance.samples > 0 ? "outcomes" : "metadata"
+      },
       explanation: {
         positives: [
           { signal: `${task.type} capability`, value: predictedQuality },

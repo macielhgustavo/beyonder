@@ -33,6 +33,7 @@ const envSchema = z.object({
   BEYONDER_MODEL_PROVIDER: z.enum(["auto", "none", "ollama", "openai-compatible"]).default("auto"),
   BEYONDER_MODEL_NAME: z.string().default("llama3.2"),
   BEYONDER_PROVIDER_STATE_PATH: z.string().default(".providers-vault/autopilot-state.json"),
+  BEYONDER_BENCHMARK_DB_PATH: z.string().default("./data/beyonder-benchmark.sqlite"),
   OLLAMA_BASE_URL: z.string().url().default("http://localhost:11434"),
   OPENAI_COMPAT_BASE_URL: z.string().optional().default(""),
   OPENAI_COMPAT_API_KEY: z.string().optional().default("")
@@ -63,6 +64,7 @@ export function loadConfig(overrides: Partial<Record<string, string>> = {}) {
       provider: parsed.BEYONDER_MODEL_PROVIDER,
       name: parsed.BEYONDER_MODEL_NAME,
       providerStatePath: parsed.BEYONDER_PROVIDER_STATE_PATH,
+      benchmarkDbPath: parsed.BEYONDER_BENCHMARK_DB_PATH,
       ollamaBaseUrl: parsed.OLLAMA_BASE_URL,
       openAiCompatBaseUrl: parsed.OPENAI_COMPAT_BASE_URL,
       openAiCompatApiKey: parsed.OPENAI_COMPAT_API_KEY

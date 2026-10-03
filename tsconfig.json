@@ -9,6 +9,7 @@
     { "path": "packages/tools" },
     { "path": "packages/audit" },
     { "path": "packages/runtime" },
+    { "path": "packages/benchmark" },
     { "path": "apps/cli" }
   ],
   "compilerOptions": {

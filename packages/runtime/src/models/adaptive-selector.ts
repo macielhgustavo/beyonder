@@ -3,7 +3,7 @@ import type { IntelligenceTask } from "../intelligence/contracts.js";
 import type { EconomicState } from "../types.js";
 import type { ModelCapabilitySource } from "./capability-source.js";
 import { NullCapabilitySource, predictCapability } from "./capability-source.js";
-import type { ModelCandidate, RouteDecision, RouterTelemetry } from "./adaptive-types.js";
+import type { CapabilityPredictionEvidence, HistoricalPerformance, ModelCandidate, RouteDecision, RouterTelemetry } from "./adaptive-types.js";
 import type { PerformanceRepository } from "./performance-repository.js";
 import { EmptyPerformanceRepository } from "./performance-repository.js";
 import type { QuotaSource } from "./quota.js";
@@ -64,15 +64,27 @@ export class AdaptiveModelSelector {
 
     for (const pair of viablePairs) {
       const performance = await this.performance.get(pair.entry.providerId, pair.model, task.type);
-      const benchmarkPrior = await this.capabilitySource.getCapabilityScore({
+      const benchmarkCapability = await this.capabilitySource.getCapability({
         provider: pair.entry.providerId,
         model: pair.model,
         taskType: task.type
       });
       const predictedQuality = predictCapability({
-        benchmarkPrior,
+        benchmarkPrior: benchmarkCapability?.score,
         performance,
         metadataQualityClass: pair.entry.qualityClass
+      });
+      const capabilityEvidence = predictionEvidence(predictedQuality, benchmarkCapability, performance);
+      await this.telemetry("debug", "capability.resolved", {
+        provider: pair.entry.providerId,
+        model: pair.model,
+        taskType: task.type,
+        bibScore: capabilityEvidence.bibScore,
+        bibSamples: capabilityEvidence.bibSamples,
+        realScore: capabilityEvidence.realScore,
+        realSamples: capabilityEvidence.realSamples,
+        predictedScore: capabilityEvidence.predictedScore,
+        source: capabilityEvidence.source
       });
       const quota = await this.quotaSource.get(pair.entry.providerId, pair.model);
       if (quota.health === "unknown") {
@@ -127,9 +139,15 @@ export class AdaptiveModelSelector {
         utility,
         quota,
         performance,
+        benchmarkCapability,
+        capabilityEvidence,
         explanation: {
           positives: [
             { signal: `${task.type} capability`, value: predictedQuality },
+            { signal: "BIB prior", value: benchmarkCapability ? benchmarkCapability.score : "N/A" },
+            { signal: "BIB samples", value: benchmarkCapability ? benchmarkCapability.samples : 0 },
+            { signal: "real-world score", value: capabilityEvidence.realScore ?? "N/A" },
+            { signal: "real samples", value: performance.samples },
             { signal: "historical success", value: performance.successRate },
             { signal: "reliability", value: reliability },
             { signal: "monetary cost", value: "$0" }
@@ -218,6 +236,7 @@ function serializeCandidate(candidate: ModelCandidate, taskId: string): Record<s
     provider: candidate.provider,
     model: candidate.model,
     predictedQuality: candidate.predictedQuality,
+    capabilityEvidence: candidate.capabilityEvidence,
     historicalSuccess: candidate.historicalSuccess,
     reliability: candidate.reliability,
     monetaryCostUsd: candidate.monetaryCostUsd,
@@ -231,4 +250,27 @@ function serializeCandidate(candidate: ModelCandidate, taskId: string): Record<s
 
 function clamp(value: number): number {
   return Math.max(0, Math.min(1, value));
+}
+
+function predictionEvidence(
+  predictedScore: number,
+  benchmarkCapability: ModelCandidate["benchmarkCapability"],
+  performance: HistoricalPerformance
+): CapabilityPredictionEvidence {
+  const realScore = performance.samples > 0 ? clamp((performance.avgEvaluationScore + performance.successRate) / 2) : null;
+  const source = benchmarkCapability && performance.samples > 0
+    ? "BIB + outcomes"
+    : benchmarkCapability
+      ? "BIB"
+      : performance.samples > 0
+        ? "outcomes"
+        : "metadata";
+  return {
+    bibScore: benchmarkCapability?.score ?? null,
+    bibSamples: benchmarkCapability?.samples ?? 0,
+    realScore,
+    realSamples: performance.samples,
+    predictedScore,
+    source
+  };
 }

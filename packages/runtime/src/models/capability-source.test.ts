@@ -31,4 +31,16 @@ describe("predicted capability", () => {
     expect(learned).toBeLessThan(priorOnly);
     expect(learned).toBeGreaterThan(0.6);
   });
+
+  it("uses real outcomes alone when no BIB prior exists", () => {
+    const predicted = predictCapability({ benchmarkPrior: null, performance: performance(10, 0.8, 0.8), metadataQualityClass: "unknown" });
+    expect(predicted).toBeGreaterThan(0.5);
+  });
+
+  it("lets real-world evidence dominate as samples grow", () => {
+    const few = predictCapability({ benchmarkPrior: 0.95, performance: performance(1, 0.4, 0.4), metadataQualityClass: "unknown" });
+    const many = predictCapability({ benchmarkPrior: 0.95, performance: performance(100, 0.4, 0.4), metadataQualityClass: "unknown" });
+    expect(few).toBeGreaterThan(many);
+    expect(many).toBeCloseTo(0.51);
+  });
 });

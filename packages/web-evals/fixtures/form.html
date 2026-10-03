@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Form Fixture</title></head>
+<body>
+  <main>
+    <h1>Search</h1>
+    <form id="search-form">
+      <label for="name">Name</label>
+      <input id="name" name="name" autocomplete="off">
+      <button id="search" type="submit">Search</button>
+    </form>
+    <p id="result" aria-live="polite"></p>
+  </main>
+  <script>
+    document.querySelector('#search-form').addEventListener('submit', (event) => {
+      event.preventDefault();
+      const value = document.querySelector('#name').value;
+      document.body.dataset.searched = value;
+      document.querySelector('#result').textContent = `Search submitted: ${value}`;
+    });
+  </script>
+</body>
+</html>

@@ -1,6 +1,6 @@
 import type { IntelligenceTaskType, ModelCapabilityEvidence, ModelCapabilityRequest, ModelCapabilitySource } from "@beyonder/runtime";
 import { BenchmarkStore } from "../persistence/store.js";
-import type { BenchmarkCategory } from "../types.js";
+import type { BenchmarkCategory, BenchmarkSummary } from "../types.js";
 
 const TASK_TO_BENCHMARK_CATEGORY: Partial<Record<IntelligenceTaskType, BenchmarkCategory>> = {
   reasoning: "reasoning",
@@ -13,16 +13,22 @@ const TASK_TO_BENCHMARK_CATEGORY: Partial<Record<IntelligenceTaskType, Benchmark
 };
 
 export class BibModelCapabilitySource implements ModelCapabilitySource {
-  constructor(private readonly benchmarkStore: BenchmarkStore) {}
+  private readonly summaries: BenchmarkSummary[];
+
+  constructor(benchmarkStore: BenchmarkStore) {
+    try {
+      this.summaries = benchmarkStore.summaries();
+    } finally {
+      benchmarkStore.close();
+    }
+  }
 
   async getCapability(input: ModelCapabilityRequest): Promise<ModelCapabilityEvidence | null> {
     const category = TASK_TO_BENCHMARK_CATEGORY[input.taskType];
     if (!category) return null;
-    const summary = this.benchmarkStore.getModelCapability({
-      provider: input.provider,
-      model: input.model,
-      category
-    });
+    const summary = this.summaries.find(
+      (entry) => entry.provider === input.provider && entry.model === input.model && entry.category === category
+    );
     if (!summary || summary.avgQuality == null || summary.evaluatedSamples === 0) return null;
     return {
       score: summary.avgQuality,

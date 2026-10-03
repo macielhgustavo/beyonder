@@ -12,7 +12,10 @@ function buildInventoryEntry(provider: ProviderCatalogEntry, state: AutopilotSta
   const human = progress?.state === "HUMAN_GATE";
   const skipped = progress?.state === "SKIPPED";
   const failed = progress?.state === "FAILED";
-  const models = progress?.validation?.models?.length ? progress.validation.models : provider.knownFreeModels;
+  const validatedModels = progress?.validation?.models;
+  const models = provider.id === "nvidia-nim"
+    ? validatedModels ?? []
+    : validatedModels?.length ? validatedModels : provider.knownFreeModels;
   return {
     providerId: provider.id,
     providerName: provider.name,

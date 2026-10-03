@@ -7,37 +7,44 @@ import { summarizeResults } from "../scoring/index.js";
 
 export class BenchmarkStore {
   readonly sqlite: Database.Database;
+  private closed = false;
 
   constructor(path = "./data/beyonder-benchmark.sqlite") {
     if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
     this.sqlite = new Database(path);
-    this.sqlite.pragma("journal_mode = WAL");
-    this.sqlite.exec(`
-      CREATE TABLE IF NOT EXISTS benchmark_results (
-        id TEXT PRIMARY KEY,
-        case_id TEXT NOT NULL,
-        provider TEXT NOT NULL,
-        model TEXT NOT NULL,
-        category TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'FAIL',
-        quality REAL,
-        success INTEGER,
-        latency_ms INTEGER,
-        monetary_cost REAL NOT NULL DEFAULT 0,
-        tokens INTEGER,
-        attempts INTEGER NOT NULL DEFAULT 1,
-        http_status INTEGER,
-        error_code TEXT,
-        failure_reason TEXT,
-        timestamp TEXT NOT NULL
-      );
-      CREATE INDEX IF NOT EXISTS benchmark_results_lookup
-        ON benchmark_results(provider, model, category, timestamp);
-    `);
-    this.migrateLegacySchema();
+    try {
+      this.sqlite.pragma("journal_mode = WAL");
+      this.sqlite.exec(`
+        CREATE TABLE IF NOT EXISTS benchmark_results (
+          id TEXT PRIMARY KEY,
+          case_id TEXT NOT NULL,
+          provider TEXT NOT NULL,
+          model TEXT NOT NULL,
+          category TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'FAIL',
+          quality REAL,
+          success INTEGER,
+          latency_ms INTEGER,
+          monetary_cost REAL NOT NULL DEFAULT 0,
+          tokens INTEGER,
+          attempts INTEGER NOT NULL DEFAULT 1,
+          http_status INTEGER,
+          error_code TEXT,
+          failure_reason TEXT,
+          timestamp TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS benchmark_results_lookup
+          ON benchmark_results(provider, model, category, timestamp);
+      `);
+      this.migrateLegacySchema();
+    } catch (error) {
+      this.close();
+      throw error;
+    }
   }
 
   saveResults(results: BenchmarkResult[]): void {
+    this.assertOpen();
     const insert = this.sqlite.prepare(`
       INSERT INTO benchmark_results (
         id, case_id, provider, model, category, status, quality, success, latency_ms,
@@ -67,6 +74,7 @@ export class BenchmarkStore {
   }
 
   listResults(): BenchmarkResult[] {
+    this.assertOpen();
     const statement = this.sqlite.prepare("SELECT * FROM benchmark_results ORDER BY timestamp DESC");
     const rows = statement.all() as StoredBenchmarkResult[];
     return rows.map(fromRow);
@@ -85,7 +93,16 @@ export class BenchmarkStore {
   }
 
   close(): void {
+    if (this.closed || !this.sqlite.open) {
+      this.closed = true;
+      return;
+    }
     this.sqlite.close();
+    this.closed = true;
+  }
+
+  private assertOpen(): void {
+    if (this.closed || !this.sqlite.open) throw new Error("BenchmarkStore is closed.");
   }
 
   private migrateLegacySchema(): void {

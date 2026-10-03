@@ -14,6 +14,16 @@ pnpm --filter @beyonder/dashboard dev
 
 The server binds to `127.0.0.1` by default. It is not exposed publicly.
 
+## Validation
+
+```bash
+pnpm dashboard:typecheck
+pnpm dashboard:test
+pnpm dashboard:build
+```
+
+CI uses `pnpm install --frozen-lockfile`, runs all three checks, boots the built dashboard locally and captures the demo-mode screenshots used for visual verification.
+
 ## Data sources
 
 `DashboardDataSource` is the stability boundary between UI and runtime internals.

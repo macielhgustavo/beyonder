@@ -1,0 +1,57 @@
+name: validate-intelligence-memory-v2
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [feat/intelligence-memory-v2]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+      - name: Zero-cost end-to-end flow
+        env:
+          BEYONDER_DB_PATH: /tmp/beyonder-ci.sqlite
+          BEYONDER_MODEL_PROVIDER: none
+          BEYONDER_USE_SIMULATED_CAPITAL: "true"
+          BEYONDER_SIMULATED_CAPITAL_USD: "0"
+          BEYONDER_TOOLS_ENABLED: "false"
+        run: |
+          output=$(pnpm beyonder run "Inspect runtime readiness without side effects" --steps 1)
+          echo "$output"
+          echo "$output" | grep -q '"expectedCostUsd": 0'
+      - name: Memory stats CLI
+        env:
+          BEYONDER_DB_PATH: /tmp/beyonder-ci.sqlite
+          BEYONDER_MODEL_PROVIDER: none
+        run: pnpm beyonder memory stats
+      - name: Intelligence inspect CLI
+        env:
+          BEYONDER_DB_PATH: /tmp/beyonder-ci.sqlite
+          BEYONDER_MODEL_PROVIDER: none
+        run: pnpm beyonder intelligence inspect "Implement a safe TypeScript parser with tests"
+      - name: Sensitive runtime paths are not versioned
+        shell: bash
+        run: |
+          tracked=$(git ls-files '.env' '.providers-vault/*' '*.sqlite' '*.sqlite3' '*.db')
+          if [ -n "$tracked" ]; then
+            echo "Sensitive runtime files are tracked:"
+            echo "$tracked"
+            exit 1
+          fi

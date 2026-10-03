@@ -10,8 +10,9 @@
   "scripts": {
     "build": "tsc -b",
     "typecheck": "tsc -b --pretty false",
-    "test": "pnpm test:compute && pnpm test:integration",
+    "test": "pnpm test:compute && pnpm test:runtime && pnpm test:integration",
     "test:compute": "tsx --test packages/compute/src/*.test.ts",
+    "test:runtime": "vitest run packages/runtime/src/**/*.test.ts",
     "test:integration": "vitest run tests/integration",
     "start": "tsx apps/cli/src/index.ts",
     "beyonder": "tsx apps/cli/src/index.ts",

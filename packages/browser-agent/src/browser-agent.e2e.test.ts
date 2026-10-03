@@ -34,10 +34,10 @@ suite("BrowserAgent Playwright deterministic integration", () => {
     expect(opened).toMatchObject({ status: "ok", observation: { title: "Beyonder Browser Fixture" } });
 
     const fill = await agent.execute(sessionId, { type: "fill", target: { label: "Search" }, value: "Playwright browser context" });
-    expect(fill.status).toBe("ok");
+    expect(fill, JSON.stringify(fill)).toMatchObject({ status: "ok" });
 
     const echo = await agent.execute(sessionId, { type: "click", target: { role: "button", name: "Echo search" } });
-    expect(echo.status).toBe("ok");
+    expect(echo, JSON.stringify(echo)).toMatchObject({ status: "ok" });
     const extracted = await agent.execute(sessionId, { type: "extractText", target: { text: "Playwright browser context", exact: true } });
     expect(extracted).toMatchObject({ status: "ok", data: { text: "Playwright browser context" } });
 

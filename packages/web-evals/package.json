@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@beyonder/browser-agent": "workspace:*",
+    "@beyonder/runtime": "workspace:*",
     "@beyonder/tools": "workspace:*"
   },
   "devDependencies": {

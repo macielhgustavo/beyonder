@@ -5,3 +5,4 @@ export * from "./fixture-server.js";
 export * from "./suites.js";
 export * from "./runner.js";
 export * from "./benchmark-adapter.js";
+export * from "./autonomy.js";

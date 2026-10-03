@@ -381,6 +381,40 @@ taskCommand
   });
 const providers = program.command("providers").description("Manage compute providers");
 
+const opportunities = program.command("opportunities").description("Discover and inspect economic opportunities without taking external action");
+
+opportunities
+  .command("discover")
+  .option("-s, --source <source>", "source id", "fixture")
+  .option("-l, --limit <limit>", "maximum opportunities", "20")
+  .description("Discover and normalize read-only opportunities")
+  .action(async (options: { source: string; limit: string }) => {
+    const runtime = createBeyonderRuntime(loadConfig());
+    const result = await runtime.opportunities.discover({ source: options.source, limit: Number(options.limit) });
+    console.log(JSON.stringify(result, null, 2));
+    runtime.sqlite.close();
+  });
+
+opportunities
+  .command("list")
+  .option("--status <status>", "filter by lifecycle status")
+  .description("List persisted opportunities")
+  .action(async (options: { status?: string }) => {
+    const runtime = createBeyonderRuntime(loadConfig());
+    console.log(JSON.stringify(await runtime.opportunities.list(options.status as never), null, 2));
+    runtime.sqlite.close();
+  });
+
+opportunities
+  .command("inspect")
+  .argument("<id>", "opportunity id")
+  .description("Inspect one persisted opportunity")
+  .action(async (id: string) => {
+    const runtime = createBeyonderRuntime(loadConfig());
+    console.log(JSON.stringify(await runtime.opportunities.inspect(id), null, 2));
+    runtime.sqlite.close();
+  });
+
 providers
   .command("autopilot [providerId]")
   .description("Discover, validate, and register free compute providers in dry-run mode by default")

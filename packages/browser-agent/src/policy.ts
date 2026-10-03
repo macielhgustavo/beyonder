@@ -15,7 +15,7 @@ export const DEFAULT_BROWSER_POLICY: BrowserPolicy = {
   allowFormFill: true,
   allowDownload: false,
   allowUpload: false,
-  allowSubmit: true,
+  allowSubmit: false,
   allowInternalNetwork: false
 };
 

@@ -25,7 +25,7 @@ Targets are semantic (`role`/`name`, `label`, `text`, `placeholder`, `testId`). 
 - `allowDomains` and `denyDomains` supported; deny wins.
 - navigation and simple form fill allowed.
 - uploads/downloads disabled by default; executable downloads are always blocked.
-- non-GET/HEAD submits and common mutating controls require an injected explicit authorization verifier.
+- submit controls are disabled by default; when a trusted runtime enables `allowSubmit`, non-GET/HEAD submits and common mutating controls still require an injected explicit authorization verifier.
 - payments, purchases, automatic account creation, CAPTCHA/2FA/KYC/verification bypass are prohibited even when an authorization id is supplied.
 - URL credentials are rejected.
 

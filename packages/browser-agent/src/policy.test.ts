@@ -58,11 +58,16 @@ describe("BrowserPolicyEngine", () => {
     });
     await expect(
       engine.evaluateClick("s", { type: "click", target: { role: "button", name: "Save changes" } }, { tag: "button", name: "Save changes", isSubmit: true, formMethod: "post" })
+    ).resolves.toMatchObject({ allowed: false, reason: "submit-disabled" });
+
+    const submitEnabledEngine = new BrowserPolicyEngine(mergeBrowserPolicy({ allowSubmit: true }), new FixedResolver());
+    await expect(
+      submitEnabledEngine.evaluateClick("s", { type: "click", target: { role: "button", name: "Save changes" } }, { tag: "button", name: "Save changes", isSubmit: true, formMethod: "post" })
     ).resolves.toMatchObject({ allowed: false, reason: "authorization-required" });
   });
 
   it("allows authorized non-prohibited side effects", async () => {
-    const engine = new BrowserPolicyEngine(mergeBrowserPolicy(), new FixedResolver());
+    const engine = new BrowserPolicyEngine(mergeBrowserPolicy({ allowSubmit: true }), new FixedResolver());
     await expect(
       engine.evaluateClick(
         "s",

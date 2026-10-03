@@ -10,13 +10,13 @@ class PublicResolver implements AddressResolver {
   }
 }
 
-function setup(options: { allowDomains?: string[]; authorize?: (id: string) => boolean } = {}) {
+function setup(options: { allowDomains?: string[]; allowSubmit?: boolean; authorize?: (id: string) => boolean } = {}) {
   const sessionFactory = new FakeBrowserSessionFactory();
   const telemetry = new InMemoryBrowserTelemetrySink();
   const agent = new BrowserAgent({
     sessionFactory,
     telemetry,
-    defaultPolicy: { allowDomains: options.allowDomains ?? [] },
+    defaultPolicy: { allowDomains: options.allowDomains ?? [], allowSubmit: options.allowSubmit ?? false },
     authorize: options.authorize ? ({ authorizationId }) => options.authorize!(authorizationId) : undefined,
     policyEngineFactory: (policy) => new BrowserPolicyEngine(mergeBrowserPolicy(policy), new PublicResolver())
   });
@@ -83,11 +83,11 @@ describe("BrowserAgent", () => {
     const { agent } = setup({ allowDomains: ["example.com"] });
     const sessionId = await agent.startSession();
     const blocked = await agent.execute(sessionId, { type: "click", target: { role: "button", name: "Save changes" } });
-    expect(blocked).toMatchObject({ status: "blocked", policy: { reason: "authorization-required" } });
+    expect(blocked).toMatchObject({ status: "blocked", policy: { reason: "submit-disabled" } });
   });
 
   it("permits explicitly authorized non-prohibited side effects but never purchases", async () => {
-    const { agent } = setup({ allowDomains: ["example.com"], authorize: (id) => id === "approval-1" });
+    const { agent } = setup({ allowDomains: ["example.com"], allowSubmit: true, authorize: (id) => id === "approval-1" });
     const sessionId = await agent.startSession();
     const allowed = await agent.execute(sessionId, {
       type: "click",

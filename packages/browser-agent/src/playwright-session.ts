@@ -73,6 +73,119 @@ interface PageLike {
   on(event: "download", listener: (download: DownloadLike) => void | Promise<void>): void;
 }
 
+const collectObservation = new Function(
+  "requestedLimits",
+  `
+  const normalize = (value) => (value ?? "").replace(/\\s+/g, " ").trim();
+  const bodyText = normalize(document.body?.innerText ?? "");
+  const interactiveNodes = Array.from(
+    document.querySelectorAll(
+      'a[href],button,input:not([type="hidden"]),textarea,select,[role="button"],[role="link"],[role="textbox"],[role="checkbox"],[role="radio"]'
+    )
+  );
+  const visibleInteractive = interactiveNodes.filter((element) => {
+    const style = window.getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    return style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0;
+  });
+  const interactiveElements = visibleInteractive.slice(0, requestedLimits.maxInteractiveElements).map((element, index) => {
+    const input = element instanceof HTMLInputElement ? element : undefined;
+    const anchor = element instanceof HTMLAnchorElement ? element : undefined;
+    const named = element.getAttribute("aria-label") || element.getAttribute("name") || input?.placeholder || element.textContent;
+    return {
+      index,
+      tag: element.tagName.toLowerCase(),
+      role: element.getAttribute("role") || undefined,
+      name: normalize(named),
+      inputType: input?.type,
+      href: anchor?.href,
+      disabled: "disabled" in element ? Boolean(element.disabled) : undefined
+    };
+  });
+
+  const formNodes = Array.from(document.forms);
+  const forms = formNodes.slice(0, requestedLimits.maxForms).map((form, index) => {
+    const fields = Array.from(form.querySelectorAll("input,textarea,select"))
+      .filter((field) => field.type !== "hidden")
+      .slice(0, 20)
+      .map((field) => {
+        const labels = field.labels ? Array.from(field.labels).map((label) => normalize(label.textContent)).filter(Boolean) : [];
+        return {
+          tag: field.tagName.toLowerCase(),
+          type: field instanceof HTMLInputElement ? field.type : undefined,
+          name: field.name || undefined,
+          label: labels[0] || field.getAttribute("aria-label") || field.getAttribute("placeholder") || undefined,
+          required: field.required
+        };
+      });
+    return {
+      index,
+      method: (form.method || "get").toLowerCase(),
+      action: form.action || undefined,
+      fields
+    };
+  });
+
+  const linkNodes = Array.from(document.querySelectorAll("a[href]"));
+  const links = linkNodes.slice(0, requestedLimits.maxLinks).map((link) => ({
+    text: normalize(link.innerText || link.textContent),
+    href: link.href
+  }));
+
+  return {
+    visibleText: bodyText.slice(0, requestedLimits.maxTextChars),
+    interactiveElements,
+    forms,
+    links,
+    truncated: {
+      text: bodyText.length > requestedLimits.maxTextChars,
+      interactiveElements: visibleInteractive.length > requestedLimits.maxInteractiveElements,
+      forms: formNodes.length > requestedLimits.maxForms,
+      links: linkNodes.length > requestedLimits.maxLinks
+    }
+  };
+`
+) as (requestedLimits: BrowserObservationLimits) => {
+  visibleText: string;
+  interactiveElements: BrowserInteractiveElement[];
+  forms: BrowserFormObservation[];
+  links: BrowserLinkObservation[];
+  truncated: Omit<BrowserObservation["truncated"], "errors">;
+};
+
+const inspectElement = new Function(
+  "element",
+  `
+  const html = element;
+  const input = element instanceof HTMLInputElement ? element : undefined;
+  const button = element instanceof HTMLButtonElement ? element : undefined;
+  const anchor = element instanceof HTMLAnchorElement ? element : undefined;
+  const form = input?.form ?? button?.form ?? html.closest("form");
+  const name =
+    html.getAttribute("aria-label") ||
+    html.getAttribute("name") ||
+    input?.placeholder ||
+    html.textContent ||
+    undefined;
+  const inputType = input?.type ?? button?.type;
+  const tag = html.tagName.toLowerCase();
+  const isSubmit =
+    (tag === "button" && (button?.type ?? "submit") === "submit") ||
+    (tag === "input" && (inputType === "submit" || inputType === "image"));
+  return {
+    tag,
+    role: html.getAttribute("role") || undefined,
+    name: name?.replace(/\\s+/g, " ").trim(),
+    inputType,
+    href: anchor?.href,
+    formMethod: form?.method?.toLowerCase(),
+    formAction: form?.action,
+    disabled: "disabled" in html ? Boolean(html.disabled) : undefined,
+    isSubmit
+  };
+`
+) as (element: Element) => BrowserElementInfo;
+
 export interface PlaywrightBrowserSessionFactoryOptions {
   headless?: boolean;
   navigationTimeoutMs?: number;
@@ -168,72 +281,7 @@ export class PlaywrightBrowserSession implements BrowserSession {
 
   async observe(limits: BrowserObservationLimits): Promise<BrowserObservation> {
     this.assertOpen();
-    const snapshot = await this.page.evaluate((requestedLimits) => {
-      const normalize = (value: string | null | undefined) => (value ?? "").replace(/\s+/g, " ").trim();
-      const bodyText = normalize(document.body?.innerText ?? "");
-      const interactiveNodes = Array.from(
-        document.querySelectorAll<HTMLElement>(
-          'a[href],button,input:not([type="hidden"]),textarea,select,[role="button"],[role="link"],[role="textbox"],[role="checkbox"],[role="radio"]'
-        )
-      );
-      const visibleInteractive = interactiveNodes.filter((element) => {
-        const style = window.getComputedStyle(element);
-        const rect = element.getBoundingClientRect();
-        return style.visibility !== "hidden" && style.display !== "none" && rect.width > 0 && rect.height > 0;
-      });
-      const interactiveElements = visibleInteractive.slice(0, requestedLimits.maxInteractiveElements).map((element, index) => {
-        const input = element instanceof HTMLInputElement ? element : undefined;
-        const anchor = element instanceof HTMLAnchorElement ? element : undefined;
-        const named = element.getAttribute("aria-label") || element.getAttribute("name") || input?.placeholder || element.textContent;
-        return {
-          index,
-          tag: element.tagName.toLowerCase(),
-          role: element.getAttribute("role") || undefined,
-          name: normalize(named),
-          inputType: input?.type,
-          href: anchor?.href,
-          disabled: "disabled" in element ? Boolean((element as HTMLButtonElement | HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement).disabled) : undefined
-        };
-      });
-
-      const formNodes = Array.from(document.forms);
-      const forms = formNodes.slice(0, requestedLimits.maxForms).map((form, index) => {
-        const fields = Array.from(form.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>("input,textarea,select"))
-          .filter((field) => field.type !== "hidden")
-          .slice(0, 20)
-          .map((field) => {
-            const labels = field.labels ? Array.from(field.labels).map((label) => normalize(label.textContent)).filter(Boolean) : [];
-            return {
-              tag: field.tagName.toLowerCase(),
-              type: field instanceof HTMLInputElement ? field.type : undefined,
-              name: field.name || undefined,
-              label: labels[0] || field.getAttribute("aria-label") || field.getAttribute("placeholder") || undefined,
-              required: field.required
-            };
-          });
-        return {
-          index,
-          method: (form.method || "get").toLowerCase(),
-          action: form.action || undefined,
-          fields
-        };
-      });
-
-      const linkNodes = Array.from(document.querySelectorAll<HTMLAnchorElement>("a[href]"));
-      const links = linkNodes.slice(0, requestedLimits.maxLinks).map((link) => ({ text: normalize(link.innerText || link.textContent), href: link.href }));
-      return {
-        visibleText: bodyText.slice(0, requestedLimits.maxTextChars),
-        interactiveElements,
-        forms,
-        links,
-        truncated: {
-          text: bodyText.length > requestedLimits.maxTextChars,
-          interactiveElements: visibleInteractive.length > requestedLimits.maxInteractiveElements,
-          forms: formNodes.length > requestedLimits.maxForms,
-          links: linkNodes.length > requestedLimits.maxLinks
-        }
-      };
-    }, limits);
+    const snapshot = await this.page.evaluate(collectObservation, limits);
 
     const current = await this.current();
     const errors = this.errors.slice(-limits.maxErrors);
@@ -267,35 +315,7 @@ export class PlaywrightBrowserSession implements BrowserSession {
     this.assertOpen();
     const locator = await this.requiredLocator(target);
     try {
-      return await locator.evaluate((element) => {
-        const html = element as HTMLElement;
-        const input = element instanceof HTMLInputElement ? element : undefined;
-        const button = element instanceof HTMLButtonElement ? element : undefined;
-        const anchor = element instanceof HTMLAnchorElement ? element : undefined;
-        const form = input?.form ?? button?.form ?? html.closest("form");
-        const name =
-          html.getAttribute("aria-label") ||
-          html.getAttribute("name") ||
-          input?.placeholder ||
-          html.textContent ||
-          undefined;
-        const inputType = input?.type ?? button?.type;
-        const tag = html.tagName.toLowerCase();
-        const isSubmit =
-          (tag === "button" && (button?.type ?? "submit") === "submit") ||
-          (tag === "input" && (inputType === "submit" || inputType === "image"));
-        return {
-          tag,
-          role: html.getAttribute("role") || undefined,
-          name: name?.replace(/\s+/g, " ").trim(),
-          inputType,
-          href: anchor?.href,
-          formMethod: form?.method?.toLowerCase(),
-          formAction: form?.action,
-          disabled: "disabled" in html ? Boolean((html as HTMLButtonElement | HTMLInputElement).disabled) : undefined,
-          isSubmit
-        };
-      });
+      return await locator.evaluate(inspectElement);
     } catch (error) {
       throw normalizePlaywrightError(error);
     }

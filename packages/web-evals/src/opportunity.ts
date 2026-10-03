@@ -1,4 +1,4 @@
-import { openDatabase, MemoryEngine, MemoryStore, OpportunityEvaluator, OpportunityQueue, StateOpportunityStore, StateStore, DeterministicFixtureOpportunitySource, GitHubPublicOpportunitySource, AgentWorkPublicOpportunitySource, normalizeOpportunity, AutonomousTaskExecutor, ApprovalGate, OpportunityBridge, FixtureApplicationAdapter, FixtureSubmissionAdapter, ApprovalDeniedError, type Plan } from "@beyonder/runtime";
+import { openDatabase, MemoryEngine, MemoryStore, OpportunityEvaluator, OpportunityQueue, StateOpportunityStore, StateStore, DeterministicFixtureOpportunitySource, GitHubPublicOpportunitySource, AgentWorkPublicOpportunitySource, OpenBountyPublicOpportunitySource, normalizeOpportunity, AutonomousTaskExecutor, ApprovalGate, OpportunityBridge, FixtureApplicationAdapter, FixtureSubmissionAdapter, ApprovalDeniedError, type Plan } from "@beyonder/runtime";
 import { BrowserAgent, createBrowserToolDefinitions } from "@beyonder/browser-agent";
 import { DefaultToolPolicy, ToolExecutor, ToolRegistry, ToolRisk, ToolSideEffect, type ToolCall, type ToolDefinition } from "@beyonder/tools";
 import type { IntelligenceTask } from "@beyonder/runtime";
@@ -47,6 +47,8 @@ export async function runOpportunityEvalSuite(): Promise<OpportunitySmokeResult>
   results.push({ caseId: "real-source-read-only", status: real.errors.length === 0 ? "PASS" : "FAIL", notes: `${real.discovered} explicit-reward items` });
   const agentWork = await runAgentWorkReadOnlySmoke();
   results.push({ caseId: "agentwork-read-only", status: "PASS", notes: `${agentWork.discovered} items; ${agentWork.errors.length ? agentWork.errors.join(" | ") : "catalog available"}` });
+  const openBounty = await runOpenBountyReadOnlySmoke();
+  results.push({ caseId: "openbounty-read-only", status: openBounty.errors.length === 0 ? "PASS" : "FAIL", notes: `${openBounty.discovered} items; ${openBounty.errors.join(" | ") || "catalog available"}` });
   const approval = await runApprovalE2E();
   results.push(approval.result);
   sqlite.close();
@@ -77,6 +79,16 @@ export async function runRealSourceReadOnlySmoke(): Promise<{ discovered: number
 export async function runAgentWorkReadOnlySmoke(): Promise<{ discovered: number; errors: string[] }> {
   const result = await new AgentWorkPublicOpportunitySource().discover({ limit: 20 });
   return { discovered: result.items.length, errors: result.errors };
+}
+
+export async function runOpenBountyReadOnlySmoke(): Promise<{ discovered: number; errors: string[]; candidates: Array<{ title: string; reward?: number; currency?: string; requirements: unknown; url?: string }> }> {
+  const result = await new OpenBountyPublicOpportunitySource().discover({ limit: 20 });
+  return { discovered: result.items.length, errors: result.errors, candidates: result.items.map((item) => ({ title: item.title, reward: item.reward?.amount, currency: item.reward?.currency, requirements: item.metadata, url: item.sourceUrl })) };
+}
+
+export async function runMarketplaceReadOnlySmoke() {
+  const [agentwork, openbounty] = await Promise.all([runAgentWorkReadOnlySmoke(), runOpenBountyReadOnlySmoke()]);
+  return { agentwork, openbounty, monetaryCostUsd: 0 };
 }
 
 export async function runApprovalE2E() {

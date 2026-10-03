@@ -18,7 +18,9 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Typecheck web evals
-        run: pnpm exec tsc -b packages/web-evals/tsconfig.json --pretty false
+      - name: Typecheck
+        run: pnpm typecheck
       - name: Test web evals
-        run: pnpm exec vitest run packages/web-evals/src
+        run: pnpm test:web-evals
+      - name: Web evals smoke
+        run: pnpm web:evals:smoke

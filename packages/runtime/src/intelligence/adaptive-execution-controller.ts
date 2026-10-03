@@ -30,7 +30,7 @@ export class AdaptiveExecutionController {
   }): Promise<AdaptiveExecutionResult> {
     const policy = getEconomicRoutingPolicy(input.economicState);
     const route = await this.router.route(input.task, input.economicState);
-    if (!policy.allowInference || !route.selected || policy.maxAttempts === 0) {
+    if (!policy.allowInference || !route.selected) {
       return { route, attempts: [], exhausted: true };
     }
 

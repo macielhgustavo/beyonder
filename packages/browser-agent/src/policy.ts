@@ -99,8 +99,8 @@ export class BrowserPolicyEngine {
     verifier?: BrowserAuthorizationVerifier
   ): Promise<BrowserPolicyDecision> {
     const semantic = semanticText(element);
-    if (PAYMENT_PATTERN.test(semantic)) return denied("payment-prohibited", "Payments are prohibited.");
     if (PURCHASE_PATTERN.test(semantic)) return denied("purchase-prohibited", "Purchases are prohibited.");
+    if (PAYMENT_PATTERN.test(semantic)) return denied("payment-prohibited", "Payments are prohibited.");
     if (ACCOUNT_CREATION_PATTERN.test(semantic)) {
       return denied("account-creation-prohibited", "Automatic account creation is outside this BrowserAgent scope.");
     }

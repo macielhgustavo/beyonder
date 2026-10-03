@@ -48,7 +48,7 @@ jobs:
                 "lastUpdatedAt": "2026-10-03T00:00:00.000Z",
                 "validation": {
                   "status": "validated",
-                  "models": ["groq-ci-model"],
+                  "models": ["llama-3.3-70b-versatile"],
                   "latencyMs": 90,
                   "rateLimitHeaders": {
                     "x-ratelimit-limit-requests": "1000",
@@ -64,7 +64,7 @@ jobs:
                 "lastUpdatedAt": "2026-10-03T00:00:00.000Z",
                 "validation": {
                   "status": "validated",
-                  "models": ["ovh-ci-model"],
+                  "models": ["Meta-Llama-3_3-70B-Instruct"],
                   "latencyMs": 160,
                   "rateLimitHeaders": {
                     "x-ratelimit-limit-requests": "1000",
@@ -80,7 +80,7 @@ jobs:
                 "lastUpdatedAt": "2026-10-03T00:00:00.000Z",
                 "validation": {
                   "status": "validated",
-                  "models": ["horde-ci-model"],
+                  "models": ["anonymous-worker-pool"],
                   "latencyMs": 600
                 }
               }

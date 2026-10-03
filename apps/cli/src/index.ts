@@ -11,6 +11,18 @@ import {
   redact,
   Vault
 } from "@beyonder/compute";
+import {
+  BENCHMARK_CATEGORIES,
+  BenchmarkStore,
+  formatBenchmarkReport,
+  formatRanking,
+  OpenAiCompatibleBenchmarkClient,
+  runBenchmark,
+  selectFreeModelTargets,
+  type BenchmarkCategory,
+  type BenchmarkMode,
+  type TelemetrySink
+} from "@beyonder/benchmark";
 
 const program = new Command();
 
@@ -156,6 +168,59 @@ intelligence
     runtime.sqlite.close();
   });
 
+const benchmark = intelligence.command("benchmark").description("Run or inspect Beyonder Intelligence Benchmark results");
+
+benchmark
+  .option("--smoke", "run the tiny, cheap benchmark set")
+  .option("--standard", "run the broader economical benchmark set")
+  .option("--db <path>", "benchmark SQLite path", "./data/beyonder-benchmark.sqlite")
+  .action(async (options: { smoke?: boolean; standard?: boolean; db: string }) => {
+    const mode = benchmarkMode(options);
+    const config = loadConfig();
+    const state = await new AutopilotStateStore(config.model.providerStatePath).read();
+    const broker = await credentialBroker();
+    const targets = selectFreeModelTargets(state, broker);
+    if (!targets.length) {
+      console.log("MODEL PERFORMANCE\n\nNo READY zero-cost benchmark models available. monetary cost: $0.00");
+      return;
+    }
+
+    const results = await runBenchmark({
+      mode,
+      targets,
+      client: new OpenAiCompatibleBenchmarkClient(),
+      telemetry: new StderrTelemetrySink()
+    });
+    const store = new BenchmarkStore(options.db);
+    store.saveResults(results);
+    store.close();
+    console.log(formatBenchmarkReport(results));
+    console.log("");
+    console.log(`models tested: ${targets.map((target) => `${target.model}/${target.provider}`).join(", ")}`);
+  });
+
+benchmark
+  .command("report")
+  .description("Print historical benchmark report")
+  .option("--db <path>", "benchmark SQLite path")
+  .action((options: { db?: string }, command: Command) => {
+    const store = new BenchmarkStore(resolveBenchmarkDbPath(options, command));
+    console.log(formatBenchmarkReport(store.summaries()));
+    store.close();
+  });
+
+benchmark
+  .command("rank")
+  .argument("<category>", "benchmark category")
+  .option("--db <path>", "benchmark SQLite path")
+  .description("Rank models by benchmark-only capability")
+  .action((category: string, options: { db?: string }, command: Command) => {
+    const parsed = parseBenchmarkCategory(category);
+    const store = new BenchmarkStore(resolveBenchmarkDbPath(options, command));
+    console.log(formatRanking(parsed, store.summaries()));
+    store.close();
+  });
+
 const models = program.command("models").description("Inspect adaptive model rankings and historical performance");
 
 models
@@ -197,8 +262,6 @@ models
       performance
     }, null, 2));
     runtime.sqlite.close();
-  });
-
 const providers = program.command("providers").description("Manage compute providers");
 
 providers
@@ -300,6 +363,26 @@ function routeView(route: Awaited<ReturnType<ReturnType<typeof createRuntime>["m
     explored: route.explored,
     reason: route.reason
   };
+}
+
+function benchmarkMode(options: { smoke?: boolean; standard?: boolean }): BenchmarkMode {
+  if (options.standard) return "standard";
+  return "smoke";
+}
+
+function parseBenchmarkCategory(category: string): BenchmarkCategory {
+  if (BENCHMARK_CATEGORIES.includes(category as BenchmarkCategory)) return category as BenchmarkCategory;
+  throw new Error(`Unknown benchmark category "${category}". Use one of: ${BENCHMARK_CATEGORIES.join(", ")}`);
+}
+
+function resolveBenchmarkDbPath(options: { db?: string }, command: Command): string {
+  return options.db ?? (command.parent?.opts() as { db?: string }).db ?? "./data/beyonder-benchmark.sqlite";
+}
+
+class StderrTelemetrySink implements TelemetrySink {
+  emit(event: string, details: Record<string, unknown>): void {
+    process.stderr.write(`${JSON.stringify({ event, details, timestamp: new Date().toISOString() })}\n`);
+  }
 }
 
 await program.parseAsync();

@@ -14,6 +14,7 @@ import { MemoryPerformanceRepository } from "./models/performance-repository.js"
 import type { ModelCapabilitySource } from "./models/capability-source.js";
 import { AgentLoop } from "./agent/agent-loop.js";
 import { createRuntimeToolExecutor, createRuntimeToolRegistry } from "./tools/runtime-tools.js";
+import { AutonomousTaskExecutor } from "./tasks/task-executor.js";
 import type { ToolContext, ToolDescriptor, ToolExecutor, ToolRegistry } from "@beyonder/tools";
 
 export interface BeyonderRuntime {
@@ -32,6 +33,7 @@ export interface BeyonderRuntime {
   tools: ToolRegistry;
   toolExecutor: ToolExecutor;
   getAvailableTools(context?: ToolContext): Promise<readonly ToolDescriptor[]>;
+  taskExecutor: AutonomousTaskExecutor;
   agent: AgentLoop;
 }
 
@@ -53,6 +55,14 @@ export function createRuntime(config: AppConfig, options: RuntimeOptions = {}): 
   const adaptiveExecution = new AdaptiveExecutionController(modelRouter, evaluation, audit);
   const tools = createRuntimeToolRegistry(config.tools);
   const toolExecutor = createRuntimeToolExecutor(tools, audit);
+  const getAvailableTools = (context: ToolContext = {}) => tools.getAvailableTools(context, toolExecutor.policy);
+  const taskExecutor = new AutonomousTaskExecutor({
+    memory,
+    modelRouter,
+    toolExecutor,
+    getAvailableTools,
+    telemetry: audit
+  });
   const agent = new AgentLoop(
     config,
     ledger,
@@ -81,7 +91,8 @@ export function createRuntime(config: AppConfig, options: RuntimeOptions = {}): 
     audit,
     tools,
     toolExecutor,
-    getAvailableTools: (context = {}) => tools.getAvailableTools(context, toolExecutor.policy),
+    getAvailableTools,
+    taskExecutor,
     agent
   };
 }

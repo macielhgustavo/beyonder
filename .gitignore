@@ -1,0 +1,25 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+# local runtime state
+data/
+*.sqlite
+*.sqlite-*
+.beyonder/
+.provider-autopilot-state.json
+.providers-vault/
+
+# secrets and sessions
+.env
+.env.*
+!.env.example
+cookies/
+sessions/
+*.pem
+*.key
+*.token
+
+# local reports/artifacts
+coverage/
+outputs/

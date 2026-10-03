@@ -1,0 +1,47 @@
+{
+  "name": "beyonder",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Autonomous economic agent runtime with zero-cost-first compute acquisition.",
+  "type": "module",
+  "bin": {
+    "beyonder": "./apps/cli/dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b --pretty false",
+    "test": "pnpm test:compute && pnpm test:integration",
+    "test:compute": "tsx --test packages/compute/src/*.test.ts",
+    "test:integration": "vitest run tests/integration",
+    "start": "tsx apps/cli/src/index.ts",
+    "beyonder": "tsx apps/cli/src/index.ts",
+    "providers:autopilot": "tsx apps/cli/src/index.ts providers autopilot",
+    "providers:resume": "tsx apps/cli/src/index.ts providers resume",
+    "providers:discover": "tsx apps/cli/src/index.ts providers discover",
+    "providers:inventory": "tsx apps/cli/src/index.ts providers inventory",
+    "providers:status": "tsx apps/cli/src/index.ts providers status"
+  },
+  "engines": {
+    "node": ">=22.0.0",
+    "pnpm": ">=9.0.0"
+  },
+  "dependencies": {
+    "@beyonder/compute": "workspace:*",
+    "@beyonder/economy": "workspace:*",
+    "@beyonder/runtime": "workspace:*",
+    "better-sqlite3": "^11.10.0",
+    "commander": "^12.1.0",
+    "dotenv": "^16.4.7",
+    "drizzle-orm": "^0.39.3",
+    "nanoid": "^5.0.9",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/node": "^22.13.5",
+    "drizzle-kit": "^0.30.4",
+    "tsx": "^4.19.3",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.7"
+  }
+}

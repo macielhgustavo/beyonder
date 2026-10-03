@@ -1,0 +1,24 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/credentials" },
+    { "path": "packages/compute" },
+    { "path": "packages/economy" },
+    { "path": "packages/memory" },
+    { "path": "packages/models" },
+    { "path": "packages/tools" },
+    { "path": "packages/audit" },
+    { "path": "packages/runtime" },
+    { "path": "apps/cli" }
+  ],
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "types": ["node"]
+  }
+}

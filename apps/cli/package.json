@@ -1,0 +1,1 @@
+{"name":"@beyonder/cli","version":"0.1.0","type":"module","private":true,"bin":{"beyonder":"./dist/index.js"},"main":"./dist/index.js","types":"./dist/index.d.ts","dependencies":{"@beyonder/runtime":"workspace:*","@beyonder/compute":"workspace:*","@beyonder/credentials":"workspace:*"}}

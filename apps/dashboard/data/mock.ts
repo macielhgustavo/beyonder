@@ -110,6 +110,10 @@ const audit: AuditEventView[] = [
 
 export class MockDashboardDataSource implements DashboardDataSource {
   readonly provenance = "mock" as const;
+  async getWorkRuns() { return []; }
+  async getSourceHealth() { return []; }
+  async isDeveloperMode() { return false; }
+
   async getHome() {
     return {
       status: { global: "WAITING_FOR_YOU" as const, heartbeat: "ONLINE" as const, label: "Esperando voce", detail: "Preciso de uma decisao.", lastHeartbeatAt: iso(0), currentActivity: null },

@@ -70,7 +70,7 @@ describe("Beyonder adaptive intelligence flow", () => {
       BEYONDER_PROVIDER_STATE_PATH: providerStatePath,
       BEYONDER_TOOLS_ENABLED: "false"
     });
-    const runtime = createRuntime(config);
+    const runtime = createRuntime(config, { fixture: true });
 
     const seed = await runtime.memory.remember("semantic", "Readiness checks should avoid side effects and preserve scarce quota.", 4, {
       utility: 0.9,

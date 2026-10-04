@@ -1,7 +1,9 @@
+import type { WorkRun, SourceReliability } from "@beyonder/runtime";
+export type WorkRunView = WorkRun & { title: string; sourceUrl?: string; fixture: boolean };
 export type DataProvenance = "local" | "mock" | "empty";
-export type GlobalStatus = "OFFLINE" | "READY" | "WORKING" | "WAITING_FOR_YOU" | "ATTENTION_REQUIRED" | "PAUSED";
+export type GlobalStatus = "OFFLINE" | "READY" | "WORKING" | "WAITING_FOR_YOU" | "ATTENTION_REQUIRED" | "PAUSED" | "DEGRADED" | "STARTING";
 export type HeartbeatStatus = "ONLINE" | "OFFLINE" | "STARTING" | "PAUSED" | "DEGRADED";
-export type TaskStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled" | "unknown";
+export type TaskStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled" | "planning" | "waiting" | "blocked" | "unknown";
 export type ProviderStatus = "READY" | "HUMAN_GATE" | "UNHEALTHY" | "RATE_LIMITED" | "DISABLED" | "KEYLESS" | "UNKNOWN";
 export type MemoryKind = "working" | "episodic" | "semantic" | "procedural" | "economic";
 
@@ -36,6 +38,7 @@ export interface HealthCheckView {
 }
 
 export interface EconomySummary {
+  estimatedRevenueUsd?: number;
   realMoneySpentUsd: number;
   realRevenueUsd: number;
   simulatedRevenueUsd: number;
@@ -68,6 +71,10 @@ export interface TaskStepView {
 }
 
 export interface TaskView {
+  current?: string;
+  next?: string;
+  tool?: string;
+  fixture?: boolean;
   id: string;
   title: string;
   humanStatus: string;
@@ -87,6 +94,9 @@ export interface TaskView {
 }
 
 export interface OpportunityView {
+  externalActionMode?: "AUTOMATED_REAL" | "MANUAL_REQUIRED" | "FIXTURE";
+  sourceUrl?: string;
+  fixture?: boolean;
   id: string;
   title: string;
   source: string;
@@ -188,8 +198,11 @@ export interface AuditQuery extends PageQuery {
 
 export interface DashboardDataSource {
   readonly provenance: DataProvenance;
+  isDeveloperMode(): Promise<boolean>;
   getHome(): Promise<HomeView>;
   getRuntimeStatus(): Promise<RuntimeStatusView>;
+  getWorkRuns(): Promise<WorkRunView[]>;
+  getSourceHealth(): Promise<SourceReliability[]>;
   getTasks(query?: PageQuery): Promise<TaskView[]>;
   getOpportunities(query?: PageQuery): Promise<OpportunityView[]>;
   getApprovals(query?: PageQuery): Promise<ApprovalView[]>;

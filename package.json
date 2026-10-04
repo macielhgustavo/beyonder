@@ -31,7 +31,7 @@
     "start": "tsx apps/cli/src/index.ts",
     "beyonder": "tsx apps/cli/src/index.ts",
     "control-center": "pnpm --filter @beyonder/control-center dev",
-    "control-center:build": "pnpm --filter @beyonder/control-center build",
+    "control-center:build": "pnpm build && pnpm --filter @beyonder/control-center build",
     "control-center:typecheck": "pnpm --filter @beyonder/control-center typecheck",
     "control-center:test": "pnpm --filter @beyonder/control-center test",
     "control-center:smoke": "pnpm --filter @beyonder/control-center smoke",
@@ -46,7 +46,9 @@
     "providers:discover": "tsx apps/cli/src/index.ts providers discover",
     "providers:inventory": "tsx apps/cli/src/index.ts providers inventory",
     "providers:status": "tsx apps/cli/src/index.ts providers status",
-    "providers:nvidia-smoke": "tsx packages/benchmark/src/models/nvidia-nim-smoke.ts"
+    "providers:nvidia-smoke": "tsx packages/benchmark/src/models/nvidia-nim-smoke.ts",
+    "control-center:security-smoke": "pnpm --filter @beyonder/control-center security-smoke",
+    "control-center:supervisor-smoke": "pnpm --filter @beyonder/control-center supervisor-smoke"
   },
   "engines": {
     "node": ">=22.0.0",
@@ -70,5 +72,10 @@
     "tsx": "^4.19.3",
     "typescript": "^5.7.3",
     "vitest": "^3.0.7"
+  },
+  "pnpm": {
+    "neverBuiltDependencies": [
+      "better-sqlite3"
+    ]
   }
 }

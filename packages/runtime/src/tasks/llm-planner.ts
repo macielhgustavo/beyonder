@@ -9,6 +9,7 @@ import { DeterministicPlanner, validatePlan } from "./planner.js";
 
 export interface LlmPlannerOptions {
   modelRouter: ModelRouter;
+  allowDeterministicFallback?: boolean;
   deterministicFallback?: Planner;
   maxCandidates?: number;
   memory?: MemoryEngine;
@@ -19,6 +20,8 @@ export interface LlmPlannerResult {
   provider: string;
   model: string;
   usedFallback: boolean;
+  monetaryCostUsd?: number;
+  shadowCostUsd?: number;
 }
 
 export class LlmPlanner implements Planner {
@@ -71,7 +74,7 @@ export class LlmPlanner implements Planner {
       requirements: { ...request.task.requirements, structuredOutput: true }
     };
     const route = await this.options.modelRouter.route(planningTask, request.economicState);
-    const candidates = route.candidates.slice(0, this.maxCandidates);
+    const candidates = route.candidates.filter((candidate) => candidate.monetaryCostUsd <= request.budget.maxMonetaryCostUsd).slice(0, this.maxCandidates);
     const messages = planningPrompt(request);
 
     for (const candidate of candidates) {
@@ -81,12 +84,13 @@ export class LlmPlanner implements Planner {
         const parsed = parsePlanJson(response.content);
         const validation = validatePlan(parsed, { availableTools: request.availableTools, budget: request.budget });
         if (!validation.valid || validation.plan.taskId !== request.task.id) continue;
-        return { plan: validation.plan, provider: response.provider, model: response.model, usedFallback: false };
+        return { plan: validation.plan, provider: response.provider, model: response.model, usedFallback: false, monetaryCostUsd: response.estimatedCostUsd, shadowCostUsd: candidate.shadowCostUsd };
       } catch {
         // Operational model failures move to the next bounded candidate.
       }
     }
 
+    if (this.options.allowDeterministicFallback === false) throw new Error(candidates.length ? "Não consegui criar um plano válido com os modelos disponíveis." : "Não consegui iniciar esta tarefa porque nenhum modelo compatível está disponível.");
     return {
       plan: await this.fallback.createPlan(request),
       provider: "deterministic",

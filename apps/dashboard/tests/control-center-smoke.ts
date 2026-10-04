@@ -9,6 +9,7 @@ const dir = mkdtempSync(path.join(tmpdir(), "beyonder-control-smoke-"));
 process.env.BEYONDER_DB_PATH = path.join(dir, "runtime.sqlite");
 process.env.BEYONDER_PROVIDER_STATE_PATH = path.join(dir, "providers.json");
 process.env.BEYONDER_MODEL_PROVIDER = "none";
+process.env.BEYONDER_CONTROL_FIXTURE = "1";
 
 main().catch((error) => {
   console.error(error instanceof Error ? error.message : String(error));

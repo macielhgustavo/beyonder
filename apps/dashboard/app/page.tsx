@@ -55,6 +55,7 @@ export default async function HomePage() {
         <Metric label="Tarefas hoje" value={home.today.completedTasks} hint="concluidas" />
         <Metric label="Dinheiro gasto" value={formatUsd(home.today.realMoneySpentUsd)} hint="dinheiro real" />
         <Metric label="Receita real" value={formatUsd(home.today.realRevenueUsd)} />
+        <Metric label="Em trabalhos" value={formatUsd(home.economy.estimatedRevenueUsd ?? 0)} hint="estimada; ainda não recebida" />
         <Metric label="Receita simulada" value={formatUsd(home.today.simulatedRevenueUsd)} hint="nao e caixa real" />
       </section>
 

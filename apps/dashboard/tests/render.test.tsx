@@ -24,6 +24,6 @@ describe("ModelDecisionInspector", () => {
 
   it("renders a truthful empty state without a decision", () => {
     const html = renderToStaticMarkup(<ModelDecisionInspector decision={null} />);
-    expect(html).toContain("No model decision available");
+    expect(html).toContain("Nenhuma escolha de modelo registrada");
   });
 });

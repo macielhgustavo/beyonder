@@ -1,4 +1,4 @@
-import { CommandButton } from "../../components/actions";
+import { CommandButton, ShutdownButton } from "../../components/actions";
 import { DashboardShell } from "../../components/shell";
 import { PageHeader, Panel } from "../../components/ui";
 
@@ -23,11 +23,11 @@ export default function SettingsPage() {
           </div>
         </Panel>
       </div>
-      <Panel title="Dangerous" className="spaced-panel">
-        <p className="muted">Safe shutdown pausa novas tarefas e registra a intencao de parar em ponto seguro. Emergency stop e reservado para falhas graves.</p>
+      <Panel title="Parar Beyonder" className="spaced-panel">
+        <p className="muted">O Beyonder vai parar após salvar o estado atual. A parada de emergência é reservada para falhas graves.</p>
         <div className="action-row">
-          <CommandButton payload={{ type: "safeShutdown" }} tone="danger">Safe shutdown</CommandButton>
-          <CommandButton payload={{ type: "emergencyStop" }} tone="danger" confirm="Emergency stop pausa imediatamente o Control Center e registra um evento critico. Use apenas se algo estiver errado.">Emergency stop</CommandButton>
+          <ShutdownButton />
+          <CommandButton payload={{ type: "emergencyStop" }} tone="danger" confirm="Emergency stop pausa imediatamente o Control Center e registra um evento critico. Use apenas se algo estiver errado.">Parada de emergência</CommandButton>
         </div>
       </Panel>
     </DashboardShell>

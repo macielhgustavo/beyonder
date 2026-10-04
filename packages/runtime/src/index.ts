@@ -106,3 +106,6 @@ export type {
   ToolPolicy,
   ToolPolicyDecision
 } from "@beyonder/tools";
+
+
+export { ModelRouter } from "./models/model-router.js";

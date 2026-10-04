@@ -1,3 +1,5 @@
+import type { WorkRun, SourceReliability } from "@beyonder/runtime";
+import type { WorkRunView } from "./types";
 import Database from "better-sqlite3";
 import { AutopilotStateStore, buildComputeInventory, providers as catalogProviders } from "@beyonder/compute";
 import { existsSync } from "node:fs";
@@ -39,6 +41,8 @@ export class LocalDashboardDataSource implements DashboardDataSource {
     private readonly providerStatePath = resolveProviderStatePath()
   ) {}
 
+  async isDeveloperMode() { return this.readControlState().developerMode; }
+
   async getHome(): Promise<HomeView> {
     if (!this.isAvailable()) return emptyHome();
     const [status, approvals, tasks, economy, audit] = await Promise.all([
@@ -48,7 +52,7 @@ export class LocalDashboardDataSource implements DashboardDataSource {
       this.getEconomySummary(),
       this.getAuditEvents({ limit: 6 })
     ]);
-    const activeTask = tasks.find((task) => task.status === "running" || task.status === "queued") ?? null;
+    const activeTask = tasks.find((task) => task.status === "running" || task.status === "planning" || task.status === "queued") ?? null;
     const todayPrefix = new Date().toISOString().slice(0, 10);
     return {
       status,
@@ -73,8 +77,10 @@ export class LocalDashboardDataSource implements DashboardDataSource {
     const state = this.readControlState();
     const approvals = await this.getApprovals({ limit: 200 });
     const latestError = (await this.getAuditEvents({ level: "error", limit: 1 }))[0];
-    const activeTask = (await this.getTasks({ limit: 20 })).find((task) => task.status === "running" || task.status === "queued");
-    const heartbeat = state.paused ? "PAUSED" : isFreshHeartbeat(state.lastHeartbeatAt) ? "ONLINE" : this.isAvailable() ? "DEGRADED" : "OFFLINE";
+    const activeTask = (await this.getTasks({ limit: 20 })).find((task) => task.status === "running" || task.status === "planning" || task.status === "queued");
+    const age = state.lastHeartbeatAt ? Date.now() - Date.parse(state.lastHeartbeatAt) : Infinity;
+    const heartbeat = age > 60_000 ? "OFFLINE" : age > 10_000 ? "DEGRADED" : state.paused ? "PAUSED" : "ONLINE";
+    if (heartbeat === "OFFLINE" || heartbeat === "DEGRADED") return { global: heartbeat, heartbeat, label: heartbeat === "OFFLINE" ? "Offline" : "Degradado", detail: heartbeat === "OFFLINE" ? "Beyonder não está em execução." : `Runtime não respondeu há ${Math.floor(age / 1000)} segundos.`, lastHeartbeatAt: state.lastHeartbeatAt, currentActivity: null };
 
     if (state.paused) {
       return { global: "PAUSED", heartbeat, label: "Pausado", detail: "Nenhuma nova tarefa ou acao externa sera iniciada.", lastHeartbeatAt: state.lastHeartbeatAt, currentActivity: state.currentActivity };
@@ -82,6 +88,7 @@ export class LocalDashboardDataSource implements DashboardDataSource {
     if (approvals.some((approval) => approval.status === "PENDING")) {
       return { global: "WAITING_FOR_YOU", heartbeat, label: "Esperando voce", detail: "Existe uma decisao aguardando aprovacao.", lastHeartbeatAt: state.lastHeartbeatAt, currentActivity: state.currentActivity };
     }
+    if ((await this.getTasks({ limit: 20 })).some((task) => task.status === "waiting")) return { global: "WAITING_FOR_YOU", heartbeat, label: "Esperando você", detail: "Uma tarefa aguarda retomada.", lastHeartbeatAt: state.lastHeartbeatAt, currentActivity: state.currentActivity };
     if (activeTask) {
       return { global: "WORKING", heartbeat, label: "Trabalhando", detail: activeTask.humanStatus, lastHeartbeatAt: state.lastHeartbeatAt, currentActivity: state.currentActivity ?? activeTask.title };
     }
@@ -91,6 +98,21 @@ export class LocalDashboardDataSource implements DashboardDataSource {
     return { global: "READY", heartbeat, label: "Pronto", detail: "Beyonder esta livre. Nenhuma tarefa em execucao.", lastHeartbeatAt: state.lastHeartbeatAt, currentActivity: state.currentActivity };
   }
 
+  async getWorkRuns(): Promise<WorkRunView[]> {
+    if (!this.isAvailable()) return [];
+    const db = this.open();
+    try { return readState<string[]>(db, "work-runs:index", []).flatMap((id) => {
+      const run = readState<WorkRun | undefined>(db, `work-run:${id}`, undefined);
+      if (!run) return [];
+      const opportunity = readState<Record<string, unknown>>(db, `opportunity:item:${run.opportunityId}`, {});
+      return [{ ...run, title: stringField(opportunity, "title"), sourceUrl: safeExternalUrl(stringField(opportunity, "sourceUrl")), fixture: isFixtureRun(run) }];
+    }); } finally { db.close(); }
+  }
+  async getSourceHealth(): Promise<SourceReliability[]> {
+    if (!this.isAvailable()) return [];
+    const db = this.open();
+    try { return readState<SourceReliability[]>(db, "opportunity-sources:reliability", []); } finally { db.close(); }
+  }
   async getTasks(query: PageQuery = {}): Promise<TaskView[]> {
     if (!this.isAvailable()) return [];
     const db = this.open();
@@ -257,10 +279,11 @@ export class LocalDashboardDataSource implements DashboardDataSource {
         return run ? [run] : [];
       });
       const simulatedRevenueUsd = runs.reduce((sum, run) => sum + numberField(run, "simulatedRewardUsd"), 0);
-      const realRevenueUsd = revenue + runs.reduce((sum, run) => sum + numberField(run, "realizedRewardUsd"), 0);
+      const realRevenueUsd = revenue + runs.filter((run) => !isFixtureRun(run) && objectField(run, "settlement").evidence).reduce((sum, run) => sum + numberField(run, "realizedRewardUsd"), 0);
       const shadowCostUsd = runs.reduce((sum, run) => sum + numberField(run, "shadowCostUsd"), 0);
       const taskShadow = (await this.getTasks({ limit: 200 })).reduce((sum, task) => sum + task.shadowCostUsd, 0);
       return {
+        estimatedRevenueUsd: runs.filter((run) => !isFixtureRun(run) && !objectField(run, "settlement").evidence).reduce((sum, run) => sum + numberField(run, "estimatedRewardUsd"), 0),
         realMoneySpentUsd: expenses,
         realRevenueUsd,
         simulatedRevenueUsd,
@@ -279,7 +302,7 @@ export class LocalDashboardDataSource implements DashboardDataSource {
     checks[1] = { label: "Runtime", status: status.heartbeat === "ONLINE" ? "pass" : status.heartbeat === "PAUSED" ? "warn" : "warn", detail: status.detail };
     checks[2] = { label: "Browser", status: "warn", detail: "BrowserAgent sera iniciado apenas quando uma tarefa precisar dele." };
     const ready = (await this.getProviders()).filter((provider) => provider.status === "READY" || provider.status === "KEYLESS").length;
-    checks[3] = { label: "Compute", status: ready > 0 ? "pass" : "warn", detail: ready > 0 ? `${ready} provider(s) disponiveis.` : "Nenhum provider pronto; tarefas fixture continuam disponiveis." };
+    checks[3] = { label: "Compute", status: ready > 0 ? "pass" : "warn", detail: ready > 0 ? `${ready} provider(s) disponiveis.` : "Nenhum provider pronto. Configure um modelo para executar tarefas." };
     return checks;
   }
 
@@ -303,13 +326,13 @@ export class LocalDashboardDataSource implements DashboardDataSource {
 }
 
 export function resolveDashboardDbPath(): string {
-  const repoRoot = path.resolve(process.cwd(), "../..");
+  const repoRoot = process.env.BEYONDER_REPO_ROOT ?? path.resolve(process.cwd(), "../..");
   const configured = process.env.BEYONDER_DB_PATH ?? "./data/beyonder.sqlite";
   return path.isAbsolute(configured) ? configured : path.resolve(/*turbopackIgnore: true*/ repoRoot, configured);
 }
 
 export function resolveProviderStatePath(): string {
-  const repoRoot = path.resolve(process.cwd(), "../..");
+  const repoRoot = process.env.BEYONDER_REPO_ROOT ?? path.resolve(process.cwd(), "../..");
   const configured = process.env.BEYONDER_PROVIDER_STATE_PATH ?? ".providers-vault/autopilot-state.json";
   return path.isAbsolute(configured) ? configured : path.resolve(/*turbopackIgnore: true*/ repoRoot, configured);
 }
@@ -352,15 +375,19 @@ function taskView(execution: Record<string, unknown>, provenance: "local"): Task
   const latestStep = stepExecutions.at(-1);
   return {
     id: humanTaskId(stringField(execution, "id")),
-    title: stringField(plan, "objective") || stringField(task, "objective") || "Objetivo sem titulo",
+    title: stringField(plan, "objective") || stringField(task, "objective") || stringField(task, "input") || "Objetivo sem titulo",
     humanStatus: humanTaskStatus(state, latestStep ? stringField(latestStep, "observationSummary") : undefined),
     status: normalizeTaskStatus(state),
-    result: typeof execution.result === "string" ? redactText(execution.result) : null,
+    result: typeof execution.result === "string" ? humanTaskResult(redactText(execution.result)) : null,
     provider: latestStep ? stringField(objectField(latestStep, "route").selected as Record<string, unknown> | undefined, "provider") || null : null,
     model: latestStep ? stringField(objectField(latestStep, "route").selected as Record<string, unknown> | undefined, "model") || null : null,
+    fixture: execution.fixture === true,
+    current: steps.find((step) => step.status === "RUNNING")?.description as string | undefined,
+    next: steps.find((step) => step.status === "PENDING")?.description as string | undefined,
+    tool: latestStep ? stringField(objectField(latestStep, "toolCall"), "tool") : undefined,
     costUsd: numberField(usage, "monetaryCostUsd"),
     shadowCostUsd: numberField(usage, "shadowCostUsd"),
-    durationMs: numberField(usage, "durationMs") || null,
+    durationMs: !stringField(execution, "completedAt") && stringField(execution, "startedAt") ? Math.max(0, Date.now() - Date.parse(stringField(execution, "startedAt"))) : numberField(usage, "durationMs") || null,
     startedAt: stringField(execution, "startedAt") || null,
     completedAt: stringField(execution, "completedAt") || null,
     steps: steps.map((step, index) => ({
@@ -382,13 +409,16 @@ function opportunityView(opportunity: Record<string, unknown>, provenance: "loca
   return {
     id: humanTaskId(stringField(opportunity, "id")),
     title: stringField(opportunity, "title") || "Oportunidade sem titulo",
+    externalActionMode: stringField(opportunity, "source") === "fixture" ? "FIXTURE" as const : "MANUAL_REQUIRED" as const,
+    sourceUrl: safeExternalUrl(stringField(opportunity, "sourceUrl")),
+    fixture: stringField(opportunity, "source") === "fixture",
     source: stringField(opportunity, "source") || "Fonte desconhecida",
     rewardLabel: reward,
     deadlineLabel: stringField(opportunity, "deadline") ? new Date(stringField(opportunity, "deadline")).toLocaleDateString("pt-BR") : "Sem prazo informado",
     feasibility: humanFeasibility(stringField(evaluation, "feasibility")),
     estimatedSuccessLabel: percentLabel(numberOrUndefined(evaluation, "estimatedSuccessProbability")),
-    estimatedCostLabel: usd(numberField(evaluation, "estimatedMonetaryCostUsd")),
-    riskLabel: riskLabel(numberField(evaluation, "riskScore")),
+    estimatedCostLabel: numberOrUndefined(evaluation, "estimatedMonetaryCostUsd") === undefined ? "Não estimado" : usd(numberField(evaluation, "estimatedMonetaryCostUsd")),
+    riskLabel: numberOrUndefined(evaluation, "riskScore") === undefined ? "Não estimado" : riskLabel(numberField(evaluation, "riskScore")),
     decisionLabel: humanOpportunityDecision(decision),
     confidenceLabel: percentLabel(numberOrUndefined(evaluation, "confidence")),
     humanSummary: humanOpportunityDecision(decision),
@@ -460,7 +490,7 @@ function readRouterDecisionSnapshot(db: Database.Database): ModelDecisionView[] 
       reasons: [
         { label: "capability fit", value: numericOrLabel(details.predictedQuality) },
         { label: "historical performance", value: numericOrLabel(details.historicalSuccess) },
-        { label: "monetary cost", value: usd(numericOrNull(details.monetaryCostUsd) ?? 0) }
+        { label: "custo monetário", value: numericOrNull(details.monetaryCostUsd) === null ? "Não há dados suficientes" : usd(Number(details.monetaryCostUsd)) }
       ],
       penalties: [
         { label: "shadow/resource cost", value: numericOrLabel(details.shadowCostUsd) },
@@ -471,9 +501,9 @@ function readRouterDecisionSnapshot(db: Database.Database): ModelDecisionView[] 
       decidedAt: row.created_at,
       taskId,
       humanWhy: [
-        "Selecionado por compatibilidade com a tarefa.",
-        `Custo monetario reportado: ${usd(numericOrNull(details.monetaryCostUsd) ?? 0)}.`,
-        "Historico, confiabilidade, latencia e shadow cost foram considerados pelo roteador."
+        `Compatibilidade registrada: ${numericOrLabel(details.predictedQuality)}.`,
+        `Custo monetário reportado: ${numericOrNull(details.monetaryCostUsd) === null ? "Não há dados suficientes" : usd(Number(details.monetaryCostUsd))}.`,
+        `Histórico registrado: ${numericOrLabel(details.historicalSuccess)}. Latência: ${numericOrLabel(details.latencyPenalty)}.`
       ],
       provenance: "local"
     };
@@ -535,7 +565,7 @@ function numericOrNull(value: unknown): number | null {
 }
 
 function numericOrLabel(value: unknown): number | string {
-  return typeof value === "number" && Number.isFinite(value) ? value : "unknown";
+  return typeof value === "number" && Number.isFinite(value) ? value : "Não há dados suficientes";
 }
 
 function humanTaskId(id: string) {
@@ -543,7 +573,10 @@ function humanTaskId(id: string) {
 }
 
 function normalizeTaskStatus(state: string): TaskView["status"] {
-  if (["RUNNING", "READY", "PLANNING", "RECOVERING", "REPLANNING"].includes(state)) return "running";
+  if (state === "PLANNING") return "planning";
+  if (state === "WAITING") return "waiting";
+  if (state === "BLOCKED") return "blocked";
+  if (["RUNNING", "READY", "RECOVERING", "REPLANNING"].includes(state)) return "running";
   if (state === "COMPLETED") return "succeeded";
   if (["FAILED", "BLOCKED", "BUDGET_EXHAUSTED"].includes(state)) return "failed";
   if (state === "CANCELLED") return "cancelled";
@@ -552,8 +585,11 @@ function normalizeTaskStatus(state: string): TaskView["status"] {
 }
 
 function humanTaskStatus(state: string, observation?: string) {
-  if (state === "COMPLETED") return "Concluido.";
-  if (state === "FAILED") return "Falhou. Abra detalhes tecnicos para investigar.";
+  if (state === "PLANNING" || state === "CREATED") return "Preparando";
+  if (state === "WAITING") return "Esperando você";
+  if (state === "CANCELLED") return "Cancelado";
+  if (state === "COMPLETED") return "Concluído";
+  if (state === "FAILED") return "Falhou. Consulte o resultado e o histórico.";
   if (state === "BLOCKED") return "Bloqueado por politica, verificacao ou entrada humana.";
   if (state === "RUNNING") return observation ? `Agora: ${redactText(observation)}` : "Executando o plano.";
   return "Aguardando execucao.";
@@ -683,4 +719,25 @@ function humanAuditEvent(event: string, details: Record<string, unknown>) {
   if (event === "tool.denied") return "Uma acao foi bloqueada por politica.";
   if (event.includes("failed")) return "Uma operacao falhou; detalhes tecnicos disponiveis.";
   return event.replaceAll(".", " ");
+}
+
+export function safeExternalUrl(value: string): string | undefined { try { const url = new URL(value); return ["http:", "https:"].includes(url.protocol) && !url.username && !url.password ? url.href : undefined; } catch { return undefined; } }
+
+function humanTaskResult(value: string): string {
+  try {
+    const data = JSON.parse(value);
+    if (typeof data === "string" || typeof data === "number") return String(data);
+    if (data.acceptedObjective) return "Objetivo registrado no modo de teste.";
+    if (typeof data.value === "number") return String(data.value);
+    if (typeof data.text === "string") return data.text;
+    if (typeof data.result?.data?.text === "string") return data.result.data.text;
+    if (typeof data.result?.observation?.text === "string") return data.result.observation.text;
+  } catch { /* Plain text is already a human-readable result. */ }
+  return value;
+}
+
+function isFixtureRun(value: unknown): boolean {
+  const run = objectField(value);
+  const submission = objectField(objectField(run, "deliverable"), "metadata").submissionEvidence;
+  return run.source === "fixture" || objectField(run, "application").mode === "FIXTURE" || (typeof submission === "string" && submission.startsWith("fixture-")) || objectField(objectField(run, "settlement"), "evidence").source === "fixture";
 }

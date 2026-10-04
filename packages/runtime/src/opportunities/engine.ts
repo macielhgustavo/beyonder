@@ -17,7 +17,9 @@ export class OpportunityEngine {
     const errors: string[] = [];
     for (const source of sources) {
       const started = Date.now();
-      const result = await source.discover({ limit: context.limit, signal: context.signal });
+      let result;
+      try { result = await source.discover({ limit: context.limit, signal: context.signal }); }
+      catch (error) { result = { items: [], errors: [`${source.id}: ${error instanceof Error ? error.message : "Fonte indisponível"}`], discoveredAt: new Date().toISOString() }; }
       errors.push(...result.errors);
       await this.reliability?.record(source.id, { status: sourceHealthFromError(result.errors[0]), latencyMs: Date.now() - started, discovered: result.items.length, error: result.errors[0], malformed: result.errors.some((error) => /malformed/i.test(error)) });
       await this.telemetry?.record("info", "opportunity.discovery.completed", { source: source.id, count: result.items.length, errors: result.errors.length });

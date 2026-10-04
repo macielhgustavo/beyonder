@@ -84,6 +84,9 @@ importers:
       better-sqlite3:
         specifier: ^13.0.3
         version: 13.0.3
+      nanoid:
+        specifier: ^5.0.9
+        version: 5.1.16
       next:
         specifier: ^16.3.8
         version: 16.3.8(@types/node@22.20.5)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -93,6 +96,9 @@ importers:
       react-dom:
         specifier: ^19.3.0
         version: 19.3.0(react@19.3.0)
+      zod:
+        specifier: ^3.24.2
+        version: 3.25.76
     devDependencies:
       '@types/better-sqlite3':
         specifier: ^7.6.12
@@ -168,6 +174,9 @@ importers:
 
   packages/runtime:
     dependencies:
+      '@beyonder/browser-agent':
+        specifier: workspace:*
+        version: link:../browser-agent
       '@beyonder/compute':
         specifier: workspace:*
         version: link:../compute

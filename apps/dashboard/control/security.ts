@@ -4,7 +4,8 @@ const SAFE_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
 
 export function assertLocalRequest(request: NextRequest) {
   const host = request.headers.get("host") ?? "";
-  const hostname = host.split(":")[0];
+  let hostname: string;
+  try { hostname = new URL(`http://${host}`).hostname; } catch { throw new Error("Host inválido."); }
   if (!SAFE_HOSTS.has(hostname)) {
     throw new Error("Control Center only accepts local requests.");
   }

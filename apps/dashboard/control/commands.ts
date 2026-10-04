@@ -1,4 +1,4 @@
-import { Vault } from "@beyonder/compute";
+import { Vault, providers, CredentialBroker, validateProviderDetailed, AutopilotStateStore } from "@beyonder/compute";
 import {
   createRuntime,
   DEFAULT_TASK_BUDGET,
@@ -10,7 +10,7 @@ import { nanoid } from "nanoid";
 import { mkdir, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
-import { defaultControlState } from "../data/local";
+import { defaultControlState, resolveDashboardDbPath, resolveProviderStatePath } from "../data/local";
 import type { ControlCenterState } from "../data/types";
 
 export type ControlCommand =
@@ -26,17 +26,49 @@ export type ControlCommand =
   | { type: "completeFirstRun" }
   | { type: "setDeveloperMode"; enabled: boolean }
   | { type: "setStartup"; enabled: boolean }
+  | { type: "confirmApplication" | "confirmSubmission"; workRunId: string; externalReference?: string; notes?: string }
+  | { type: "recordSettlement"; workRunId: string; amount: number; currency: "USD" | "USDC"; source: string; externalReference: string }
   | { type: "setSecret"; providerId: string; envVar: string; value: string; vaultPassword: string };
+
+const root = globalThis as typeof globalThis & { beyonderControl?: { stopping: boolean; emergency: boolean; shutdownResponseSent: boolean; active: number; controllers: Set<AbortController>; browsers: Set<ReturnType<typeof createRuntime>["browser"]>; serial: Promise<void> } };
+const lifecycle = root.beyonderControl ??= { stopping: false, emergency: false, shutdownResponseSent: false, active: 0, controllers: new Set(), browsers: new Set(), serial: Promise.resolve() };
+export function shutdownReady() { return lifecycle.stopping && lifecycle.shutdownResponseSent && lifecycle.active === 0; }
+export function markShutdownResponseSent() { lifecycle.shutdownResponseSent = true; }
+export function loadControlConfig() { return loadConfig({ BEYONDER_DB_PATH: resolveDashboardDbPath(), BEYONDER_PROVIDER_STATE_PATH: resolveProviderStatePath(), BEYONDER_TOOLS_ENABLED: process.env.BEYONDER_TOOLS_ENABLED ?? "1", BEYONDER_BROWSER_ENABLED: process.env.BEYONDER_BROWSER_ENABLED ?? "1" }); }
+function controlRuntime() { const runtime = createRuntime(loadControlConfig(), { fixture: process.env.BEYONDER_CONTROL_FIXTURE === "1", onProgress: async (execution) => {
+  const writer = createRuntime(loadControlConfig());
+  try { await saveTask(writer, execution); } finally { writer.sqlite.close(); }
+}, isPaused: async () => {
+  const reader = createRuntime(loadControlConfig());
+  try { const state = await reader.state.get<ControlCenterState>("control-center:state", defaultControlState()); return state.paused && !state.safeShutdownRequestedAt && !state.emergencyStopRequestedAt && !lifecycle.stopping; } finally { reader.sqlite.close(); }
+}, beforeStep: async () => {
+  const reader = createRuntime(loadControlConfig());
+  try { await assertNotPaused(reader); } finally { reader.sqlite.close(); }
+} }); lifecycle.browsers.add(runtime.browser); return runtime; }
+async function closeRuntime(runtime: ReturnType<typeof createRuntime>) { try { await runtime.browser.closeAll(); } finally { lifecycle.browsers.delete(runtime.browser); runtime.sqlite.close(); } }
 
 const CONTROL_STATE_KEY = "control-center:state";
 const TASK_INDEX_KEY = "control-center:tasks:index";
 
 export async function runControlCommand(command: ControlCommand) {
+  const serial = ["prepareApplication", "approveAction", "confirmApplication", "confirmSubmission", "recordSettlement", "setSecret", "setStartup"].includes(command.type);
+  const tracked = serial || command.type === "discoverOpportunities";
+  const previous = lifecycle.serial;
+  let release = () => {};
+  if (serial) lifecycle.serial = new Promise<void>((resolve) => { release = resolve; });
+  if (tracked) lifecycle.active++;
+  try {
+    if (serial) await previous;
+    if (lifecycle.stopping && command.type !== "safeShutdown") throw new Error("Beyonder está encerrando.");
+    return await dispatch(command);
+  } finally { if (tracked) lifecycle.active--; release(); }
+}
+async function dispatch(command: ControlCommand) {
   switch (command.type) {
     case "submitObjective":
       return submitObjective(command.objective);
     case "discoverOpportunities":
-      return discoverOpportunities(command.fixture ?? process.env.BEYONDER_CONTROL_FIXTURE === "1");
+      return discoverOpportunities(process.env.BEYONDER_CONTROL_FIXTURE === "1");
     case "prepareApplication":
       return prepareApplication(command.opportunityId);
     case "approveAction":
@@ -46,17 +78,28 @@ export async function runControlCommand(command: ControlCommand) {
     case "pauseRuntime":
       return updateControlState({ paused: true, currentActivity: null }, "control.paused");
     case "resumeRuntime":
-      return updateControlState({ paused: false, currentActivity: null }, "control.resumed");
+      lifecycle.emergency = false;
+      return updateControlState({ paused: false, emergencyStopRequestedAt: undefined, currentActivity: null }, "control.resumed");
     case "safeShutdown":
+      lifecycle.stopping = true;
       return updateControlState({ paused: true, safeShutdownRequestedAt: new Date().toISOString(), currentActivity: "Safe shutdown requested" }, "control.safe_shutdown_requested");
-    case "emergencyStop":
-      return updateControlState({ paused: true, emergencyStopRequestedAt: new Date().toISOString(), currentActivity: "Emergency stop requested" }, "control.emergency_stop_requested");
+    case "emergencyStop": {
+      lifecycle.emergency = true;
+      const result = await updateControlState({ paused: true, emergencyStopRequestedAt: new Date().toISOString(), currentActivity: "Parada de emergência solicitada" }, "control.emergency_stop_requested");
+      for (const controller of lifecycle.controllers) controller.abort();
+      await Promise.allSettled([...lifecycle.browsers].map((browser) => browser.closeAll()));
+      return result;
+    }
     case "completeFirstRun":
       return updateControlState({ firstRunComplete: true }, "control.first_run_completed");
     case "setDeveloperMode":
       return updateControlState({ developerMode: command.enabled }, "control.developer_mode_changed");
     case "setStartup":
       return setStartup(command.enabled);
+    case "confirmApplication":
+    case "confirmSubmission":
+    case "recordSettlement":
+      return recordEvidence(command);
     case "setSecret":
       return setSecret(command);
   }
@@ -65,8 +108,10 @@ export async function runControlCommand(command: ControlCommand) {
 async function setStartup(enabled: boolean) {
   const target = `${homedir()}/.config/autostart/beyonder-control-center.desktop`;
   if (enabled) {
-    const repoRoot = resolve(/*turbopackIgnore: true*/ process.cwd(), "../..");
-    const exec = `bash -lc 'cd ${shellQuote(repoRoot)} && pnpm control-center:launch'`;
+    const repoRoot = process.env.BEYONDER_REPO_ROOT;
+    if (!repoRoot || !process.env.BEYONDER_NODE_PATH) throw new Error("Inicie pelo launcher instalado para configurar início automático.");
+    const quote = (value: string) => `"${value.replaceAll("%", "%%").replace(/[\\"`$]/g, "\\$&")}"`;
+    const exec = `${quote(process.env.BEYONDER_NODE_PATH)} ${quote(resolve(repoRoot, "apps/dashboard/bin/launch-control-center.mjs"))}`;
     await mkdir(dirname(target), { recursive: true });
     await writeFile(target, `[Desktop Entry]\nType=Application\nName=Beyonder\nComment=Start Beyonder Control Center\nExec=${exec}\nTerminal=false\nCategories=Development;Utility;\nStartupNotify=false\n`, { mode: 0o644 });
   } else {
@@ -76,11 +121,11 @@ async function setStartup(enabled: boolean) {
       if ((error as { code?: string }).code !== "ENOENT") throw error;
     }
   }
-  const runtime = createRuntime(loadConfig());
+  const runtime = controlRuntime();
   try {
     await runtime.audit.record("info", "control.startup_changed", { enabled });
   } finally {
-    runtime.sqlite.close();
+    await closeRuntime(runtime);
   }
   return { ok: true, startup: enabled ? "enabled" : "disabled" };
 }
@@ -88,14 +133,21 @@ async function setStartup(enabled: boolean) {
 async function submitObjective(objective: string) {
   const normalized = objective.trim().replace(/\s+/g, " ");
   if (normalized.length < 3) throw new Error("Objective is too short.");
-  const runtime = createRuntime(loadConfig());
+  const runtime = controlRuntime();
+  const controller = new AbortController();
+  lifecycle.controllers.add(controller);
+  lifecycle.active++;
+  let taskId: string | undefined;
   try {
     await assertNotPaused(runtime);
     await writeHeartbeat(runtime, `Executando: ${normalized}`);
     await runtime.audit.record("info", "control.objective.started", { objective: normalized });
     const inspection = await runtime.intelligence.inspect(normalized);
     const task = { ...inspection.task, id: `task_${nanoid()}` };
-    const plan: Plan = {
+    taskId = task.id;
+    await saveTask(runtime, { id: task.id, task, state: "PLANNING", startedAt: new Date().toISOString(), plan: { steps: [] }, usage: {}, steps: [] });
+    const availableTools = (await runtime.getAvailableTools({ taskId: task.id, economicState: "normal" })).filter((tool) => process.env.BEYONDER_CONTROL_FIXTURE === "1" || tool.id !== "safe-objective");
+    const fixturePlan = (): Plan => ( {
       id: `plan_${nanoid()}`,
       taskId: task.id,
       objective: normalized,
@@ -110,28 +162,37 @@ async function submitObjective(objective: string) {
         allowedToolCapabilities: ["objective-normalization"],
         action: { id: `call_${nanoid()}`, tool: "safe-objective", arguments: { objective: normalized } }
       }]
-    };
-    const availableTools = await runtime.getAvailableTools({ taskId: task.id, economicState: "normal" });
+    });
+    const plan = process.env.BEYONDER_CONTROL_FIXTURE === "1" ? fixturePlan() : await runtime.planner.createPlan({ objective: normalized, task, memoryContext: await runtime.memory.retrieve({ query: normalized, taskType: task.type, limit: 6 }), availableTools, budget: DEFAULT_TASK_BUDGET, economicState: "normal" });
+    await runtime.audit.record("info", "plan.created", { taskId: task.id, steps: plan.steps.length, provider: runtime.planner.lastResult?.provider, model: runtime.planner.lastResult?.model });
     const validation = validatePlan(plan, { availableTools, budget: DEFAULT_TASK_BUDGET });
     if (!validation.valid) throw new Error(`Control Center plan is invalid: ${validation.issues.map((issue) => issue.message).join("; ")}`);
     const outcome = await runtime.taskExecutor.execute({
       task,
       plan,
       economicState: "normal",
-      completionCriteria: { expectedText: normalized.slice(0, Math.min(24, normalized.length)) },
+      signal: controller.signal,
+      initialUsage: { monetaryCostUsd: runtime.planner.lastResult?.monetaryCostUsd ?? 0, shadowCostUsd: runtime.planner.lastResult?.shadowCostUsd ?? 0 },
+      ...(process.env.BEYONDER_CONTROL_FIXTURE === "1" ? { completionCriteria: { expectedText: normalized.slice(0, Math.min(24, normalized.length)) } } : {}),
       budget: { maxMonetaryCostUsd: 0, maxShadowCostUsd: 0.02, maxDurationMs: 30_000 }
     });
     await saveTask(runtime, outcome.execution);
     await runtime.audit.record(outcome.success ? "info" : "warn", outcome.success ? "control.objective.completed" : "control.objective.failed", { taskId: task.id, objective: normalized, status: outcome.status });
     await writeHeartbeat(runtime, null);
-    return { ok: true, taskId: task.id, status: outcome.status, result: outcome.result ?? null };
+    return { ok: outcome.success, taskId: task.id, status: outcome.status, result: outcome.result ?? null, error: outcome.success ? undefined : humanFailure(outcome.failureReason ?? (outcome.status === "BLOCKED" ? "policy blocked" : undefined)) };
+  } catch (error) {
+    const message = humanFailure(error instanceof Error ? error.message : "Falha na execução.");
+    if (taskId) await saveTask(runtime, { id: taskId, task: { id: taskId, input: normalized }, state: "FAILED", result: message, startedAt: new Date().toISOString(), completedAt: new Date().toISOString(), plan: { steps: [] }, usage: {}, steps: [] });
+    throw new Error(message);
   } finally {
-    runtime.sqlite.close();
+    lifecycle.controllers.delete(controller);
+    await writeHeartbeat(runtime, null);
+    try { await closeRuntime(runtime); } finally { lifecycle.active--; }
   }
 }
 
 async function discoverOpportunities(fixture: boolean) {
-  const runtime = createRuntime(loadConfig());
+  const runtime = controlRuntime();
   try {
     await assertNotPaused(runtime);
     await writeHeartbeat(runtime, "Pesquisando oportunidades...");
@@ -144,12 +205,12 @@ async function discoverOpportunities(fixture: boolean) {
     await writeHeartbeat(runtime, null);
     return { ok: true, count: result.opportunities.length, errors: result.errors, evaluations };
   } finally {
-    runtime.sqlite.close();
+    await closeRuntime(runtime);
   }
 }
 
 async function prepareApplication(opportunityId: string) {
-  const runtime = createRuntime(loadConfig());
+  const runtime = controlRuntime();
   try {
     await assertNotPaused(runtime);
     const realId = await resolveOpportunityId(runtime, opportunityId);
@@ -158,12 +219,12 @@ async function prepareApplication(opportunityId: string) {
     await runtime.audit.record("info", "control.application_prepared", { workRunId: prepared.id, opportunityId: realId, approvalId: prepared.application?.approvalId });
     return { ok: true, workRunId: prepared.id, approvalId: prepared.application?.approvalId };
   } finally {
-    runtime.sqlite.close();
+    await closeRuntime(runtime);
   }
 }
 
 async function approveAction(approvalId: string) {
-  const runtime = createRuntime(loadConfig());
+  const runtime = controlRuntime();
   try {
     await assertNotPaused(runtime);
     const realId = await resolveApprovalId(runtime, approvalId);
@@ -174,70 +235,83 @@ async function approveAction(approvalId: string) {
       const runs = await runtime.workRunManager.list();
       const run = runs.find((candidate) => candidate.application?.approvalId === realId);
       if (run) {
-        await runtime.workRunManager.sendApplication(run.id);
-        consumed = true;
+        const sent = await runtime.workRunManager.sendApplication(run.id);
+        consumed = sent.state === "APPLICATION_SENT";
       }
+    }
+    if (request?.action === "SUBMIT_DELIVERABLE") {
+      const run = (await runtime.workRunManager.list()).find((candidate) => candidate.deliverable?.metadata?.submissionApprovalId === realId);
+      if (run) { const sent = await runtime.workRunManager.submit(run.id); consumed = sent.state === "AWAITING_SETTLEMENT"; }
     }
     await runtime.audit.record("info", "control.approval_decided", { approvalId: realId, status: consumed ? "CONSUMED" : "APPROVED" });
     return { ok: true, approvalId: realId, status: consumed ? "CONSUMED" : "APPROVED" };
   } finally {
-    runtime.sqlite.close();
+    await closeRuntime(runtime);
   }
 }
 
 async function rejectAction(approvalId: string, reason?: string) {
-  const runtime = createRuntime(loadConfig());
+  const runtime = controlRuntime();
   try {
     const realId = await resolveApprovalId(runtime, approvalId);
     await runtime.approvals.reject(realId, reason);
     await runtime.audit.record("info", "control.approval_decided", { approvalId: realId, status: "REJECTED" });
     return { ok: true, approvalId: realId, status: "REJECTED" };
   } finally {
-    runtime.sqlite.close();
+    await closeRuntime(runtime);
   }
 }
 
 async function setSecret(command: Extract<ControlCommand, { type: "setSecret" }>) {
+  if (!providers.find((provider) => provider.id === command.providerId)?.credentialEnvVars.includes(command.envVar)) throw new Error("Credencial incompatível com o provider.");
   if (!command.value.trim()) throw new Error("Secret value is required.");
-  const vault = new Vault();
+  const repoRoot = process.env.BEYONDER_REPO_ROOT ?? resolve(process.cwd(), "../..");
+  const vault = new Vault(resolve(repoRoot, ".providers-vault/vault.json"));
   await vault.set(command.providerId, command.envVar, command.value, command.vaultPassword);
-  const runtime = createRuntime(loadConfig());
+  const provider = providers.find((provider) => provider.id === command.providerId)!;
+  const broker = new CredentialBroker(await vault.read(command.vaultPassword), { ...process.env, [command.envVar]: command.value });
+  const report = process.env.BEYONDER_CONTROL_FIXTURE === "1" ? null : await validateProviderDetailed(provider, broker);
+  const validated = report?.status;
+  await vault.markValidation(command.providerId, command.envVar, validated?.validationStatus ?? "skipped", command.vaultPassword);
+  const ready = validated?.validationStatus === "validated";
+  if (ready) for (const record of broker.getProviderSecrets(provider.id)) process.env[record.envVar] = record.value;
+  const stateStore = new AutopilotStateStore(loadControlConfig().model.providerStatePath);
+  await stateStore.update(provider, ready ? "READY" : "HUMAN_GATE", { validation: { status: validated?.validationStatus ?? "skipped", models: report?.models, modelCount: report?.modelCount, latencyMs: report?.latencyMs, message: ready ? "Credencial validada." : "Credencial não validada. Verifique a chave e a conexão." } });
+  const runtime = controlRuntime();
   try {
-    await runtime.audit.record("info", "control.secret_set", { providerId: command.providerId, envVar: command.envVar, status: "configured" });
+    await runtime.audit.record("info", "control.secret_set", { providerId: command.providerId, envVar: command.envVar, status: ready ? "READY" : "INVALID" });
   } finally {
-    runtime.sqlite.close();
+    await closeRuntime(runtime);
   }
-  return { ok: true, providerId: command.providerId, envVar: command.envVar, status: "configured" };
+  return { ok: true, providerId: command.providerId, envVar: command.envVar, status: ready ? "READY" : "INVALID" };
 }
 
 async function updateControlState(patch: Partial<ControlCenterState>, event: string) {
-  const runtime = createRuntime(loadConfig());
+  const runtime = controlRuntime();
   try {
-    const current = await runtime.state.get<ControlCenterState>(CONTROL_STATE_KEY, defaultControlState());
-    const next = { ...current, ...patch, lastHeartbeatAt: new Date().toISOString() };
-    await runtime.state.set(CONTROL_STATE_KEY, next);
+    const next = await runtime.state.update<ControlCenterState>(CONTROL_STATE_KEY, defaultControlState(), (current) => ({ ...current, ...patch }));
     await runtime.audit.record("info", event, { paused: next.paused, developerMode: next.developerMode });
     return { ok: true, state: next };
   } finally {
-    runtime.sqlite.close();
+    await closeRuntime(runtime);
   }
 }
 
 async function writeHeartbeat(runtime: ReturnType<typeof createRuntime>, currentActivity: string | null) {
-  const current = await runtime.state.get<ControlCenterState>(CONTROL_STATE_KEY, defaultControlState());
-  await runtime.state.set(CONTROL_STATE_KEY, { ...current, currentActivity, lastHeartbeatAt: new Date().toISOString() });
+  await runtime.state.update<ControlCenterState>(CONTROL_STATE_KEY, defaultControlState(), (current) => ({ ...current, currentActivity }));
 }
 
 async function assertNotPaused(runtime: ReturnType<typeof createRuntime>) {
   const state = await runtime.state.get<ControlCenterState>(CONTROL_STATE_KEY, defaultControlState());
-  if (state.paused) throw new Error("Beyonder is paused. Resume before starting new work.");
+  if (lifecycle.stopping || state.safeShutdownRequestedAt) throw new Error("Beyonder está encerrando.");
+  if (lifecycle.emergency || state.paused) throw new Error("Beyonder is paused. Resume before starting new work.");
 }
 
 async function saveTask(runtime: ReturnType<typeof createRuntime>, execution: unknown) {
   const id = typeof execution === "object" && execution && typeof (execution as { id?: unknown }).id === "string" ? (execution as { id: string }).id : `exec_${nanoid()}`;
-  const index = await runtime.state.get<string[]>(TASK_INDEX_KEY, []);
-  await runtime.state.set(TASK_INDEX_KEY, index.includes(id) ? index : [id, ...index]);
-  await runtime.state.set(`control-center:task:${id}`, execution);
+  const executionTaskId = (execution as { task?: { id?: string } }).task?.id;
+  await runtime.state.update<string[]>(TASK_INDEX_KEY, [], (current) => { const index = current.filter((existing) => existing !== executionTaskId || id === executionTaskId); return index.includes(id) ? index : [id, ...index]; });
+  await runtime.state.set(`control-center:task:${id}`, { ...(execution as object), fixture: process.env.BEYONDER_CONTROL_FIXTURE === "1" });
 }
 
 async function resolveOpportunityId(runtime: ReturnType<typeof createRuntime>, shortOrFull: string) {
@@ -252,4 +326,22 @@ async function resolveApprovalId(runtime: ReturnType<typeof createRuntime>, shor
 
 function shellQuote(value: string) {
   return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function humanFailure(reason?: string) {
+  if (/policy|blocked|prohibited|denied/i.test(reason ?? "")) return "Esta ação foi bloqueada pelas regras de segurança.";
+  if (/browser|playwright/i.test(reason ?? "")) return "O navegador não conseguiu executar a ação. Verifique a instalação e tente novamente.";
+  return reason ?? "A tarefa falhou. Consulte o histórico operacional.";
+}
+async function recordEvidence(command: Extract<ControlCommand, { workRunId: string }>) {
+  const runtime = controlRuntime();
+  try {
+    await assertNotPaused(runtime);
+    const run = await runtime.workRunManager.inspect(command.workRunId);
+    if (!run) throw new Error("Trabalho não encontrado.");
+    if (command.type === "recordSettlement" && (run.source === "fixture" || run.application?.mode === "FIXTURE")) throw new Error("Trabalhos de teste não registram receita real.");
+    if (command.type === "recordSettlement") return { ok: true, run: await runtime.workRunManager.recordSettlement(run.id, { type: "MANUAL_CONFIRMED", amount: command.amount, currency: command.currency, source: command.source, externalReference: command.externalReference, observedAt: new Date().toISOString() }) };
+    const evidence = { executedBy: "HUMAN" as const, source: run.source, timestamp: new Date().toISOString(), externalReference: command.externalReference, notes: command.notes };
+    return { ok: true, run: command.type === "confirmApplication" ? await runtime.workRunManager.recordManualApplication(run.id, evidence) : await runtime.workRunManager.recordManualSubmission(run.id, evidence) };
+  } finally { await closeRuntime(runtime); }
 }

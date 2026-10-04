@@ -1,3 +1,5 @@
+import { getDashboardDataSource } from "../data";
+import { LiveStatus } from "./live-status";
 import Link from "next/link";
 import type { ReactNode } from "react";
 
@@ -12,9 +14,10 @@ const nav = [
   ["/settings", "Configuracoes", "08"]
 ] as const;
 
-export function DashboardShell({ children, provenance }: { children: ReactNode; provenance?: "local" | "mock" | "empty" }) {
+export async function DashboardShell({ children, provenance }: { children: ReactNode; provenance?: "local" | "mock" | "empty" }) {
+  const developerMode = await getDashboardDataSource().isDeveloperMode();
   return (
-    <div className="shell">
+    <div className={`shell${developerMode ? " developer-mode" : ""}`}>
       <aside className="sidebar">
         <div className="brand-block">
           <div className="brand-mark" aria-hidden="true">B</div>
@@ -34,10 +37,10 @@ export function DashboardShell({ children, provenance }: { children: ReactNode; 
         <div className="sidebar-foot">
           <div className="scope-row"><span className="scope-dot" /> LOCAL ONLY</div>
           <div className="muted small">local · secrets redacted</div>
-          {provenance === "mock" ? <div className="demo-badge">DEMO DATA</div> : null}
+          {provenance === "mock" || process.env.BEYONDER_CONTROL_FIXTURE === "1" ? <div className="demo-badge">DEMO / TEST DATA</div> : null}
         </div>
       </aside>
-      <main className="main">{children}</main>
+      <main className="main"><LiveStatus />{children}</main>
     </div>
   );
 }

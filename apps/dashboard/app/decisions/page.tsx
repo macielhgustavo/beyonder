@@ -45,7 +45,7 @@ export default async function DecisionsPage() {
                     <CommandButton payload={{ type: "approveAction", approvalId: approval.technicalId }} confirm={`Voce esta prestes a autorizar uma acao externa: ${approval.title} para ${approval.destination}.`}>Sim, autorizar</CommandButton>
                   </div>
                 ) : null}
-                <details className="why-box">
+                <details className="why-box developer-only">
                   <summary>Detalhes tecnicos</summary>
                   <div className="technical-id">{approval.technicalId}</div>
                 </details>

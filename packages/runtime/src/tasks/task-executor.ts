@@ -27,6 +27,9 @@ import { assertTaskStateTransition, isTerminalTaskState } from "./state-machine.
 import type { TaskCheckpointStore } from "./checkpoints.js";
 
 export interface TaskExecutorOptions {
+  onProgress?: (execution: TaskExecution) => Promise<void>;
+  beforeStep?: () => Promise<void>;
+  isPaused?: () => Promise<boolean>;
   memory?: MemoryEngine;
   modelRouter?: ModelRouter;
   toolExecutor: ToolExecutor;
@@ -42,6 +45,7 @@ export interface TaskExecutorOptions {
 }
 
 export interface ExecuteTaskRequest {
+  initialUsage?: Pick<TaskBudgetUsage, "monetaryCostUsd" | "shadowCostUsd">;
   task: IntelligenceTask;
   plan: Plan;
   economicState: EconomicState;
@@ -90,7 +94,7 @@ export class AutonomousTaskExecutor {
       plan: clonePlan(request.plan),
       state: "CREATED",
       budget,
-      usage: { ...EMPTY_USAGE },
+      usage: { ...EMPTY_USAGE, ...request.initialUsage },
       checkpoints: [],
       steps: [],
       startedAt: new Date(this.now()).toISOString()
@@ -139,10 +143,31 @@ export class AutonomousTaskExecutor {
         break;
       }
 
-      await this.runStep(execution, step, request);
+      try {
+        if (await this.options.isPaused?.()) {
+          await this.transition(execution, "WAITING", { reason: "runtime-paused" });
+          await this.checkpoint(execution);
+          const pausedAt = this.now();
+          while (await this.options.isPaused?.()) {
+            if (request.signal?.aborted) break;
+            await new Promise((resolve) => setTimeout(resolve, 200));
+          }
+          execution.budget.maxDurationMs += this.now() - pausedAt;
+          if (request.signal?.aborted) { await this.finish(execution, "CANCELLED", "cancelled"); break; }
+          await this.transition(execution, "RUNNING", { reason: "runtime-resumed" });
+        }
+        await this.options.beforeStep?.();
+        await this.runStep(execution, step, request);
+      } catch (error) {
+        await this.finish(execution, request.signal?.aborted ? "CANCELLED" : "FAILED", error instanceof Error ? error.message : "Falha ao executar tarefa.");
+      }
     }
 
-    const outcome = outcomeWithCompletion(toOutcome(execution), this.completionEvaluator.evaluate(execution, request.completionCriteria));
+    if (!execution.completedAt) await this.finish(execution, execution.state, execution.error ?? execution.steps.at(-1)?.toolResult?.error?.message);
+    const evaluation = this.completionEvaluator.evaluate(execution, request.completionCriteria);
+    await this.telemetry("info", "evaluation.completed", { taskId: execution.task.id, status: evaluation.status, method: evaluation.method });
+    const outcome = outcomeWithCompletion(toOutcome(execution), evaluation);
+    await this.options.onProgress?.(outcome.execution);
     await this.recordMemory(outcome);
     await this.options.modelRouter?.recordOutcome(toTaskOutcome(outcome));
     return outcome;
@@ -150,6 +175,7 @@ export class AutonomousTaskExecutor {
 
   private async runStep(execution: TaskExecution, step: PlanStep, request: ExecuteTaskRequest): Promise<void> {
     step.status = "RUNNING";
+    await this.options.onProgress?.(execution);
     execution.usage.steps += 1;
     await this.telemetry("info", "step.started", { taskId: execution.task.id, planId: execution.plan.id, stepId: step.id });
 
@@ -167,7 +193,7 @@ export class AutonomousTaskExecutor {
       availableTools,
       remainingBudget: remainingBudget(execution),
       selectedModel: route?.selected
-    });
+    }, execution);
 
     const stepExecution: StepExecution = {
       id: `step_${this.id()}`,
@@ -193,8 +219,9 @@ export class AutonomousTaskExecutor {
       } : {})
     };
     execution.steps.push(stepExecution);
+    await this.options.onProgress?.(execution);
 
-    const result = await this.options.toolExecutor.execute(action, {
+    let result = await this.options.toolExecutor.execute(action, {
       taskId: execution.task.id,
       economicState: request.economicState,
       budget: {
@@ -212,6 +239,8 @@ export class AutonomousTaskExecutor {
       metadata: { planId: execution.plan.id, stepId: step.id }
     });
 
+    const browserError = result.success ? browserFailure(result.output) : undefined;
+    if (browserError) result = { ...result, success: false, error: { code: "EXECUTION_ERROR", message: `Browser: ${browserError}` } };
     execution.usage.toolInvocations += 1;
     execution.usage.durationMs = this.now() - Date.parse(execution.startedAt);
     execution.usage.monetaryCostUsd += numeric(result.metadata?.monetaryCostUsd);
@@ -297,10 +326,14 @@ export class AutonomousTaskExecutor {
     }
   }
 
-  private async actionForStep(context: StepContext): Promise<ToolCall> {
+  private async actionForStep(context: StepContext, execution: TaskExecution): Promise<ToolCall> {
     if (context.currentStep.action) return context.currentStep.action;
     const decision = await this.options.actionPlanner?.decide(context);
     if (!decision) throw new Error(`Step '${context.currentStep.id}' has no action and no action planner is configured.`);
+    execution.usage.monetaryCostUsd += numeric(decision.monetaryCostUsd);
+    execution.usage.shadowCostUsd += numeric(decision.shadowCostUsd);
+    const exceeded = budgetTerminalState(execution);
+    if (exceeded && ["maxMonetaryCostUsd", "maxShadowCostUsd"].includes(exceeded.reason)) throw new Error("Limite de custo atingido antes da próxima ferramenta.");
     return decision.call;
   }
 
@@ -365,6 +398,7 @@ export class AutonomousTaskExecutor {
     };
     execution.checkpoints.push(checkpoint);
     await this.options.checkpointStore?.save(execution);
+    await this.options.onProgress?.(execution);
     await this.telemetry("info", "task.checkpoint", { ...checkpoint });
   }
 
@@ -380,6 +414,7 @@ export class AutonomousTaskExecutor {
     assertTaskStateTransition(execution.state, state);
     const previous = execution.state;
     execution.state = state;
+    await this.options.onProgress?.(execution);
     await this.telemetry(levelForState(state), eventForState(state), {
       taskId: execution.task.id,
       planId: execution.plan.id,
@@ -557,4 +592,10 @@ function levelForState(state: TaskExecutionState): "debug" | "info" | "warn" | "
   if (state === "FAILED") return "error";
   if (state === "BLOCKED" || state === "BUDGET_EXHAUSTED") return "warn";
   return "info";
+}
+
+function browserFailure(output: unknown): string | undefined {
+  if (!output || typeof output !== "object") return undefined;
+  const result = (output as { result?: { status?: string; error?: { message?: string } } }).result;
+  return result?.status === "error" ? result.error?.message ?? "O navegador não conseguiu executar a ação." : undefined;
 }

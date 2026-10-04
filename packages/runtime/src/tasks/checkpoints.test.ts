@@ -40,6 +40,33 @@ describe("task checkpoint persistence", () => {
     sqlite.close();
   });
 
+  it("checkpoints a paused task and continues only after resume", async () => {
+    const { db, sqlite } = openDatabase(":memory:");
+    const store = new StateTaskCheckpointStore(new StateStore(db));
+    let paused = false;
+    let calls = 0;
+    let waited = false;
+    const states: string[] = [];
+    const executor = new AutonomousTaskExecutor({
+      toolExecutor: new ToolExecutor(new ToolRegistry().register(definition(() => { calls++; if (calls === 1) paused = true; }))),
+      checkpointStore: store,
+      onProgress: async (execution) => { states.push(execution.state); },
+      isPaused: async () => {
+        if (paused && states.includes("WAITING")) {
+          expect(calls).toBe(1);
+          expect((await store.get("resume-task"))?.state).toBe("WAITING");
+          waited = true;
+          paused = false;
+        }
+        return paused;
+      }
+    });
+    try {
+      const result = await executor.execute({ task: task(), plan: plan(), economicState: "normal" });
+      expect(waited).toBe(true); expect(calls).toBe(2); expect(result.status).toBe("COMPLETED");
+    } finally { sqlite.close(); }
+  });
+
   it("rejects corrupted or incompatible checkpoints safely", async () => {
     const { db, sqlite } = openDatabase(":memory:");
     const state = new StateStore(db);

@@ -137,6 +137,8 @@ export interface AutonomousTaskOutcome {
 
 export interface StepActionDecision {
   call: ToolCall;
+  monetaryCostUsd?: number;
+  shadowCostUsd?: number;
 }
 
 export interface StepActionPlanner {

@@ -17,6 +17,10 @@ import type {
 export class EmptyDashboardDataSource implements DashboardDataSource {
   readonly provenance = "empty" as const;
 
+  async getWorkRuns() { return []; }
+  async getSourceHealth() { return []; }
+  async isDeveloperMode() { return false; }
+
   async getHome(): Promise<HomeView> {
     return {
       status: await this.getRuntimeStatus(),

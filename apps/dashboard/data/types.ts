@@ -71,6 +71,8 @@ export interface TaskStepView {
 }
 
 export interface TaskView {
+  canResume?: boolean;
+  resumeTaskId?: string;
   failureSummary?: string;
   attempts?: Array<{ phase: string; provider: string; model: string; status: string; failureClass?: string; httpStatus?: number; error?: string }>;
   current?: string;

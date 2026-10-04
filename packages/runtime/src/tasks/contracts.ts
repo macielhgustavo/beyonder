@@ -118,6 +118,8 @@ export interface ExecutionCheckpoint {
 }
 
 export interface TaskExecution {
+  activeDurationBeforeResumeMs?: number;
+  resumedAt?: string;
   attempts?: import("../models/inference.js").InferenceAttempt[];
   failure?: { failureClass: string; phase?: string; provider?: string; model?: string; httpStatus?: number };
   id: string;

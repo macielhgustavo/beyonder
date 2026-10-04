@@ -4,7 +4,7 @@ import { openDatabase } from "../db/client.js";
 import { StateStore } from "../memory/state-store.js";
 import { StateTaskCheckpointStore } from "./checkpoints.js";
 import { AutonomousTaskExecutor } from "./task-executor.js";
-import type { Plan } from "./contracts.js";
+import { DEFAULT_TASK_BUDGET, type Plan, type TaskExecution } from "./contracts.js";
 import type { IntelligenceTask } from "../intelligence/contracts.js";
 
 function task(): IntelligenceTask { return { id: "resume-task", input: "resume", type: "tool-use", complexity: 0.1, risk: 0, estimatedTokens: 20, requirements: {} }; }
@@ -75,6 +75,25 @@ describe("task checkpoint persistence", () => {
     expect(await store.get("bad")).toBeUndefined();
     await state.set("task-checkpoint:broken", "not-an-execution");
     expect(await store.get("broken")).toBeUndefined();
+    sqlite.close();
+  });
+
+  it("does not charge process downtime against the resumed task duration budget", async () => {
+    const { db, sqlite } = openDatabase(":memory:");
+    const store = new StateTaskCheckpointStore(new StateStore(db));
+    const saved: TaskExecution = {
+      id: "downtime-execution", task: task(), plan: plan(), state: "WAITING",
+      budget: { ...DEFAULT_TASK_BUDGET, maxDurationMs: 1_000 },
+      usage: { steps: 0, toolInvocations: 0, retries: 0, replans: 0, durationMs: 100, monetaryCostUsd: 0, shadowCostUsd: 0, consecutiveFailures: 0, noProgressSteps: 0 },
+      checkpoints: [], steps: [], startedAt: new Date(0).toISOString()
+    };
+    let now = 86_400_000;
+    let calls = 0;
+    const resumed = new AutonomousTaskExecutor({ toolExecutor: new ToolExecutor(new ToolRegistry().register(definition(() => { calls++; }))), checkpointStore: store, now: () => now });
+    const outcome = await resumed.resume({ execution: saved, economicState: "normal", completionCriteria: { expectedText: "ok" } });
+    expect(outcome.status).toBe("COMPLETED");
+    expect(outcome.execution.usage.durationMs).toBe(100);
+    expect(calls).toBe(2);
     sqlite.close();
   });
 });

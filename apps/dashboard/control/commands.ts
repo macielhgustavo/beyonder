@@ -2,9 +2,11 @@ import { Vault, providers, CredentialBroker, validateProviderDetailed, Autopilot
 import {
   createRuntime,
   DEFAULT_TASK_BUDGET,
+  classifyEconomicState,
   loadConfig,
   validatePlan,
-  type Plan
+  type Plan,
+  type TaskExecution
 } from "@beyonder/runtime";
 import { nanoid } from "nanoid";
 import { mkdir, unlink, writeFile } from "node:fs/promises";
@@ -15,6 +17,7 @@ import type { ControlCenterState } from "../data/types";
 
 export type ControlCommand =
   | { type: "submitObjective"; objective: string }
+  | { type: "resumeTask"; taskId: string }
   | { type: "discoverOpportunities"; fixture?: boolean }
   | { type: "prepareApplication"; opportunityId: string }
   | { type: "approveAction"; approvalId: string }
@@ -51,7 +54,7 @@ const CONTROL_STATE_KEY = "control-center:state";
 const TASK_INDEX_KEY = "control-center:tasks:index";
 
 export async function runControlCommand(command: ControlCommand) {
-  const serial = ["prepareApplication", "approveAction", "confirmApplication", "confirmSubmission", "recordSettlement", "setSecret", "setStartup"].includes(command.type);
+  const serial = ["resumeTask", "prepareApplication", "approveAction", "confirmApplication", "confirmSubmission", "recordSettlement", "setSecret", "setStartup"].includes(command.type);
   const tracked = serial || command.type === "discoverOpportunities";
   const previous = lifecycle.serial;
   let release = () => {};
@@ -67,6 +70,8 @@ async function dispatch(command: ControlCommand) {
   switch (command.type) {
     case "submitObjective":
       return submitObjective(command.objective);
+    case "resumeTask":
+      return resumeTask(command.taskId);
     case "discoverOpportunities":
       return discoverOpportunities(process.env.BEYONDER_CONTROL_FIXTURE === "1");
     case "prepareApplication":
@@ -102,6 +107,45 @@ async function dispatch(command: ControlCommand) {
       return recordEvidence(command);
     case "setSecret":
       return setSecret(command);
+  }
+}
+
+async function resumeTask(taskId: string) {
+  const runtime = controlRuntime();
+  const controller = new AbortController();
+  lifecycle.controllers.add(controller);
+  try {
+    await assertNotPaused(runtime);
+    const checkpoint = await runtime.checkpoints.get(taskId);
+    if (!checkpoint) throw new Error("Checkpoint de recuperação não encontrado para esta tarefa.");
+    assertSafeToResume(checkpoint, await runtime.getAvailableTools({ taskId }));
+    await writeHeartbeat(runtime, `Retomando: ${checkpoint.plan.objective}`);
+    await runtime.audit.record("info", "control.task_resume_started", { taskId, executionId: checkpoint.id });
+    const summary = await runtime.ledger.summary(loadControlConfig().monthlyFixedCostUsd);
+    const outcome = await runtime.taskExecutor.resume({
+      execution: checkpoint,
+      economicState: classifyEconomicState(summary),
+      signal: controller.signal
+    });
+    await saveTask(runtime, outcome.execution);
+    await runtime.audit.record(outcome.success ? "info" : "warn", outcome.success ? "control.task_resume_completed" : "control.task_resume_failed", { taskId, executionId: outcome.execution.id, status: outcome.status });
+    return { ok: outcome.success, taskId, status: outcome.status, result: outcome.result ?? null, error: outcome.success ? undefined : humanFailure(outcome.failureReason) };
+  } finally {
+    lifecycle.controllers.delete(controller);
+    await writeHeartbeat(runtime, null);
+    await closeRuntime(runtime);
+  }
+}
+
+function assertSafeToResume(execution: TaskExecution, availableTools: readonly { id: string; sideEffects: readonly string[] }[]) {
+  if (["COMPLETED", "FAILED", "BLOCKED", "BUDGET_EXHAUSTED", "CANCELLED"].includes(execution.state)) throw new Error("Esta tarefa já terminou e não pode ser retomada.");
+  for (const step of execution.steps) {
+    if (step.status !== "RUNNING" || !step.toolCall || step.toolResult) continue;
+    const tool = availableTools.find((candidate) => candidate.id === step.toolCall?.tool);
+    if (!tool) throw new Error("A ferramenta do passo interrompido não está disponível. A tarefa não foi repetida.");
+    if (tool.sideEffects.some((effect) => effect !== "READ" && effect !== "NONE")) {
+      throw new Error("O estado da ação externa interrompida é desconhecido. Revise a evidência antes de tentar novamente.");
+    }
   }
 }
 

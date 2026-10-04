@@ -405,11 +405,13 @@ function taskView(execution: Record<string, unknown>, provenance: "local"): Task
   const phaseLabels: Record<string, string> = { PLANNING: "criação do plano", REPLANNING: "revisão do plano", ACTION_PLANNING: "escolha da ferramenta", DIRECT_RESPONSE: "resposta ao objetivo", TOOL_EXECUTION: "execução da ferramenta" };
   const failureLabels: Record<string, string> = { BAD_REQUEST: "recusou a solicitação", AUTH_REQUIRED: "precisa de credenciais válidas", FORBIDDEN: "negou acesso", MODEL_UNAVAILABLE: "não disponibilizou o modelo", RATE_LIMITED: "atingiu o limite de uso", PROVIDER_UNAVAILABLE: "está indisponível", TIMEOUT: "não respondeu no prazo", NETWORK_ERROR: "não pôde ser acessado", INVALID_OUTPUT: "não produziu uma resposta válida", INVALID_ACTION: "não produziu uma ação válida" };
   return {
+    canResume: state === "WAITING" && execution.interruptionReason === "PROCESS_RESTART",
+    resumeTaskId: state === "WAITING" && execution.interruptionReason === "PROCESS_RESTART" ? stringField(task, "id") : undefined,
     failureSummary: state === "FAILED" ? lastAttempt?.failureClass ? `${lastAttempt.provider} ${failureLabels[lastAttempt.failureClass] ?? "falhou"} durante a ${phaseLabels[lastAttempt.phase] ?? "execução"}. As tentativas permitidas foram encerradas.` : "Não consegui concluir esta tarefa." : undefined,
     attempts: attempts.map((attempt) => ({ ...attempt, error: attempt.error ? redactText(attempt.error) : undefined })),
     id: humanTaskId(stringField(execution, "id")),
     title: stringField(plan, "objective") || stringField(task, "objective") || stringField(task, "input") || "Objetivo sem titulo",
-    humanStatus: humanTaskStatus(state, latestStep ? stringField(latestStep, "observationSummary") : undefined),
+    humanStatus: execution.interruptionReason === "PROCESS_RESTART" ? "Execução interrompida; pronta para retomada segura." : execution.interruptionReason === "PROCESS_RESTART_NO_CHECKPOINT" ? "Execução interrompida antes de um checkpoint recuperável." : humanTaskStatus(state, latestStep ? stringField(latestStep, "observationSummary") : undefined),
     status: normalizeTaskStatus(state),
     result: typeof execution.result === "string" ? humanTaskResult(redactText(execution.result)) : null,
     provider: lastAttempt?.provider ?? (latestStep ? stringField(objectField(latestStep, "route").selected as Record<string, unknown> | undefined, "provider") || null : null),
@@ -420,7 +422,7 @@ function taskView(execution: Record<string, unknown>, provenance: "local"): Task
     tool: latestStep ? stringField(objectField(latestStep, "toolCall"), "tool") : undefined,
     costUsd: numberField(usage, "monetaryCostUsd"),
     shadowCostUsd: numberField(usage, "shadowCostUsd"),
-    durationMs: !stringField(execution, "completedAt") && stringField(execution, "startedAt") ? Math.max(0, Date.now() - Date.parse(stringField(execution, "startedAt"))) : numberField(usage, "durationMs") || null,
+    durationMs: execution.interruptionReason ? numberField(usage, "durationMs") || null : !stringField(execution, "completedAt") && stringField(execution, "startedAt") ? Math.max(0, Date.now() - Date.parse(stringField(execution, "startedAt"))) : numberField(usage, "durationMs") || null,
     startedAt: stringField(execution, "startedAt") || null,
     completedAt: stringField(execution, "completedAt") || null,
     steps: steps.map((step, index) => ({

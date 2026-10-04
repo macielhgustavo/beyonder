@@ -27,6 +27,7 @@ export default async function TasksPage() {
                     <StatusBadge status={task.status === "succeeded" ? "good" : task.status === "failed" ? "bad" : task.status === "running" ? "info" : "neutral"}>{task.humanStatus}</StatusBadge>
                     <h3>{task.title}</h3>{task.fixture ? <span className="demo-badge">TEST DATA</span> : null}
                     {task.failureSummary ? <p role="alert">{task.failureSummary}</p> : null}
+                    {task.canResume && task.resumeTaskId ? <CommandButton payload={{ type: "resumeTask", taskId: task.resumeTaskId }} confirm="Retomar esta tarefa a partir do último checkpoint seguro? Passos concluídos não serão repetidos.">Retomar deste checkpoint</CommandButton> : null}
                     <p>Agora: {task.current ?? task.humanStatus}</p><p>Próximo: {task.next ?? "Nenhum passo pendente"}</p>
                     <div className="task-meta">
                       <span>Modelo: {task.model && task.provider ? `${task.model} / ${task.provider}` : "nao registrado"}</span>

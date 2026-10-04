@@ -2,8 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { createRuntime, loadConfig, ModelRouter, LlmPlanner, normalizeOpportunity } from "@beyonder/runtime";
+import { createRuntime, DEFAULT_TASK_BUDGET, loadConfig, ModelRouter, LlmPlanner, normalizeOpportunity, ToolSideEffect, type TaskExecution } from "@beyonder/runtime";
 import { runControlCommand } from "../control/commands";
+import { markInterruptedTasks } from "../control/heartbeat";
 import { LocalDashboardDataSource, safeExternalUrl } from "../data/local";
 import { validateCommand } from "../control/validation";
 let dir: string;
@@ -88,6 +89,53 @@ describe("real operation honesty", () => {
       expect((await new LocalDashboardDataSource(process.env.BEYONDER_DB_PATH).getRuntimeStatus()).global).toBe("DEGRADED");
     } finally { runtime.sqlite.close(); }
   });
+  it("surfaces interrupted work and resumes from its checkpoint without repeating completed steps", async () => {
+    vi.stubEnv("BEYONDER_CONTROL_FIXTURE", "1");
+    const execution = resumableExecution("resume-safe");
+    const runtime = createRuntime(loadConfig(), { fixture: true });
+    try {
+      await runtime.checkpoints.save(execution);
+      await runtime.state.set("control-center:tasks:index", [execution.id]);
+      await runtime.state.set(`control-center:task:${execution.id}`, execution);
+      await markInterruptedTasks(runtime);
+    } finally { runtime.sqlite.close(); }
+    const before = (await new LocalDashboardDataSource(process.env.BEYONDER_DB_PATH).getTasks())[0];
+    expect(before).toMatchObject({ status: "waiting", canResume: true, resumeTaskId: "resume-safe", result: null });
+    const result = await runControlCommand({ type: "resumeTask", taskId: "resume-safe" });
+    expect(result).toMatchObject({ ok: true, status: "COMPLETED" });
+    const after = (await new LocalDashboardDataSource(process.env.BEYONDER_DB_PATH).getTasks())[0];
+    expect(after).toMatchObject({ status: "succeeded", canResume: false });
+    const resumedRuntime = createRuntime(loadConfig(), { fixture: true });
+    try {
+      const checkpoint = await resumedRuntime.checkpoints.get("resume-safe");
+      expect(checkpoint?.usage.toolInvocations).toBe(2);
+      expect(checkpoint?.plan.steps[0].status).toBe("COMPLETED");
+    } finally { resumedRuntime.sqlite.close(); }
+    await expect(runControlCommand({ type: "resumeTask", taskId: "resume-safe" })).rejects.toThrow("já terminou");
+  });
+  it("never replays an interrupted action whose tool is unavailable or externally mutating", async () => {
+    vi.stubEnv("BEYONDER_CONTROL_FIXTURE", "1");
+    const execution = resumableExecution("resume-unsafe");
+    execution.plan.steps[1].status = "RUNNING";
+    execution.plan.steps[1].action = { id: "external-call", tool: "external.write", arguments: {} };
+    execution.steps.push({ id: "in-flight", stepId: "two", attempt: 1, status: "RUNNING", startedAt: new Date().toISOString(), toolCall: execution.plan.steps[1].action });
+    const runtime = createRuntime(loadConfig(), { fixture: true });
+    try { await runtime.checkpoints.save(execution); } finally { runtime.sqlite.close(); }
+    await expect(runControlCommand({ type: "resumeTask", taskId: "resume-unsafe" })).rejects.toThrow("não está disponível");
+    const reader = createRuntime(loadConfig(), { fixture: true });
+    try { expect((await reader.checkpoints.get("resume-unsafe"))?.usage.toolInvocations).toBe(1); } finally { reader.sqlite.close(); }
+  });
+  it("does not offer a false resume action when the process stopped before any checkpoint", async () => {
+    const execution = resumableExecution("no-checkpoint");
+    const runtime = createRuntime(loadConfig(), { fixture: true });
+    try {
+      await runtime.state.set("control-center:tasks:index", [execution.id]);
+      await runtime.state.set(`control-center:task:${execution.id}`, execution);
+      await markInterruptedTasks(runtime);
+    } finally { runtime.sqlite.close(); }
+    const task = (await new LocalDashboardDataSource(process.env.BEYONDER_DB_PATH).getTasks())[0];
+    expect(task).toMatchObject({ status: "blocked", canResume: false, result: null, humanStatus: "Execução interrompida antes de um checkpoint recuperável." });
+  });
 });
 
 describe("fixture isolation", () => {
@@ -105,9 +153,27 @@ describe("fixture isolation", () => {
 
 describe("strict command boundaries", () => {
   it("rejects malformed values, surplus fields and arbitrary credential env vars", () => {
-    for (const payload of [{ type: "submitObjective", objective: [] }, { type: "submitObjective", objective: "x".repeat(8001) }, { type: "pauseRuntime", path: "/etc/passwd" }, { type: "approveAction" }, { type: "setSecret", providerId: "groq", envVar: "PATH", value: "key", vaultPassword: "password-1234" }, { type: "discoverOpportunities", fixture: true }]) expect(() => validateCommand(payload)).toThrow();
+    for (const payload of [{ type: "submitObjective", objective: [] }, { type: "submitObjective", objective: "x".repeat(8001) }, { type: "resumeTask" }, { type: "resumeTask", taskId: "x", extra: true }, { type: "pauseRuntime", path: "/etc/passwd" }, { type: "approveAction" }, { type: "setSecret", providerId: "groq", envVar: "PATH", value: "key", vaultPassword: "password-1234" }, { type: "discoverOpportunities", fixture: true }]) expect(() => validateCommand(payload)).toThrow();
   });
   it("allows only persisted HTTP(S) opportunity URLs", () => {
     expect(safeExternalUrl("javascript:alert(1)")).toBeUndefined(); expect(safeExternalUrl("file:///etc/passwd")).toBeUndefined(); expect(safeExternalUrl("https://example.com/work")).toBe("https://example.com/work");
   });
 });
+
+function resumableExecution(taskId: string): TaskExecution {
+  const startedAt = new Date().toISOString();
+  return {
+    id: `exec-${taskId}`,
+    task: { id: taskId, input: "Resume safely", type: "tool-use", complexity: 0.1, risk: 0, estimatedTokens: 20, requirements: { toolUse: true } },
+    plan: { id: `plan-${taskId}`, taskId, objective: "Resume safely", createdAt: startedAt, revision: 1, steps: [
+      { id: "one", description: "Already completed", status: "COMPLETED", action: { id: "one-call", tool: "safe-objective", arguments: { objective: "Already completed" } } },
+      { id: "two", description: "Continue safely", status: "PENDING", dependencies: ["one"], action: { id: "two-call", tool: "safe-objective", arguments: { objective: "Resume safely" } } }
+    ] },
+    state: "RUNNING",
+    budget: { ...DEFAULT_TASK_BUDGET, maxMonetaryCostUsd: 0 },
+    usage: { steps: 1, toolInvocations: 1, retries: 0, replans: 0, durationMs: 10, monetaryCostUsd: 0, shadowCostUsd: 0, consecutiveFailures: 0, noProgressSteps: 0 },
+    checkpoints: [],
+    steps: [{ id: "completed", stepId: "one", attempt: 1, status: "COMPLETED", startedAt, completedAt: startedAt, toolCall: { id: "one-call", tool: "safe-objective", arguments: { objective: "Already completed" } }, toolResult: { success: true, output: "ok", durationMs: 1, sideEffects: [ToolSideEffect.NONE] }, observationSummary: "ok" }],
+    startedAt
+  };
+}

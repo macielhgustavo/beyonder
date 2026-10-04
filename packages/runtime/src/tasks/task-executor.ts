@@ -109,6 +109,8 @@ export class AutonomousTaskExecutor {
   async resume(request: ResumeTaskRequest): Promise<AutonomousTaskOutcome> {
     const execution = cloneExecution(request.execution);
     if (isTerminalTaskState(execution.state)) throw new Error(`Task '${execution.task.id}' is already terminal: ${execution.state}.`);
+    execution.activeDurationBeforeResumeMs = execution.usage.durationMs;
+    execution.resumedAt = new Date(this.now()).toISOString();
     for (const step of execution.plan.steps) {
       if (step.status === "RUNNING") step.status = "PENDING";
     }
@@ -136,7 +138,7 @@ export class AutonomousTaskExecutor {
 
     while (!isTerminalTaskState(execution.state)) {
       await this.syncInferenceUsage(execution);
-      execution.usage.durationMs = this.now() - Date.parse(execution.startedAt);
+      execution.usage.durationMs = elapsedDuration(execution, this.now());
       const terminal = budgetTerminalState(execution, request.signal);
       if (terminal) {
         await this.finish(execution, terminal.state, terminal.reason);
@@ -279,7 +281,7 @@ export class AutonomousTaskExecutor {
     const browserError = result.success ? browserFailure(result.output) : undefined;
     if (browserError) result = { ...result, success: false, error: { code: "EXECUTION_ERROR", message: `Browser: ${browserError}` } };
     execution.usage.toolInvocations += 1;
-    execution.usage.durationMs = this.now() - Date.parse(execution.startedAt);
+    execution.usage.durationMs = elapsedDuration(execution, this.now());
     execution.usage.monetaryCostUsd += numeric(result.metadata?.monetaryCostUsd);
     execution.usage.shadowCostUsd += numeric(result.metadata?.shadowCostUsd);
 
@@ -562,6 +564,11 @@ function clonePlan(plan: Plan): Plan {
 
 function cloneExecution(execution: TaskExecution): TaskExecution {
   return JSON.parse(JSON.stringify(execution)) as TaskExecution;
+}
+
+function elapsedDuration(execution: TaskExecution, now: number): number {
+  if (execution.resumedAt) return (execution.activeDurationBeforeResumeMs ?? 0) + Math.max(0, now - Date.parse(execution.resumedAt));
+  return Math.max(0, now - Date.parse(execution.startedAt));
 }
 
 function budgetTerminalState(execution: TaskExecution, signal?: AbortSignal): { state: TaskExecutionState; reason: string } | null {

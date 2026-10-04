@@ -5,6 +5,7 @@ const note = z.string().max(2000).optional();
 const simple = <T extends string>(type: T) => z.object({ type: z.literal(type) }).strict();
 export const commandSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("submitObjective"), objective: z.string().trim().min(3).max(8000) }).strict(),
+  z.object({ type: z.literal("resumeTask"), taskId: id }).strict(),
   z.object({ type: z.literal("discoverOpportunities"), fixture: z.boolean().optional() }).strict(),
   z.object({ type: z.literal("prepareApplication"), opportunityId: id }).strict(),
   z.object({ type: z.literal("approveAction"), approvalId: id }).strict(),

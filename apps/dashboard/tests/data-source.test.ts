@@ -61,7 +61,10 @@ describe("Control Center data source", () => {
     db.close();
 
     const source = new LocalDashboardDataSource(dbPath, path.join(dir, "providers.json"));
-    expect((await source.getHome()).status.global).toBe("WAITING_FOR_YOU");
+    const home = await source.getHome();
+    expect(home.status.global).toBe("WAITING_FOR_YOU");
+    expect(home.healthChecks.find((check) => check.label === "Compute")).toMatchObject({ status: "warn", detail: expect.stringContaining("nenhuma inferência foi verificada") });
+    expect((await source.getProviders()).filter((provider) => provider.status === "KEYLESS")).toEqual(expect.arrayContaining([expect.objectContaining({ verified: false, health: null })]));
     expect((await source.getTasks())[0].result).toBe("4821");
     expect((await source.getOpportunities())[0].rewardLabel).toBe("$25.00");
     expect((await source.getApprovals())[0].payloadPreview).toContain("[REDACTED]");

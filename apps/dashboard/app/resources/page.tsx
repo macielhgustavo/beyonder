@@ -31,7 +31,7 @@ export default async function ResourcesPage() {
                 <div className="compact-row" key={provider.id}>
                   <div><strong>{provider.name}</strong><span>{provider.note ?? provider.runway.label}</span></div>
                   <div className="right-stack">
-                    <StatusBadge status={provider.status === "READY" || provider.status === "KEYLESS" ? "good" : provider.status === "UNKNOWN" ? "neutral" : "warn"}>{provider.status}</StatusBadge>
+                    <StatusBadge status={(provider.status === "READY" || provider.status === "KEYLESS") && provider.verified ? "good" : provider.status === "UNKNOWN" || provider.status === "KEYLESS" ? "neutral" : "warn"}>{provider.status}</StatusBadge>
                     <span>{provider.runway.state}: {provider.runway.label}</span>
                     <span>{provider.latencyMs ? formatDuration(provider.latencyMs) : "latencia desconhecida"}</span>
                     {!provider.configured && provider.setupEnvVar ? <SecretForm providerId={provider.id} envVar={provider.setupEnvVar} /> : null}

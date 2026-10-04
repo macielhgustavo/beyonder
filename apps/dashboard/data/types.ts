@@ -142,6 +142,7 @@ export interface ProviderView {
   latencyMs: number | null;
   health: number | null;
   configured: boolean;
+  verified: boolean;
   setupEnvVar?: string;
   lastCheckAt: string | null;
   note?: string;

@@ -181,6 +181,7 @@ export class LocalDashboardDataSource implements DashboardDataSource {
       const configured = provider.authType === "keyless" || (provider.credentialEnvVars.some((name) => !name.endsWith("ACCOUNT_ID") && Boolean(process.env[name])) && (!provider.credentialEnvVars.includes("CLOUDFLARE_ACCOUNT_ID") || Boolean(process.env.CLOUDFLARE_ACCOUNT_ID)));
       const catalogStatus = providerStatus(item?.status);
       const status: ProviderView["status"] = cooldown ? /RATE|QUOTA/.test(cooldown.reason) ? "RATE_LIMITED" : "UNHEALTHY" : !configured && catalogStatus === "READY" ? "HUMAN_GATE" : catalogStatus;
+      const verified = Boolean((observed.samples && (observed.failures ?? 0) < observed.samples) || state.providers[provider.id]?.validation?.status === "validated");
       return {
         id: provider.id,
         name: provider.name,
@@ -189,9 +190,10 @@ export class LocalDashboardDataSource implements DashboardDataSource {
         latencyMs: typeof observed.latencyMs === "number" ? observed.latencyMs : null,
         health: observed.samples ? Math.max(0, 1 - (observed.failures ?? 0) / observed.samples) : null,
         configured,
+        verified,
         setupEnvVar: provider.credentialEnvVars[0],
         lastCheckAt: observed.lastFailureAt && (!observed.lastSuccessAt || observed.lastFailureAt > observed.lastSuccessAt) ? observed.lastFailureAt : observed.lastSuccessAt ?? item?.lastCheckedAt ?? null,
-        note: cooldown ? `Temporariamente indisponível (${cooldown.reason}) até ${cooldown.until}.` : !configured && catalogStatus === "READY" ? "Credencial não está disponível neste processo; configure/desbloqueie antes de usar." : !observed.samples && (status === "READY" || status === "KEYLESS") ? "Configuração conhecida; inferência ainda não verificada. Quota desconhecida." : humanProviderNote(status),
+        note: cooldown ? `Temporariamente indisponível (${cooldown.reason}) até ${cooldown.until}.` : !configured && catalogStatus === "READY" ? "Credencial não está disponível neste processo; configure/desbloqueie antes de usar." : !verified && (status === "READY" || status === "KEYLESS") ? "Configuração conhecida; inferência ainda não verificada. Quota desconhecida." : humanProviderNote(status),
         provenance: this.provenance
       };
     });
@@ -316,8 +318,18 @@ export class LocalDashboardDataSource implements DashboardDataSource {
     checks[0] = { label: "Banco de dados", status: this.isAvailable() ? "pass" : "fail", detail: this.isAvailable() ? "SQLite local acessivel." : "SQLite local nao encontrado." };
     checks[1] = { label: "Runtime", status: status.heartbeat === "ONLINE" ? "pass" : status.heartbeat === "PAUSED" ? "warn" : "warn", detail: status.detail };
     checks[2] = { label: "Browser", status: "warn", detail: "BrowserAgent sera iniciado apenas quando uma tarefa precisar dele." };
-    const ready = (await this.getProviders()).filter((provider) => provider.status === "READY" || provider.status === "KEYLESS").length;
-    checks[3] = { label: "Compute", status: ready > 0 ? "pass" : "warn", detail: ready > 0 ? `${ready} provider(s) disponiveis.` : "Nenhum provider pronto. Configure um modelo para executar tarefas." };
+    const providers = await this.getProviders();
+    const verified = providers.filter((provider) => provider.verified && (provider.status === "READY" || provider.status === "KEYLESS")).length;
+    const unverifiedKeyless = providers.filter((provider) => provider.status === "KEYLESS" && !provider.verified).length;
+    checks[3] = {
+      label: "Compute",
+      status: verified > 0 ? "pass" : "warn",
+      detail: verified > 0
+        ? `${verified} provider(s) verificados e disponíveis.`
+        : unverifiedKeyless > 0
+          ? `${unverifiedKeyless} provider(s) keyless conhecidos, mas nenhuma inferência foi verificada ainda.`
+          : "Nenhum provider verificado. Configure e valide um modelo para executar tarefas."
+    };
     return checks;
   }
 

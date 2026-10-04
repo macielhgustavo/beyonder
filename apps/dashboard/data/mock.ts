@@ -79,9 +79,9 @@ const approvals: ApprovalView[] = [{
 }];
 
 const providers: ProviderView[] = [
-  { id: "groq", name: "Groq", status: "READY", runway: { state: "ESTIMATED", label: "quota disponivel" }, latencyMs: 180, health: 1, configured: true, lastCheckAt: iso(2), provenance: "mock" },
-  { id: "gemini", name: "Gemini", status: "READY", runway: { state: "UNKNOWN", label: "quota atual nao conhecida" }, latencyMs: null, health: 1, configured: true, lastCheckAt: iso(4), provenance: "mock" },
-  { id: "nvidia", name: "NVIDIA NIM", status: "UNKNOWN", runway: { state: "UNKNOWN", label: "nao conectado" }, latencyMs: null, health: null, configured: false, lastCheckAt: null, provenance: "mock" }
+  { id: "groq", name: "Groq", status: "READY", runway: { state: "ESTIMATED", label: "quota disponivel" }, latencyMs: 180, health: 1, configured: true, verified: true, lastCheckAt: iso(2), provenance: "mock" },
+  { id: "gemini", name: "Gemini", status: "READY", runway: { state: "UNKNOWN", label: "quota atual nao conhecida" }, latencyMs: null, health: 1, configured: true, verified: true, lastCheckAt: iso(4), provenance: "mock" },
+  { id: "nvidia", name: "NVIDIA NIM", status: "UNKNOWN", runway: { state: "UNKNOWN", label: "nao conectado" }, latencyMs: null, health: null, configured: false, verified: false, lastCheckAt: null, provenance: "mock" }
 ];
 
 const decisions: ModelDecisionView[] = [{

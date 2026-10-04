@@ -43,7 +43,10 @@ describe("Control Center data source", () => {
       result: "4821",
       startedAt: "2026-10-03T00:00:00Z",
       completedAt: "2026-10-03T00:00:08Z",
-      steps: []
+      steps: [
+        { stepId: "read", status: "COMPLETED", toolCall: { tool: "browser.extractText" }, toolResult: { success: true, sideEffects: ["READ"] } },
+        { stepId: "respond", status: "COMPLETED" }
+      ]
     });
     insertState(db, "task-attempts:task_1", [
       { phase: "DIRECT_RESPONSE", provider: "groq", model: "remote-model", status: "FAILED", failureClass: "RATE_LIMITED", monetaryCostUsd: 0, shadowCostUsd: 0 },
@@ -69,7 +72,7 @@ describe("Control Center data source", () => {
     expect(home.status.global).toBe("WAITING_FOR_YOU");
     expect(home.healthChecks.find((check) => check.label === "Compute")).toMatchObject({ status: "warn", detail: expect.stringContaining("nenhuma inferência foi verificada") });
     expect((await source.getProviders()).filter((provider) => provider.status === "KEYLESS")).toEqual(expect.arrayContaining([expect.objectContaining({ verified: false, health: null })]));
-    expect((await source.getTasks())[0]).toMatchObject({ result: "4821", provider: "deterministic", model: "tool-result-format" });
+    expect((await source.getTasks())[0]).toMatchObject({ result: "4821", provider: "deterministic", model: "tool-result-format", tool: "browser.extractText" });
     expect((await source.getOpportunities())[0].rewardLabel).toBe("$25.00");
     expect((await source.getApprovals())[0].payloadPreview).toContain("[REDACTED]");
     expect((await source.getMemories())[0].content).toContain("[REDACTED]");

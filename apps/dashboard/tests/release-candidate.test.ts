@@ -21,13 +21,13 @@ describe("release candidate provider truth", () => {
     try {
       const now = new Date().toISOString();
       await runtime.state.set("control-center:tasks:index", ["exec-result-producer"]);
-      await runtime.state.set("control-center:task:exec-result-producer", { id: "exec-result-producer", state: "COMPLETED", task: { id: "result-producer" }, plan: { objective: "Grounded result", steps: [] }, usage: {}, result: "verified", startedAt: now, completedAt: now, steps: [] });
+      await runtime.state.set("control-center:task:exec-result-producer", { id: "exec-result-producer", state: "COMPLETED", task: { id: "result-producer" }, plan: { objective: "Grounded result", steps: [] }, usage: {}, result: "verified", startedAt: now, completedAt: now, steps: [{ stepId: "read", status: "COMPLETED", toolCall: { tool: "browser.open" }, toolResult: { success: true, sideEffects: ["READ"] } }, { stepId: "respond", status: "COMPLETED" }] });
       await runtime.state.set("task-attempts:result-producer", [
         { phase: "DIRECT_RESPONSE", provider: "groq", model: "remote-model", status: "FAILED", failureClass: "RATE_LIMITED", monetaryCostUsd: 0, shadowCostUsd: 0 },
         { phase: "DIRECT_RESPONSE", provider: "ollama", model: "local-model", status: "FAILED", failureClass: "TIMEOUT", monetaryCostUsd: 0, shadowCostUsd: 0 },
         { phase: "DIRECT_RESPONSE", provider: "deterministic", model: "observed-evidence-format", status: "SUCCEEDED", monetaryCostUsd: 0, shadowCostUsd: 0 }
       ]);
-      expect((await source.getTasks())[0]).toMatchObject({ status: "succeeded", provider: "deterministic", model: "observed-evidence-format", result: "verified" });
+      expect((await source.getTasks())[0]).toMatchObject({ status: "succeeded", provider: "deterministic", model: "observed-evidence-format", tool: "browser.open", result: "verified" });
     } finally { runtime.sqlite.close(); }
   });
   it("does not claim available quota or perfect health from READY alone", async () => {

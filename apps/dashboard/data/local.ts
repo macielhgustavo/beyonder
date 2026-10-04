@@ -400,6 +400,7 @@ function taskView(execution: Record<string, unknown>, provenance: "local"): Task
   const steps = Array.isArray(plan.steps) ? plan.steps as Record<string, unknown>[] : [];
   const stepExecutions = Array.isArray(execution.steps) ? execution.steps as Record<string, unknown>[] : [];
   const latestStep = stepExecutions.at(-1);
+  const latestTool = stepExecutions.map((step) => stringField(objectField(step, "toolCall"), "tool")).filter(Boolean).at(-1);
   const attempts = (Array.isArray(execution.attempts) ? execution.attempts : []) as NonNullable<TaskView["attempts"]>;
   const inferenceAttempts = attempts.filter((attempt) => attempt.phase !== "TOOL_EXECUTION");
   const resultAttempt = inferenceAttempts.filter((attempt) => attempt.status === "SUCCEEDED").at(-1) ?? inferenceAttempts.at(-1);
@@ -421,7 +422,7 @@ function taskView(execution: Record<string, unknown>, provenance: "local"): Task
     fixture: execution.fixture === true,
     current: steps.find((step) => step.status === "RUNNING")?.description as string | undefined,
     next: steps.find((step) => step.status === "PENDING")?.description as string | undefined,
-    tool: latestStep ? stringField(objectField(latestStep, "toolCall"), "tool") : undefined,
+    tool: latestTool || undefined,
     costUsd: numberField(usage, "monetaryCostUsd"),
     shadowCostUsd: numberField(usage, "shadowCostUsd"),
     durationMs: execution.interruptionReason ? numberField(usage, "durationMs") || null : !stringField(execution, "completedAt") && stringField(execution, "startedAt") ? Math.max(0, Date.now() - Date.parse(stringField(execution, "startedAt"))) : numberField(usage, "durationMs") || null,

@@ -13,6 +13,7 @@ export function createActionPlanner(router: ModelRouter, registry: ToolRegistry)
       ...inferenceAttemptPolicy(context.economicState ?? "normal"),
       maxMonetaryCostUsd: context.remainingBudget.monetaryCostUsd, maxShadowCostUsd: context.remainingBudget.shadowCostUsd, maxDurationMs: context.remainingBudget.durationMs,
       complete: router.completeForPlanningCandidate.bind(router), record: router.recordAttempt?.bind(router),
+      canAttempt: router.canAttempt?.bind(router),
       messages: [{ role: "system", content: 'Choose one operational tool call. Return exactly one JSON object {"id":"call-id","tool":"tool-id","arguments":{}}. Follow the provided input schema exactly. Never fabricate tool output. Do not include unexpected fields.' }, { role: "user", content: JSON.stringify({ objective: context.objective, step: context.currentStep, observation: context.latestObservation, tools: context.availableTools.map((tool) => ({ id: tool.id, inputSchema: tool.inputSchema })) }) }],
       validate(response): ToolCall {
         const call = parseStructuredObject(response.content);

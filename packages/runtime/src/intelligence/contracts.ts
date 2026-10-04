@@ -50,6 +50,8 @@ export interface ExecutionPlan {
 }
 
 export interface ExecutionAttempt {
+  failureClass?: string;
+  phase?: string;
   id: string;
   taskId: string;
   attempt: number;

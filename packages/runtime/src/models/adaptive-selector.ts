@@ -16,6 +16,7 @@ import { calculateEffectiveResourceCost, calculateUtility } from "./utility.js";
 import { discoverOllama } from "./ollama-discovery.js";
 
 export interface AdaptiveSelectorOptions {
+  canAttempt?: (candidate: Pick<ModelCandidate, "provider" | "model">) => Promise<boolean>;
   operationalHealth?: (provider: string, model: string) => Promise<{ samples: number; failures: number; latencyMs: number } | undefined>;
   ollamaBaseUrl?: string;
   performanceRepository?: PerformanceRepository;
@@ -66,6 +67,7 @@ export class AdaptiveModelSelector {
     });
 
     for (const pair of viablePairs) {
+      if (this.options.canAttempt && !await this.options.canAttempt({ provider: pair.entry.providerId, model: pair.model })) continue;
       const performance = await this.performance.get(pair.entry.providerId, pair.model, task.type);
       const benchmarkCapability = await this.capabilitySource.getCapability({
         provider: pair.entry.providerId,

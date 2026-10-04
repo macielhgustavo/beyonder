@@ -276,10 +276,11 @@ async function setSecret(command: Extract<ControlCommand, { type: "setSecret" }>
   const ready = validated?.validationStatus === "validated";
   if (ready) for (const record of broker.getProviderSecrets(provider.id)) process.env[record.envVar] = record.value;
   const stateStore = new AutopilotStateStore(loadControlConfig().model.providerStatePath);
-  await stateStore.update(provider, ready ? "READY" : "HUMAN_GATE", { validation: { status: validated?.validationStatus ?? "skipped", models: report?.models, modelCount: report?.modelCount, latencyMs: report?.latencyMs, message: ready ? "Credencial validada." : "Credencial não validada. Verifique a chave e a conexão." } });
+  await stateStore.update(provider, ready ? "READY" : "HUMAN_GATE", { validation: { status: validated?.validationStatus ?? "skipped", models: report?.models, modelCount: report?.modelCount, latencyMs: report?.latencyMs, rateLimitHeaders: report?.rateLimitHeaders, message: ready ? "Credencial validada." : "Credencial não validada. Verifique a chave e a conexão." } });
   const runtime = controlRuntime();
   try {
     await runtime.audit.record("info", "control.secret_set", { providerId: command.providerId, envVar: command.envVar, status: ready ? "READY" : "INVALID" });
+    if (ready) await runtime.modelRouter.operationalHealth.credentialValidated(provider.id);
   } finally {
     await closeRuntime(runtime);
   }

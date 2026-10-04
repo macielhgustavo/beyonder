@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createRuntime, loadConfig } from "@beyonder/runtime";
 import { AutopilotStateStore, buildComputeInventory } from "@beyonder/compute";
 
@@ -87,6 +87,7 @@ describe("Beyonder adaptive intelligence flow", () => {
     expect(dryRoute.selected?.monetaryCostUsd).toBe(0);
     expect(dryRoute.selected?.explanation.positives.length).toBeGreaterThan(0);
 
+    const completion = vi.spyOn(runtime.modelRouter, "completeForPlanningCandidate").mockImplementation(async (_messages, candidate) => ({ content: "Readiness summary: preserve capital, validate available capabilities and avoid external side effects.", provider: candidate.provider, model: candidate.model, estimatedCostUsd: 0 }));
     const [result] = await runtime.agent.run(1, "Summarize readiness without side effects");
     const memories = await runtime.memoryStore.recent(30);
     const seedAfter = await runtime.memoryStore.get(seed.id);
@@ -98,7 +99,8 @@ describe("Beyonder adaptive intelligence flow", () => {
 
     expect(result.status).toBe("completed");
     expect(result.decision.expectedCostUsd).toBe(0);
-    expect(result.decision.rationale).toContain("Selected zero-cost provider");
+    expect(result.decision.rationale).toContain("Readiness summary");
+    expect(completion).toHaveBeenCalledOnce();
     expect(result.toolResult).toMatchObject({ ok: true });
     expect(memories.map((memory) => memory.kind)).toEqual(expect.arrayContaining(["episodic", "economic", "semantic"]));
     expect(economicMemory?.metadata).toMatchObject({ taskType: "compression", monetaryCostUsd: 0, success: true });

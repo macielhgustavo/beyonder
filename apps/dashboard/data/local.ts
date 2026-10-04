@@ -171,20 +171,27 @@ export class LocalDashboardDataSource implements DashboardDataSource {
     const state = await new AutopilotStateStore(this.providerStatePath).read();
     const inventory = buildComputeInventory(state);
     const byId = new Map(inventory.map((item) => [item.providerId, item]));
+    const db = this.isAvailable() ? this.open() : undefined;
+    const healthById = new Map(catalogProviders.map((provider) => [provider.id, db ? readState<{ samples?: number; failures?: number; latencyMs?: number; lastSuccessAt?: string; lastFailureAt?: string; cooldown?: { reason: string; until: string } }>(db, `provider-health:${provider.id}`, {}) : {}]));
+    db?.close();
     const views = catalogProviders.map((provider) => {
       const item = byId.get(provider.id);
-      const status = providerStatus(item?.status);
+      const observed = healthById.get(provider.id)!;
+      const cooldown = observed.cooldown && Date.parse(observed.cooldown.until) > Date.now() ? observed.cooldown : undefined;
+      const configured = provider.authType === "keyless" || (provider.credentialEnvVars.some((name) => !name.endsWith("ACCOUNT_ID") && Boolean(process.env[name])) && (!provider.credentialEnvVars.includes("CLOUDFLARE_ACCOUNT_ID") || Boolean(process.env.CLOUDFLARE_ACCOUNT_ID)));
+      const catalogStatus = providerStatus(item?.status);
+      const status: ProviderView["status"] = cooldown ? /RATE|QUOTA/.test(cooldown.reason) ? "RATE_LIMITED" : "UNHEALTHY" : !configured && catalogStatus === "READY" ? "HUMAN_GATE" : catalogStatus;
       return {
         id: provider.id,
         name: provider.name,
         status,
-        runway: { state: "UNKNOWN" as const, label: status === "READY" || status === "KEYLESS" ? "quota disponivel" : "quota atual nao conhecida" },
-        latencyMs: typeof item?.latencyMs === "number" ? item.latencyMs : null,
-        health: status === "READY" || status === "KEYLESS" ? 1 : status === "UNKNOWN" ? null : 0,
-        configured: status === "READY",
+        runway: { state: "UNKNOWN" as const, label: "Quota atual não conhecida" },
+        latencyMs: typeof observed.latencyMs === "number" ? observed.latencyMs : null,
+        health: observed.samples ? Math.max(0, 1 - (observed.failures ?? 0) / observed.samples) : null,
+        configured,
         setupEnvVar: provider.credentialEnvVars[0],
-        lastCheckAt: item?.lastCheckedAt ?? null,
-        note: humanProviderNote(status),
+        lastCheckAt: observed.lastFailureAt && (!observed.lastSuccessAt || observed.lastFailureAt > observed.lastSuccessAt) ? observed.lastFailureAt : observed.lastSuccessAt ?? item?.lastCheckedAt ?? null,
+        note: cooldown ? `Temporariamente indisponível (${cooldown.reason}) até ${cooldown.until}.` : !configured && catalogStatus === "READY" ? "Credencial não está disponível neste processo; configure/desbloqueie antes de usar." : !observed.samples && (status === "READY" || status === "KEYLESS") ? "Configuração conhecida; inferência ainda não verificada. Quota desconhecida." : humanProviderNote(status),
         provenance: this.provenance
       };
     });

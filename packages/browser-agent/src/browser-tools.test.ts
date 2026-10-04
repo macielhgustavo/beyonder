@@ -24,6 +24,18 @@ function setup() {
 }
 
 describe("Browser tools", () => {
+  it("advertises actual navigation and extraction arguments to the planner", async () => {
+    const { registry } = setup();
+    const tools = await registry.getAvailableTools({}, new DefaultToolPolicy());
+    expect(tools.find((tool) => tool.id === "browser.open")?.inputSchema).toMatchObject({ additionalProperties: false, required: ["url"], properties: { url: { type: "string" } } });
+    expect(tools.find((tool) => tool.id === "browser.extractText")?.inputSchema).toMatchObject({ properties: { target: { type: "object" }, maxChars: { type: "integer" } } });
+  });
+  it("rejects invented browser arguments before navigation", async () => {
+    const { executor, sessionFactory } = setup();
+    const result = await executor.execute({ id: "invented", tool: "browser.open", arguments: { url: "https://example.com/", shell: "whoami" } });
+    expect(result.success).toBe(false);
+    expect(sessionFactory.sessions).toHaveLength(0);
+  });
   it("runs BrowserAgent through ToolRegistry and ToolExecutor", async () => {
     const { executor } = setup();
     const opened = await executor.execute<BrowserToolOutput>({

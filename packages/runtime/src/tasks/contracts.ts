@@ -86,6 +86,7 @@ export interface TaskBudgetUsage {
 }
 
 export interface StepExecution {
+  toolCapabilities?: string[];
   id: string;
   stepId: string;
   attempt: number;

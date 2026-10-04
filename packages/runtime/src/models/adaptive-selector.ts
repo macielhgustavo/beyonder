@@ -131,6 +131,7 @@ export class AdaptiveModelSelector {
 
       const candidate: ModelCandidate = {
         local: pair.entry.providerId === "ollama",
+        externalQuotaConsumption: pair.entry.providerId !== "ollama",
         costClass: metadata?.costClass,
         structuredOutput: metadata?.structuredOutput ?? "unknown",
         provider: pair.entry.providerId,

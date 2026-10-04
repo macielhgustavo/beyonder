@@ -1,4 +1,5 @@
 import type { AutonomousTaskOutcome, TaskExecution } from "./contracts.js";
+import { hasBrowserEvidence } from "./browser-evidence.js";
 
 export type CompletionEvaluationStatus = "PASS" | "FAIL" | "BLOCKED" | "BUDGET_EXHAUSTED" | "CANCELLED";
 
@@ -28,6 +29,7 @@ export class DeterministicCompletionEvaluator implements CompletionEvaluator {
     if (execution.state === "BUDGET_EXHAUSTED") return terminal("BUDGET_EXHAUSTED", "Task exhausted an explicit budget.");
     if (execution.state === "CANCELLED") return terminal("CANCELLED", "Task was cancelled.");
     if (execution.state !== "COMPLETED") return fail("Task is not in COMPLETED state.");
+    if ((execution.task.requirements.browser || execution.task.requirements.tools?.includes("browser")) && !hasBrowserEvidence(execution.steps)) return fail("Required browser reading evidence is missing.");
     if (execution.task.requirements.calculator && !execution.steps.some((step) => step.toolCall?.tool === "calculator" && step.toolResult?.success)) return fail("Required calculator execution evidence is missing.");
 
     const result = execution.result ?? execution.steps.at(-1)?.observationSummary ?? "";

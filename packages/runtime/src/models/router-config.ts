@@ -99,3 +99,7 @@ export type EconomicRoutingPolicy = (typeof ROUTER_CONFIG.economicStates)[Econom
 export function getEconomicRoutingPolicy(state: EconomicState): EconomicRoutingPolicy {
   return ROUTER_CONFIG.economicStates[state];
 }
+
+export function inferenceAttemptPolicy(state: EconomicState) {
+  return state === "survival" ? { remoteAttemptBudget: 1, localFallbackBudget: 1 } : {};
+}

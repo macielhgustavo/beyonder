@@ -166,6 +166,7 @@ export class ModelRouter {
     }, economicState);
     const candidate: ModelCandidate = {
       local: true,
+      externalQuotaConsumption: false,
       costClass: "FREE_CONFIRMED",
       provider: this.config.provider,
       model: this.config.name,
@@ -252,7 +253,8 @@ export class ModelRouter {
       body: JSON.stringify({ model, messages, stream: false, think: false, options: { temperature: 0, num_predict: 1200 } })
     });
     if (!response.ok) throw httpFailure(response.status, await response.text());
-    const json = (await response.json()) as { message?: { content?: string } };
+    const json = (await response.json()) as { message?: { content?: string; tool_calls?: unknown[] } };
+    if (json.message?.tool_calls?.length) throw new InferenceError("Model returned unsolicited native tool calls while tools are disabled; no tool was executed.", "INVALID_OUTPUT");
     return { content: json.message?.content ?? "", provider: "ollama", model, estimatedCostUsd: 0, raw: json };
   }
 
@@ -292,7 +294,8 @@ export class ModelRouter {
         body: JSON.stringify({ model: candidate.model, messages, temperature: 0, max_tokens: 800, stream: false })
       });
       if (!response.ok) throw httpFailure(response.status, (await response.text()).replaceAll(apiKey || "\u0000", "[REDACTED]"));
-      const json = await response.json() as { choices?: Array<{ message?: { content?: string } }>; usage?: { total_tokens?: number } };
+      const json = await response.json() as { choices?: Array<{ message?: { content?: string; tool_calls?: unknown[]; function_call?: unknown } }>; usage?: { total_tokens?: number } };
+      if (json.choices?.[0]?.message?.tool_calls?.length || json.choices?.[0]?.message?.function_call) throw new InferenceError("Model returned unsolicited native tool calls while tools are disabled; no tool was executed.", "INVALID_OUTPUT");
       return {
         content: json.choices?.[0]?.message?.content ?? "",
         provider: candidate.provider,

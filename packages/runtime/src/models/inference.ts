@@ -4,7 +4,7 @@ import type { ModelCandidate } from "./adaptive-types.js";
 import type { ModelMessage, ModelResponse } from "../types.js";
 
 export type InferencePhase = "PLANNING" | "ACTION_PLANNING" | "DIRECT_RESPONSE" | "TOOL_EXECUTION" | "REPLANNING";
-export type FailureClass = "BAD_REQUEST" | "AUTH_REQUIRED" | "FORBIDDEN" | "MODEL_UNAVAILABLE" | "RATE_LIMITED" | "PROVIDER_UNAVAILABLE" | "TIMEOUT" | "NETWORK_ERROR" | "INVALID_OUTPUT" | "INVALID_ACTION" | "NO_CANDIDATES" | "BUDGET_EXHAUSTED" | "TOOL_ERROR";
+export type FailureClass = "BAD_REQUEST" | "AUTH_REQUIRED" | "FORBIDDEN" | "MODEL_UNAVAILABLE" | "RATE_LIMITED" | "PROVIDER_UNAVAILABLE" | "TIMEOUT" | "NETWORK_ERROR" | "INVALID_OUTPUT" | "INVALID_ACTION" | "NO_CANDIDATES" | "BUDGET_EXHAUSTED" | "TOOL_ERROR" | "TOOL_UNAVAILABLE";
 export interface InferenceAttempt {
   id: string; taskId: string; stepId?: string; phase: InferencePhase; attempt: number;
   provider: string; model: string; startedAt: string; completedAt?: string;
@@ -29,7 +29,8 @@ export function httpFailure(status: number, body: string): InferenceError {
   let safeBody: string;
   try { safeBody = JSON.stringify(redactSecrets(JSON.parse(body))); }
   catch { safeBody = redactString(body).replace(/\b(authorization|cookie|credential)\s*[:=]\s*[^\s,;]+/gi, "$1=[REDACTED]"); }
-  return new InferenceError(`Provider returned HTTP ${status}.`, failureClass, status, safeBody.slice(0, 1500));
+  const detail = /tool_use_failed|Tool choice is none, but model called a tool/i.test(body) ? " Model attempted a tool call in an inference phase where tools are disabled; it was not executed." : "";
+  return new InferenceError(`Provider returned HTTP ${status}.${detail}`, failureClass, status, safeBody.slice(0, 1500));
 }
 
 /** Extract exactly one object, tracking strings and nesting rather than greedy regex. */
@@ -54,6 +55,8 @@ export function parseStructuredObject(content: string): Record<string, unknown> 
 export async function runCandidates<T>(input: {
   taskId: string; stepId?: string; phase: InferencePhase; candidates: ModelCandidate[];
   messages: ModelMessage[]; maxCandidates?: number; maxMonetaryCostUsd: number; maxShadowCostUsd: number; maxDurationMs: number;
+  remoteAttemptBudget?: number;
+  localFallbackBudget?: number;
   complete: (messages: ModelMessage[], candidate: ModelCandidate, signal?: AbortSignal) => Promise<ModelResponse>;
   validate: (response: ModelResponse) => T;
   record?: (attempt: InferenceAttempt) => Promise<void>;
@@ -68,7 +71,15 @@ export async function runCandidates<T>(input: {
   // a long stale remote catalog prevent the installed models from ever being tried.
   const local = input.candidates.find((candidate) => candidate.local);
   if (limit > 1 && local && !candidates.includes(local)) candidates[candidates.length - 1] = local;
+  const survivalFallback = input.remoteAttemptBudget !== undefined;
+  if (survivalFallback) {
+    candidates.splice(0);
+    // Remote quota attempts and zero-quota local fallback have independent caps.
+    candidates.push(...input.candidates.filter((c) => !c.local).slice(0, input.remoteAttemptBudget));
+    candidates.push(...input.candidates.filter((c) => c.local && c.provider === "ollama" && c.costClass === "FREE_CONFIRMED" && c.monetaryCostUsd === 0 && c.externalQuotaConsumption === false).slice(0, input.localFallbackBudget ?? 0));
+  }
   for (const candidate of candidates) {
+    if (survivalFallback && candidate.local && attempts.length && !["BAD_REQUEST", "AUTH_REQUIRED", "FORBIDDEN", "MODEL_UNAVAILABLE", "RATE_LIMITED", "PROVIDER_UNAVAILABLE", "TIMEOUT", "NETWORK_ERROR"].includes(last.failureClass)) break;
     if (Date.now() - start >= input.maxDurationMs || monetaryCostUsd + candidate.monetaryCostUsd > input.maxMonetaryCostUsd || shadowCostUsd + candidate.shadowCostUsd > input.maxShadowCostUsd) {
       last = new InferenceError("Inference budget exhausted.", "BUDGET_EXHAUSTED"); break;
     }

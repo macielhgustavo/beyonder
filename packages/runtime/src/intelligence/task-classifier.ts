@@ -1,4 +1,5 @@
 import type { IntelligenceTaskType } from "./contracts.js";
+import { browserIntent } from "./browser-intent.js";
 
 const RULES: Array<{ type: IntelligenceTaskType; patterns: RegExp[] }> = [
   {
@@ -6,8 +7,7 @@ const RULES: Array<{ type: IntelligenceTaskType; patterns: RegExp[] }> = [
     patterns: [
       /\b(code|coding|implement|refactor|debug|bug|typescript|javascript|python|sql|api|function|class|interface|repo|repository|commit|test|tests)\b/i,
       /\b(código|implemente|implementar|refatore|depure|erro|função|classe|interface|repositório|teste|testes)\b/i,
-      /```/,
-      /\.[cm]?[jt]sx?\b/i
+      /```/
     ]
   },
   {
@@ -78,6 +78,7 @@ const RULES: Array<{ type: IntelligenceTaskType; patterns: RegExp[] }> = [
 
 export class TaskClassifier {
   classify(input: string): IntelligenceTaskType {
+    if (browserIntent(input).navigation) return "browser";
     if (/\b(calculator|calculadora|calculate|calcule|calcular|multiplique|multiply|somar|subtract|divide)\b/i.test(input)) return "tool-use";
     for (const rule of RULES) {
       if (rule.patterns.some((pattern) => pattern.test(input))) return rule.type;

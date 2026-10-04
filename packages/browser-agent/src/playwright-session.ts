@@ -52,6 +52,7 @@ interface LocatorLike {
   innerText(options?: Record<string, unknown>): Promise<string>;
   waitFor(options?: Record<string, unknown>): Promise<void>;
   evaluate<R>(fn: (element: Element) => R): Promise<R>;
+  evaluateAll<R, Arg>(fn: (elements: Element[], arg: Arg) => R, arg: Arg): Promise<R>;
 }
 
 interface PageLike {
@@ -303,7 +304,7 @@ export class PlaywrightBrowserSession implements BrowserSession {
   async extractText(target: BrowserTarget | undefined, maxChars: number): Promise<string> {
     this.assertOpen();
     try {
-      const text = target ? await this.requiredLocator(target).then((locator) => locator.innerText({ timeout: this.timeouts.actionTimeoutMs })) : await this.page.locator("body").innerText({ timeout: this.timeouts.actionTimeoutMs });
+      const text = target ? await this.extractTargetText(target, maxChars) : await this.page.locator("body").innerText({ timeout: this.timeouts.actionTimeoutMs });
       const normalized = text.replace(/\s+/g, " ").trim();
       return normalized.slice(0, maxChars);
     } catch (error) {
@@ -387,6 +388,25 @@ export class PlaywrightBrowserSession implements BrowserSession {
     const count = await locator.count();
     if (count === 0) throw new BrowserElementNotFoundError(`Browser target not found: ${describeTarget(target)}`);
     return locator;
+  }
+
+  private async extractTargetText(target: BrowserTarget, maxChars: number): Promise<string> {
+    const locator = this.locatorFor(target);
+    const count = await locator.count();
+    if (count === 0) throw new BrowserElementNotFoundError(`Browser target not found: ${describeTarget(target)}`);
+    if (count === 1) return locator.innerText({ timeout: this.timeouts.actionTimeoutMs });
+
+    // Extraction is read-only. Preserve every matching piece of evidence instead
+    // of applying Playwright's strict single-element rule. Mutating interactions
+    // intentionally continue through requiredLocator and remain strict.
+    return locator.evaluateAll(
+      (elements, limit) =>
+        elements
+          .map((element) => (element instanceof HTMLElement ? element.innerText : element.textContent ?? ""))
+          .join("\n")
+          .slice(0, limit),
+      maxChars
+    );
   }
 
   private pushError(message: string): void {

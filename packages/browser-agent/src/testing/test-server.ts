@@ -41,6 +41,16 @@ export async function startBrowserTestServer(): Promise<BrowserTestServer> {
       );
       return;
     }
+    if (url.pathname === "/duplicate-text") {
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(
+        page(
+          "Duplicate text",
+          '<h1>Download Python for Any OS</h1><p>Download Python — Latest stable release: Python 3.14.8</p>'
+        )
+      );
+      return;
+    }
     if (url.pathname === "/") {
       response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       response.end(

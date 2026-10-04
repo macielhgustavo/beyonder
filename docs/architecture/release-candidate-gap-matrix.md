@@ -79,6 +79,8 @@ Safety decisions: auth exclusion is provider-wide because Beyonder currently res
 
 Evidence and limitations:
 
+- CI follow-up: the existing economic unit test called live marketplaces and asserted availability, making deterministic acceptance depend on public uptime/shared-IP quotas. `packages/web-evals/src/opportunity.test.ts` now intercepts every external request with explicit fixtures (including AgentWork HTTP 500); real CLI discovery smokes remain unchanged. This fixes test isolation rather than hiding source failures.
+
 - The recent health window is the last 100 terminal inference samples, not a seven-day time window. Metrics describe transport availability separately from output quality.
 - No automatic background probes or model downloads were added. A daily probe script exists in E; its deployment scheduler was not independently verified. Live-provider billing/free-tier availability was not revalidated by paid or remote generation.
 - Exact live quota counters, provider-specific reset semantics, half-open concurrency leases, user-configurable aliases, automatic vault unlock, cross-process JSON onboarding locks and automatic task recovery remain P2 work. A cooldown check is not a distributed quota reservation.

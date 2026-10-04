@@ -28,6 +28,7 @@ export class DeterministicCompletionEvaluator implements CompletionEvaluator {
     if (execution.state === "BUDGET_EXHAUSTED") return terminal("BUDGET_EXHAUSTED", "Task exhausted an explicit budget.");
     if (execution.state === "CANCELLED") return terminal("CANCELLED", "Task was cancelled.");
     if (execution.state !== "COMPLETED") return fail("Task is not in COMPLETED state.");
+    if (execution.task.requirements.calculator && !execution.steps.some((step) => step.toolCall?.tool === "calculator" && step.toolResult?.success)) return fail("Required calculator execution evidence is missing.");
 
     const result = execution.result ?? execution.steps.at(-1)?.observationSummary ?? "";
     if (criteria.expectedText !== undefined && !result.includes(criteria.expectedText)) {
@@ -87,4 +88,3 @@ function getPath(value: unknown, path: string[]): unknown {
   }
   return current;
 }
-

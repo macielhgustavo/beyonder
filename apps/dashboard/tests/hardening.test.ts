@@ -37,9 +37,9 @@ describe("real operation honesty", () => {
     expect(events.some((event) => event.event === "tool.completed")).toBe(true);
   });
   it("fails visibly without a provider and does not fabricate completion", async () => {
-    await expect(runControlCommand({ type: "submitObjective", objective: "Pesquisar dados" })).rejects.toThrow("nenhum modelo compatível");
+    await expect(runControlCommand({ type: "submitObjective", objective: "Pesquisar dados" })).resolves.toMatchObject({ ok: false, status: "FAILED" });
     const tasks = await new LocalDashboardDataSource(process.env.BEYONDER_DB_PATH).getTasks();
-    expect(tasks[0].status).toBe("failed"); expect(tasks[0].result).toContain("nenhum modelo compatível");
+    expect(tasks[0].status).toBe("failed"); expect(tasks[0].result).toBeNull(); expect(tasks[0].failureSummary).toContain("Não consegui concluir");
   });
   it("does not send an application or submission merely because a human approved", async () => {
     const runtime = createRuntime(loadConfig());

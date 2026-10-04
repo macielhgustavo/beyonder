@@ -185,11 +185,21 @@ function isPlanShape(value: unknown): value is Plan {
 function isPlanStepShape(value: unknown): value is PlanStep {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const step = value as Record<string, unknown>;
-  return typeof step.id === "string" &&
+  return Object.keys(step).every((key) => ["id", "description", "status", "kind", "expectedOutcome", "allowedToolCapabilities", "dependencies", "action"].includes(key)) &&
+    (step.kind === undefined || step.kind === "TOOL" || step.kind === "DIRECT_RESPONSE") &&
+    (step.action === undefined || validActionShape(step.action)) &&
+    !(step.kind === "DIRECT_RESPONSE" && step.action) &&
+    typeof step.id === "string" &&
     typeof step.description === "string" &&
     isStepStatus(step.status) &&
     (step.allowedToolCapabilities === undefined || stringArray(step.allowedToolCapabilities)) &&
     (step.dependencies === undefined || stringArray(step.dependencies));
+}
+
+function validActionShape(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const call = value as Record<string, unknown>;
+  return Object.keys(call).every((key) => ["id", "tool", "arguments"].includes(key)) && typeof call.id === "string" && typeof call.tool === "string" && !!call.arguments && typeof call.arguments === "object" && !Array.isArray(call.arguments);
 }
 
 function isStepStatus(value: unknown): value is PlanStep["status"] {
@@ -199,4 +209,3 @@ function isStepStatus(value: unknown): value is PlanStep["status"] {
 function stringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === "string");
 }
-

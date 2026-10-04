@@ -78,6 +78,7 @@ const RULES: Array<{ type: IntelligenceTaskType; patterns: RegExp[] }> = [
 
 export class TaskClassifier {
   classify(input: string): IntelligenceTaskType {
+    if (/\b(calculator|calculadora|calculate|calcule|calcular|multiplique|multiply|somar|subtract|divide)\b/i.test(input)) return "tool-use";
     for (const rule of RULES) {
       if (rule.patterns.some((pattern) => pattern.test(input))) return rule.type;
     }

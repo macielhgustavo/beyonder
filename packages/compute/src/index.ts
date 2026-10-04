@@ -9,6 +9,8 @@ export { buildComputeInventory } from "./inventory.js";
 export {
   eligibleModelsForWorkload,
   isModelEligibleForWorkload,
+  isModelMetadataEligibleForWorkload,
+  inferRole,
   modelMetadata,
   modelsWithMetadata,
   type ModelWorkload

@@ -47,6 +47,14 @@ export class ComplexityEstimator {
 
     if (type === "browser") requirements.tools = ["browser"];
     if (type === "tool-use") requirements.tools = ["restricted-tool"];
+    requirements.calculator = /\b(calculator|calculadora|calculate|calcule|calcular|multiplique|multiply|somar|subtract|divide)\b/i.test(input);
+    requirements.browser = type === "browser" || (type === "research" && /\b(web|online|internet|site|sources|fontes)\b/i.test(input));
+    if (requirements.calculator) requirements.tools = ["calculation"];
+    if (requirements.browser) requirements.tools = [...(requirements.tools ?? []), "browser"];
+    requirements.toolUse = Boolean(requirements.tools?.length);
+    requirements.directResponse = !requirements.toolUse;
+    requirements.planning = type === "planning" || requirements.toolUse;
+    requirements.coding = type === "coding";
 
     return { complexity, risk, estimatedTokens, requirements };
   }

@@ -118,9 +118,17 @@ export class LocalDashboardDataSource implements DashboardDataSource {
     const db = this.open();
     try {
       const ids = readState<string[]>(db, TASK_INDEX_KEY, []);
-      const rows = ids.flatMap((id) => {
+      const checkpoints = (db.prepare("SELECT key, value FROM state WHERE key LIKE 'task-checkpoint:%'").all() as Array<{ key: string; value: string }>).map((row) => ({ id: row.key.slice("task-checkpoint:".length), execution: (JSON.parse(row.value) as { execution?: Record<string, unknown> } | null)?.execution }));
+      const allIds = [...new Set([...ids, ...checkpoints.map((row) => row.id)])];
+      const seenTasks = new Set<string>();
+      const rows = allIds.flatMap((id) => {
         const execution = readState<Record<string, unknown> | undefined>(db, `control-center:task:${id}`, undefined);
-        return execution ? [taskView(execution, this.provenance)] : [];
+        const value = execution ?? checkpoints.find((row) => row.id === id)?.execution;
+        if (!value) return [];
+        const taskId = stringField(objectField(value, "task"), "id") || id;
+        if (seenTasks.has(taskId)) return [];
+        seenTasks.add(taskId);
+        return [taskView({ ...value, attempts: readState(db, `task-attempts:${taskId}`, value.attempts ?? []) }, this.provenance)];
       });
       return page(rows.sort((a, b) => (b.startedAt ?? "").localeCompare(a.startedAt ?? "")), query);
     } finally {
@@ -373,14 +381,20 @@ function taskView(execution: Record<string, unknown>, provenance: "local"): Task
   const steps = Array.isArray(plan.steps) ? plan.steps as Record<string, unknown>[] : [];
   const stepExecutions = Array.isArray(execution.steps) ? execution.steps as Record<string, unknown>[] : [];
   const latestStep = stepExecutions.at(-1);
+  const attempts = (Array.isArray(execution.attempts) ? execution.attempts : []) as NonNullable<TaskView["attempts"]>;
+  const lastAttempt = attempts.filter((attempt) => attempt.phase !== "TOOL_EXECUTION" && attempt.provider !== "deterministic").at(-1);
+  const phaseLabels: Record<string, string> = { PLANNING: "criação do plano", REPLANNING: "revisão do plano", ACTION_PLANNING: "escolha da ferramenta", DIRECT_RESPONSE: "resposta ao objetivo", TOOL_EXECUTION: "execução da ferramenta" };
+  const failureLabels: Record<string, string> = { BAD_REQUEST: "recusou a solicitação", AUTH_REQUIRED: "precisa de credenciais válidas", FORBIDDEN: "negou acesso", MODEL_UNAVAILABLE: "não disponibilizou o modelo", RATE_LIMITED: "atingiu o limite de uso", PROVIDER_UNAVAILABLE: "está indisponível", TIMEOUT: "não respondeu no prazo", NETWORK_ERROR: "não pôde ser acessado", INVALID_OUTPUT: "não produziu uma resposta válida", INVALID_ACTION: "não produziu uma ação válida" };
   return {
+    failureSummary: state === "FAILED" ? lastAttempt?.failureClass ? `${lastAttempt.provider} ${failureLabels[lastAttempt.failureClass] ?? "falhou"} durante a ${phaseLabels[lastAttempt.phase] ?? "execução"}. As tentativas permitidas foram encerradas.` : "Não consegui concluir esta tarefa." : undefined,
+    attempts: attempts.map((attempt) => ({ ...attempt, error: attempt.error ? redactText(attempt.error) : undefined })),
     id: humanTaskId(stringField(execution, "id")),
     title: stringField(plan, "objective") || stringField(task, "objective") || stringField(task, "input") || "Objetivo sem titulo",
     humanStatus: humanTaskStatus(state, latestStep ? stringField(latestStep, "observationSummary") : undefined),
     status: normalizeTaskStatus(state),
     result: typeof execution.result === "string" ? humanTaskResult(redactText(execution.result)) : null,
-    provider: latestStep ? stringField(objectField(latestStep, "route").selected as Record<string, unknown> | undefined, "provider") || null : null,
-    model: latestStep ? stringField(objectField(latestStep, "route").selected as Record<string, unknown> | undefined, "model") || null : null,
+    provider: lastAttempt?.provider ?? (latestStep ? stringField(objectField(latestStep, "route").selected as Record<string, unknown> | undefined, "provider") || null : null),
+    model: lastAttempt?.model ?? (latestStep ? stringField(objectField(latestStep, "route").selected as Record<string, unknown> | undefined, "model") || null : null),
     fixture: execution.fixture === true,
     current: steps.find((step) => step.status === "RUNNING")?.description as string | undefined,
     next: steps.find((step) => step.status === "PENDING")?.description as string | undefined,

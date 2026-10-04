@@ -12,6 +12,12 @@ export type IntelligenceTaskType =
   | "compression";
 
 export interface IntelligenceRequirements {
+  directResponse?: boolean;
+  toolUse?: boolean;
+  calculator?: boolean;
+  browser?: boolean;
+  planning?: boolean;
+  coding?: boolean;
   tools?: string[];
   contextWindow?: number;
   structuredOutput?: boolean;
@@ -71,6 +77,8 @@ export interface Evaluation {
 }
 
 export interface TaskOutcome {
+  phase?: string;
+  failureClass?: string;
   task: IntelligenceTask;
   plan?: ExecutionPlan;
   attempts: ExecutionAttempt[];

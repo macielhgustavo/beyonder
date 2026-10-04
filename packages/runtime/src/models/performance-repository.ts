@@ -13,6 +13,7 @@ export class MemoryPerformanceRepository implements PerformanceRepository {
   async get(provider: string, model: string, taskType: IntelligenceTaskType): Promise<HistoricalPerformance> {
     const records = (await this.memoryStore.all(2000)).filter((record) => {
       if (record.kind !== "economic") return false;
+      if (record.metadata.failureClass && !["INVALID_OUTPUT", "INVALID_ACTION"].includes(String(record.metadata.failureClass))) return false;
       return record.metadata.provider === provider && record.metadata.model === model && record.metadata.taskType === taskType;
     });
 

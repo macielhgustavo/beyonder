@@ -26,6 +26,7 @@ export default async function TasksPage() {
                   <div>
                     <StatusBadge status={task.status === "succeeded" ? "good" : task.status === "failed" ? "bad" : task.status === "running" ? "info" : "neutral"}>{task.humanStatus}</StatusBadge>
                     <h3>{task.title}</h3>{task.fixture ? <span className="demo-badge">TEST DATA</span> : null}
+                    {task.failureSummary ? <p role="alert">{task.failureSummary}</p> : null}
                     <p>Agora: {task.current ?? task.humanStatus}</p><p>Próximo: {task.next ?? "Nenhum passo pendente"}</p>
                     <div className="task-meta">
                       <span>Modelo: {task.model && task.provider ? `${task.model} / ${task.provider}` : "nao registrado"}</span>
@@ -50,6 +51,7 @@ export default async function TasksPage() {
                   <ul>{task.why.map((reason) => <li key={reason}>{reason}</li>)}</ul>
                   <div className="technical-id">Detalhes tecnicos: {task.technicalId}</div>
                 </details>
+                {task.attempts?.length ? <details className="why-box"><summary>Detalhes técnicos das tentativas</summary><ol>{task.attempts.map((attempt, index) => <li key={index}>{attempt.phase} · {attempt.provider} / {attempt.model} · {attempt.status}{attempt.failureClass ? ` · ${attempt.failureClass}` : ""}{attempt.httpStatus ? ` · HTTP ${attempt.httpStatus}` : ""}{attempt.error ? <p>{attempt.error}</p> : null}</li>)}</ol></details> : null}
               </article>
             ))}
           </div>

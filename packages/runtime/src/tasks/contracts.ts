@@ -26,6 +26,7 @@ export type CompletionStatus = Extract<
 export type PlanStepStatus = "PENDING" | "RUNNING" | "COMPLETED" | "FAILED" | "BLOCKED" | "SKIPPED";
 
 export interface PlanStep {
+  kind?: "TOOL" | "DIRECT_RESPONSE";
   id: string;
   description: string;
   status: PlanStepStatus;
@@ -58,6 +59,9 @@ export interface TaskBudget {
 }
 
 export interface StepContext {
+  economicState?: EconomicState;
+  task?: IntelligenceTask;
+  candidates?: ModelCandidate[];
   objective: string;
   planSummary: string;
   currentStep: PlanStep;
@@ -113,6 +117,8 @@ export interface ExecutionCheckpoint {
 }
 
 export interface TaskExecution {
+  attempts?: import("../models/inference.js").InferenceAttempt[];
+  failure?: { failureClass: string; phase?: string; provider?: string; model?: string; httpStatus?: number };
   id: string;
   task: IntelligenceTask;
   plan: Plan;
@@ -160,4 +166,3 @@ export const DEFAULT_TASK_BUDGET: TaskBudget = {
   maxConsecutiveFailures: 3,
   maxNoProgressSteps: 3
 };
-

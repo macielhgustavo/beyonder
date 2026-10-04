@@ -3,6 +3,8 @@ import { Command } from "commander";
 import { existsSync } from "node:fs";
 import {
   DEFAULT_TASK_BUDGET,
+  inspectTaskTrace,
+  classifyFailure,
   classifyEconomicState,
   createRuntime,
   loadConfig,
@@ -287,6 +289,7 @@ taskCommand
     const summary = await runtime.ledger.summary(config.monthlyFixedCostUsd);
     const economicState = classifyEconomicState(summary);
     const inspection = await runtime.intelligence.inspect(objective);
+    try {
     const availableTools = await runtime.getAvailableTools({ taskId: inspection.task.id, economicState });
     const plan = await runtime.planner.createPlan({
       objective,
@@ -305,12 +308,19 @@ taskCommand
     const outcome = await runtime.taskExecutor.execute({
       task: inspection.task,
       plan: validation.plan,
+      initialUsage: { monetaryCostUsd: runtime.planner.lastResult?.monetaryCostUsd ?? 0, shadowCostUsd: runtime.planner.lastResult?.shadowCostUsd ?? 0 },
       economicState
     });
     console.log(JSON.stringify({
       taskId: inspection.task.id,
       executionId: outcome.execution.id,
       status: outcome.status,
+      failureReason: outcome.failureReason,
+      failureClass: outcome.execution.failure?.failureClass,
+      phase: outcome.execution.failure?.phase,
+      lastProvider: outcome.execution.attempts?.filter((a) => a.phase !== "TOOL_EXECUTION" && a.provider !== "deterministic").at(-1)?.provider,
+      lastModel: outcome.execution.attempts?.filter((a) => a.phase !== "TOOL_EXECUTION" && a.provider !== "deterministic").at(-1)?.model,
+      attemptCount: outcome.execution.attempts?.length ?? 0,
       planner: runtime.planner.lastResult ? {
         provider: runtime.planner.lastResult.provider,
         model: runtime.planner.lastResult.model,
@@ -324,7 +334,12 @@ taskCommand
       monetaryCostUsd: outcome.execution.usage.monetaryCostUsd,
       shadowCostUsd: outcome.execution.usage.shadowCostUsd
     }, null, 2));
-    runtime.sqlite.close();
+    } catch (error) {
+      const attempts = await runtime.modelRouter.attemptsFor(inspection.task.id);
+      const last = attempts.at(-1);
+      const failure = classifyFailure(error);
+      console.log(JSON.stringify({ taskId: inspection.task.id, status: "FAILED", failureReason: failure.message, failureClass: failure.failureClass, phase: last?.phase ?? "PLANNING", lastProvider: last?.provider, lastModel: last?.model, attemptCount: attempts.length }, null, 2));
+    } finally { await runtime.browser.closeAll(); if (runtime.sqlite.open) runtime.sqlite.close(); }
   });
 
 taskCommand
@@ -362,22 +377,11 @@ taskCommand
 
 taskCommand
   .command("inspect")
-  .argument("<taskId>", "task id to inspect in memory")
-  .description("Inspect persisted task memories for one task id")
+  .argument("<taskId>", "task id to inspect")
+  .description("Inspect persisted execution, plan, attempts, routes, tools, checkpoints and memory")
   .action(async (taskId: string) => {
     const runtime = createBeyonderRuntime(loadConfig());
-    const memories = (await runtime.memoryStore.all())
-      .filter((memory) => memory.taskId === taskId)
-      .map((memory) => ({
-        id: memory.id,
-        kind: memory.kind,
-        source: memory.source,
-        importance: memory.importance,
-        utility: memory.utility,
-        createdAt: memory.createdAt,
-        content: memory.content
-      }));
-    console.log(JSON.stringify({ taskId, memories }, null, 2));
+    console.log(JSON.stringify(await inspectTaskTrace(runtime, taskId), null, 2));
     runtime.sqlite.close();
   });
 const providers = program.command("providers").description("Manage compute providers");

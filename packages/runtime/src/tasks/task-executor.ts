@@ -25,6 +25,8 @@ import type { Planner } from "./planner.js";
 import { validatePlan } from "./planner.js";
 import { assertTaskStateTransition, isTerminalTaskState } from "./state-machine.js";
 import type { TaskCheckpointStore } from "./checkpoints.js";
+import { classifyFailure, InferenceError, runCandidates } from "../models/inference.js";
+import { getEconomicRoutingPolicy } from "../models/router-config.js";
 
 export interface TaskExecutorOptions {
   onProgress?: (execution: TaskExecution) => Promise<void>;
@@ -123,12 +125,16 @@ export class AutonomousTaskExecutor {
   }
 
   private async runExecution(execution: TaskExecution, request: ExecuteTaskRequest): Promise<AutonomousTaskOutcome> {
+    const priorAttempts = await this.options.modelRouter?.attemptsFor?.(execution.task.id) ?? [];
+    execution.usage.monetaryCostUsd = Math.max(execution.usage.monetaryCostUsd, priorAttempts.reduce((sum, a) => sum + a.monetaryCostUsd, 0));
+    execution.usage.shadowCostUsd = Math.max(execution.usage.shadowCostUsd, priorAttempts.reduce((sum, a) => sum + a.shadowCostUsd, 0));
     if (execution.state === "CREATED" || execution.state === "PLANNING") {
       await this.transition(execution, "READY", { planId: execution.plan.id });
     }
     await this.transition(execution, "RUNNING", { objective: execution.plan.objective });
 
     while (!isTerminalTaskState(execution.state)) {
+      await this.syncInferenceUsage(execution);
       execution.usage.durationMs = this.now() - Date.parse(execution.startedAt);
       const terminal = budgetTerminalState(execution, request.signal);
       if (terminal) {
@@ -159,7 +165,15 @@ export class AutonomousTaskExecutor {
         await this.options.beforeStep?.();
         await this.runStep(execution, step, request);
       } catch (error) {
-        await this.finish(execution, request.signal?.aborted ? "CANCELLED" : "FAILED", error instanceof Error ? error.message : "Falha ao executar tarefa.");
+        const failure = classifyFailure(error);
+        execution.attempts = await this.options.modelRouter?.attemptsFor?.(execution.task.id) ?? [];
+        const lastAttempt = execution.attempts.at(-1);
+        execution.failure = { failureClass: failure.failureClass, phase: lastAttempt?.phase, provider: lastAttempt?.provider, model: lastAttempt?.model, httpStatus: failure.httpStatus };
+        step.status = "FAILED";
+        const failedStep = execution.steps.at(-1);
+        if (failedStep) { failedStep.status = "FAILED"; failedStep.error = failure.message; failedStep.completedAt = new Date(this.now()).toISOString(); }
+        await this.finish(execution, request.signal?.aborted ? "CANCELLED" : failure.failureClass === "BUDGET_EXHAUSTED" ? "BUDGET_EXHAUSTED" : "FAILED", failure.message);
+        await this.checkpoint(execution);
       }
     }
 
@@ -167,6 +181,8 @@ export class AutonomousTaskExecutor {
     const evaluation = this.completionEvaluator.evaluate(execution, request.completionCriteria);
     await this.telemetry("info", "evaluation.completed", { taskId: execution.task.id, status: evaluation.status, method: evaluation.method });
     const outcome = outcomeWithCompletion(toOutcome(execution), evaluation);
+    await this.syncInferenceUsage(execution);
+    if (execution.state !== "CANCELLED") await this.options.checkpointStore?.save(execution);
     await this.options.onProgress?.(outcome.execution);
     await this.recordMemory(outcome);
     await this.options.modelRouter?.recordOutcome(toTaskOutcome(outcome));
@@ -180,20 +196,10 @@ export class AutonomousTaskExecutor {
     await this.telemetry("info", "step.started", { taskId: execution.task.id, planId: execution.plan.id, stepId: step.id });
 
     const startedAt = this.now();
+    if (step.kind === "DIRECT_RESPONSE") { await this.directResponse(execution, step, request); return; }
     const route = await this.options.modelRouter?.route(workloadTask(execution.task, step), request.economicState);
     const memory = await this.retrieveMemory(execution.task, step);
-    const availableTools = await this.availableTools(execution, request.economicState);
-    const action = await this.actionForStep({
-      objective: execution.plan.objective,
-      planSummary: summarizePlan(execution.plan),
-      currentStep: step,
-      recentCheckpoints: execution.checkpoints.slice(-4),
-      relevantMemory: memory,
-      latestObservation: execution.checkpoints.at(-1)?.observationSummary,
-      availableTools,
-      remainingBudget: remainingBudget(execution),
-      selectedModel: route?.selected
-    }, execution);
+    const availableTools = (await this.availableTools(execution, request.economicState)).filter((tool) => !step.allowedToolCapabilities?.length || step.allowedToolCapabilities.some((capability) => tool.capabilities.includes(capability)));
 
     const stepExecution: StepExecution = {
       id: `step_${this.id()}`,
@@ -201,7 +207,6 @@ export class AutonomousTaskExecutor {
       attempt: attemptsForStep(execution, step.id) + 1,
       status: "RUNNING",
       startedAt: new Date(startedAt).toISOString(),
-      toolCall: action,
       ...(route ? {
         route: {
           reason: route.reason,
@@ -219,7 +224,37 @@ export class AutonomousTaskExecutor {
       } : {})
     };
     execution.steps.push(stepExecution);
+    await this.options.checkpointStore?.save(execution);
     await this.options.onProgress?.(execution);
+
+    const action = await this.actionForStep({
+      task: execution.task, economicState: request.economicState, candidates: route?.candidates,
+      objective: execution.plan.objective, planSummary: summarizePlan(execution.plan), currentStep: step,
+      recentCheckpoints: execution.checkpoints.slice(-4), relevantMemory: memory,
+      latestObservation: execution.checkpoints.at(-1)?.observationSummary, availableTools,
+      remainingBudget: remainingBudget(execution), selectedModel: route?.selected
+    }, execution);
+    stepExecution.toolCall = action;
+    // An operator may pause while inference is in flight. Recheck at the tool boundary.
+    if (await this.options.isPaused?.()) {
+      await this.transition(execution, "WAITING", { reason: "runtime-paused-before-tool" });
+      await this.checkpoint(execution);
+      const pausedAt = this.now();
+      while (await this.options.isPaused?.()) {
+        if (request.signal?.aborted) throw new InferenceError("Execution cancelled.", "TIMEOUT");
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+      execution.budget.maxDurationMs += this.now() - pausedAt;
+      await this.transition(execution, "RUNNING", { reason: "runtime-resumed" });
+    }
+    if (request.signal?.aborted) throw new InferenceError("Execution cancelled.", "TIMEOUT");
+    await this.options.beforeStep?.();
+    await this.options.checkpointStore?.save(execution);
+    execution.attempts = await this.options.modelRouter?.attemptsFor?.(execution.task.id) ?? [];
+    const selectedAttempt = execution.attempts.filter((attempt) => attempt.stepId === step.id && attempt.status === "SUCCEEDED").at(-1);
+    if (selectedAttempt && stepExecution.route?.selected) Object.assign(stepExecution.route.selected, { provider: selectedAttempt.provider, model: selectedAttempt.model });
+    const toolAttempt = { id: `tool_${this.id()}`, taskId: execution.task.id, stepId: step.id, phase: "TOOL_EXECUTION" as const, attempt: stepExecution.attempt, provider: "local-tool", model: action.tool, startedAt: new Date().toISOString(), status: "STARTED" as const, monetaryCostUsd: 0, shadowCostUsd: 0 };
+    await this.options.modelRouter?.recordAttempt?.(toolAttempt);
 
     let result = await this.options.toolExecutor.execute(action, {
       taskId: execution.task.id,
@@ -247,6 +282,7 @@ export class AutonomousTaskExecutor {
     execution.usage.shadowCostUsd += numeric(result.metadata?.shadowCostUsd);
 
     stepExecution.toolResult = result;
+    await this.options.modelRouter?.recordAttempt?.({ ...toolAttempt, completedAt: new Date().toISOString(), latencyMs: this.now() - Date.parse(toolAttempt.startedAt), status: result.success ? "SUCCEEDED" : "FAILED", failureClass: result.success ? undefined : "TOOL_ERROR", error: result.error?.message });
     stepExecution.completedAt = new Date(this.now()).toISOString();
     stepExecution.observationSummary = summarizeObservation(result);
 
@@ -262,12 +298,14 @@ export class AutonomousTaskExecutor {
         error: { code: "POLICY_DENIED", message: "The tool returned a policy-blocked result." }
       });
     } else if (result.success) {
+      execution.failure = undefined;
       step.status = "COMPLETED";
       stepExecution.status = "COMPLETED";
       execution.usage.consecutiveFailures = 0;
       execution.usage.noProgressSteps = noProgressCount(execution, stepExecution.observationSummary);
       await this.telemetry("info", "step.completed", { taskId: execution.task.id, planId: execution.plan.id, stepId: step.id });
     } else {
+      execution.failure = { failureClass: "TOOL_ERROR", phase: "TOOL_EXECUTION", provider: stepExecution.route?.selected?.provider, model: stepExecution.route?.selected?.model };
       stepExecution.error = result.error?.message ?? "tool execution failed";
       execution.usage.consecutiveFailures += 1;
       const recovery = this.recoveryPolicy.decide({
@@ -337,6 +375,43 @@ export class AutonomousTaskExecutor {
     return decision.call;
   }
 
+  private async directResponse(execution: TaskExecution, step: PlanStep, request: ExecuteTaskRequest): Promise<void> {
+    const observations = execution.steps.filter((entry) => entry.toolResult?.success && entry.status === "COMPLETED");
+    if ((execution.task.requirements.toolUse || execution.task.requirements.tools?.length) && !observations.length) throw new InferenceError("Required tool cannot be replaced by a direct response.", "INVALID_ACTION");
+    if (execution.task.requirements.calculator && !observations.some((entry) => entry.toolCall?.tool === "calculator")) throw new InferenceError("Calculator evidence is required before responding.", "INVALID_ACTION");
+    const entry: StepExecution = { id: `step_${this.id()}`, stepId: step.id, attempt: 1, startedAt: new Date().toISOString(), status: "RUNNING" };
+    execution.steps.push(entry);
+    const calculator = observations.filter((entry) => entry.toolCall?.tool === "calculator").at(-1);
+    const number = (calculator?.toolResult?.output as { value?: unknown } | undefined)?.value;
+    if (typeof number === "number" && /(?:apenas|somente|only|just).*(?:número|numero|number)/i.test(execution.task.input)) {
+      const attempt = { id: `response_${this.id()}`, taskId: execution.task.id, stepId: step.id, phase: "DIRECT_RESPONSE" as const, attempt: 1, provider: "deterministic", model: "tool-result-format", startedAt: new Date().toISOString(), status: "STARTED" as const, monetaryCostUsd: 0, shadowCostUsd: 0 };
+      await this.options.modelRouter?.recordAttempt?.(attempt);
+      entry.status = "COMPLETED"; entry.completedAt = new Date().toISOString(); entry.observationSummary = String(number); step.status = "COMPLETED";
+      await this.options.modelRouter?.recordAttempt?.({ ...attempt, completedAt: entry.completedAt, latencyMs: 0, status: "SUCCEEDED" });
+      await this.checkpoint(execution, entry.observationSummary);
+      return;
+    }
+    const router = this.options.modelRouter;
+    if (!router) throw new InferenceError("No model router configured.", "NO_CANDIDATES");
+    const route = await router.route({ ...execution.task, type: execution.task.requirements.toolUse ? "chat" : execution.task.type, requirements: { ...execution.task.requirements, tools: [], toolUse: false, directResponse: true } }, request.economicState);
+    entry.route = { reason: route.reason, explored: route.explored, candidates: route.candidates.length, selected: route.selected };
+    await this.options.checkpointStore?.save(execution);
+    const budget = remainingBudget(execution);
+    const result = await runCandidates({ taskId: execution.task.id, stepId: step.id, phase: "DIRECT_RESPONSE", candidates: route.candidates,
+      maxCandidates: getEconomicRoutingPolicy(request.economicState).maxAttempts,
+      maxMonetaryCostUsd: budget.monetaryCostUsd, maxShadowCostUsd: budget.shadowCostUsd, maxDurationMs: budget.durationMs,
+      complete: router.completeForPlanningCandidate.bind(router), record: router.recordAttempt?.bind(router),
+      messages: [{ role: "system", content: "Answer the user's objective directly. Follow their output format. Use only the provided tool evidence when reporting tool results; never claim unobserved external actions." }, { role: "user", content: execution.plan.objective }, ...(observations.length ? [{ role: "user" as const, content: `Observed tool evidence: ${JSON.stringify(observations.map((entry) => ({ tool: entry.toolCall?.tool, output: entry.toolResult?.output })))}` }] : [])],
+      validate(response) { if (!response.content.trim()) throw new InferenceError("Empty model response.", "INVALID_OUTPUT"); return response.content.trim(); }
+    });
+    execution.usage.monetaryCostUsd += result.monetaryCostUsd;
+    execution.usage.shadowCostUsd += result.shadowCostUsd;
+    entry.route!.selected = result.candidate;
+    entry.status = "COMPLETED"; entry.completedAt = new Date().toISOString(); entry.observationSummary = result.value;
+    step.status = "COMPLETED";
+    await this.checkpoint(execution, result.value);
+  }
+
   private async replan(execution: TaskExecution, request: ExecuteTaskRequest, failedStep: PlanStep, reason: string): Promise<Plan | undefined> {
     const planner = this.options.planner;
     if (!planner?.revisePlan) return undefined;
@@ -346,7 +421,7 @@ export class AutonomousTaskExecutor {
       task: execution.task,
       memoryContext: await this.retrieveMemory(execution.task, failedStep),
       availableTools,
-      budget: execution.budget,
+      budget: { ...execution.budget, maxMonetaryCostUsd: remainingBudget(execution).monetaryCostUsd, maxShadowCostUsd: remainingBudget(execution).shadowCostUsd, maxDurationMs: remainingBudget(execution).durationMs },
       economicState: request.economicState,
       previousPlan: execution.plan,
       completedSteps: execution.plan.steps.filter((candidate) => candidate.status === "COMPLETED"),
@@ -426,6 +501,14 @@ export class AutonomousTaskExecutor {
 
   private async recordMemory(outcome: AutonomousTaskOutcome) {
     await this.options.memory?.recordOutcome(toTaskOutcome(outcome));
+  }
+
+  private async syncInferenceUsage(execution: TaskExecution) {
+    execution.attempts = await this.options.modelRouter?.attemptsFor?.(execution.task.id) ?? [];
+    const inference = execution.attempts.filter((attempt) => attempt.phase !== "TOOL_EXECUTION");
+    const tools = execution.steps.map((step) => step.toolResult?.metadata);
+    execution.usage.monetaryCostUsd = Math.max(execution.usage.monetaryCostUsd, inference.reduce((sum, a) => sum + a.monetaryCostUsd, 0) + tools.reduce((sum, m) => sum + numeric(m?.monetaryCostUsd), 0));
+    execution.usage.shadowCostUsd = Math.max(execution.usage.shadowCostUsd, inference.reduce((sum, a) => sum + a.shadowCostUsd, 0) + tools.reduce((sum, m) => sum + numeric(m?.shadowCostUsd), 0));
   }
 
   private async telemetry(level: "debug" | "info" | "warn" | "error", event: string, details: Record<string, unknown>) {
@@ -526,6 +609,10 @@ function workloadTask(task: IntelligenceTask, step: PlanStep): IntelligenceTask 
 
 function finalResult(execution: TaskExecution): string | undefined {
   const lastSuccessful = [...execution.steps].reverse().find((step) => step.status === "COMPLETED");
+  if (lastSuccessful?.toolCall?.tool === "calculator" && /(?:apenas|somente|only|just).*(?:número|numero|number)/i.test(execution.task.input)) {
+    const value = (lastSuccessful.toolResult?.output as { value?: unknown } | undefined)?.value;
+    if (typeof value === "number") return String(value);
+  }
   return lastSuccessful?.observationSummary;
 }
 
@@ -543,7 +630,10 @@ function toOutcome(execution: TaskExecution): AutonomousTaskOutcome {
 function toTaskOutcome(outcome: AutonomousTaskOutcome): TaskOutcome {
   const execution = outcome.execution;
   const lastRoute = [...execution.steps].reverse().find((step) => step.route?.selected)?.route?.selected;
+  const lastInference = execution.attempts?.filter((attempt) => attempt.phase !== "TOOL_EXECUTION" && attempt.provider !== "deterministic").at(-1);
   return {
+    phase: execution.failure?.phase ?? lastInference?.phase,
+    failureClass: execution.failure?.failureClass,
     task: execution.task,
     plan: {
       id: execution.plan.id,
@@ -555,7 +645,7 @@ function toTaskOutcome(outcome: AutonomousTaskOutcome): TaskOutcome {
         description: step.description
       }))
     },
-    attempts: [],
+    attempts: (execution.attempts ?? []).map((attempt) => ({ ...attempt, tools: [], success: attempt.status === "SUCCEEDED" })),
     success: outcome.success,
     result: outcome.result,
     error: outcome.failureReason,
@@ -566,8 +656,8 @@ function toTaskOutcome(outcome: AutonomousTaskOutcome): TaskOutcome {
       method: "task-executor-state",
       criteria: { terminalState: outcome.status }
     },
-    provider: lastRoute?.provider ?? "none",
-    model: lastRoute?.model ?? "none",
+    provider: lastInference?.provider ?? lastRoute?.provider ?? "none",
+    model: lastInference?.model ?? lastRoute?.model ?? "none",
     tokens: 0,
     monetaryCostUsd: execution.usage.monetaryCostUsd,
     shadowCostUsd: execution.usage.shadowCostUsd,

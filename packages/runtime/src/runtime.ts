@@ -17,6 +17,7 @@ import { AgentLoop } from "./agent/agent-loop.js";
 import { createRuntimeToolExecutor, createRuntimeToolRegistry } from "./tools/runtime-tools.js";
 import { AutonomousTaskExecutor } from "./tasks/task-executor.js";
 import { LlmPlanner } from "./tasks/llm-planner.js";
+import { createActionPlanner } from "./tasks/action-planner.js";
 import { StateTaskCheckpointStore } from "./tasks/checkpoints.js";
 import { StateOpportunityStore } from "./opportunities/store.js";
 import { OpportunityEngine } from "./opportunities/engine.js";
@@ -78,7 +79,7 @@ export function createRuntime(config: AppConfig, options: RuntimeOptions = {}): 
   const evaluation = new EvaluationLayer();
   const performance = new MemoryPerformanceRepository(memoryStore);
   const audit = new AuditLog(db);
-  const modelRouter = new ModelRouter(config.model, { performanceRepository: performance, capabilitySource: options.capabilitySource, telemetry: audit });
+  const modelRouter = new ModelRouter(config.model, { state, performanceRepository: performance, capabilitySource: options.capabilitySource, telemetry: audit });
   const adaptiveExecution = new AdaptiveExecutionController(modelRouter, evaluation, audit);
   const browser = new BrowserAgent({ sessionFactory: new PlaywrightBrowserSessionFactory(), telemetry: { emit: async (event) => { await audit.record("info", event.name, event.details); } } });
   const tools = createRuntimeToolRegistry(config.tools, options.fixture === true);
@@ -111,13 +112,7 @@ export function createRuntime(config: AppConfig, options: RuntimeOptions = {}): 
     onProgress: options.onProgress,
     beforeStep: options.beforeStep,
     isPaused: options.isPaused,
-    actionPlanner: { async decide(context) {
-      if (!context.selectedModel) throw new Error("Nenhum modelo compatível está disponível para executar este passo.");
-      const response = await modelRouter.completeForPlanningCandidate([{ role: "system", content: 'Choose one operational tool call. Return only JSON {"id":"call-id","tool":"tool-id","arguments":{}}. Use a listed tool and its input schema. Never fabricate tool output.' }, { role: "user", content: JSON.stringify({ objective: context.objective, step: context.currentStep, observation: context.latestObservation, tools: context.availableTools.map((tool) => ({ id: tool.id, inputSchema: tool.inputSchema })) }) }], context.selectedModel);
-      const call = JSON.parse(response.content);
-      if (!call || typeof call.id !== "string" || typeof call.tool !== "string" || !context.availableTools.some((tool) => tool.id === call.tool) || !call.arguments || typeof call.arguments !== "object") throw new Error("O modelo não produziu uma ação válida.");
-      return { call, monetaryCostUsd: response.estimatedCostUsd, shadowCostUsd: context.selectedModel.shadowCostUsd };
-    } },
+    actionPlanner: createActionPlanner(modelRouter, tools),
     checkpointStore: checkpoints
   });
   const agent = new AgentLoop(

@@ -119,6 +119,8 @@ export class MemoryEngine {
 
   async recordOutcome(outcome: TaskOutcome): Promise<{ episodic: MemoryRecord; economic: MemoryRecord }> {
     const commonMetadata = {
+      phase: outcome.phase,
+      failureClass: outcome.failureClass,
       taskType: outcome.task.type,
       provider: outcome.provider ?? outcome.attempts.at(-1)?.provider ?? "none",
       model: outcome.model ?? outcome.attempts.at(-1)?.model ?? "none",

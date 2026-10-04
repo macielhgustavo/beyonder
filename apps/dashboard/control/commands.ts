@@ -329,6 +329,9 @@ function shellQuote(value: string) {
 }
 
 function humanFailure(reason?: string) {
+  if (/No compatible candidates/i.test(reason ?? "")) return "Não consegui iniciar esta etapa porque nenhum modelo compatível está disponível.";
+  if (/HTTP 400/i.test(reason ?? "")) return "Um serviço de inteligência recusou a solicitação. Consulte as tentativas nos detalhes do trabalho.";
+  if (/HTTP 4\d\d|HTTP 5\d\d|Inference deadline|fetch failed/i.test(reason ?? "")) return "Não consegui concluir esta tarefa porque um serviço de inteligência não respondeu como esperado. Consulte os detalhes do trabalho.";
   if (/policy|blocked|prohibited|denied/i.test(reason ?? "")) return "Esta ação foi bloqueada pelas regras de segurança.";
   if (/browser|playwright/i.test(reason ?? "")) return "O navegador não conseguiu executar a ação. Verifique a instalação e tente novamente.";
   return reason ?? "A tarefa falhou. Consulte o histórico operacional.";

@@ -109,3 +109,6 @@ export type {
 
 
 export { ModelRouter } from "./models/model-router.js";
+export { classifyFailure } from "./models/inference.js";
+export type { InferenceAttempt } from "./models/inference.js";
+export { inspectTaskTrace } from "./tasks/trace.js";

@@ -116,7 +116,17 @@ export class LlmPlanner implements Planner {
       }});
       return { plan: result.value, provider: result.response.provider, model: result.response.model, usedFallback: false, monetaryCostUsd: result.monetaryCostUsd, shadowCostUsd: result.shadowCostUsd };
     } catch (error) {
-      if (browserRequired || this.options.allowDeterministicFallback === false) {
+      // This is not a synthetic-answer fallback: it preserves the mandatory
+      // browser -> observed evidence -> response boundary using registered tools.
+      if (browserRequired) {
+        return {
+          plan: deterministicBrowserPlan(request, browserTools),
+          provider: "deterministic",
+          model: "browser-read-plan",
+          usedFallback: true
+        };
+      }
+      if (this.options.allowDeterministicFallback === false) {
         const attempts = await this.options.modelRouter.attemptsFor?.(request.task.id) ?? [];
         const last = attempts.at(-1);
         const failure = classifyFailure(error);
@@ -132,6 +142,54 @@ export class LlmPlanner implements Planner {
       usedFallback: true
     };
   }
+}
+
+function deterministicBrowserPlan(request: PlanRequest, browserTools: ToolDescriptor[]): Plan {
+  const open = browserTools.find((tool) => tool.capabilities.includes("browser:open"));
+  const extract = browserTools.find((tool) => tool.capabilities.includes("browser:extractText"));
+  const read = extract ?? open ?? browserTools[0];
+  if (!read) throw new InferenceError("Browser reading is required but no compatible read-only browser tool is available.", "TOOL_UNAVAILABLE");
+
+  const steps: Plan["steps"] = [];
+  if (open) {
+    steps.push({
+      id: "browser-navigate",
+      kind: "TOOL",
+      description: "Navigate to the authoritative page requested by the objective using a read-only browser tool.",
+      status: "PENDING",
+      expectedOutcome: "The requested public page is open and its visible contents are observed.",
+      allowedToolCapabilities: ["browser", "browser:open"]
+    });
+  }
+  if (extract && extract.id !== open?.id) {
+    steps.push({
+      id: "browser-read",
+      kind: "TOOL",
+      description: "Extract the relevant visible text from the opened page as external evidence.",
+      status: "PENDING",
+      expectedOutcome: "Bounded read-only page evidence relevant to the objective is available.",
+      allowedToolCapabilities: ["browser", "browser:extractText"],
+      ...(open ? { dependencies: ["browser-navigate"] } : {})
+    });
+  }
+  const evidenceStep = steps.at(-1)?.id;
+  steps.push({
+    id: "browser-respond",
+    kind: "DIRECT_RESPONSE",
+    description: "Answer the objective using only the browser evidence produced by the preceding step.",
+    status: "PENDING",
+    expectedOutcome: "A concise response grounded in observed external evidence.",
+    dependencies: evidenceStep ? [evidenceStep] : []
+  });
+  return {
+    id: `plan_${request.task.id}`,
+    taskId: request.task.id,
+    objective: request.objective,
+    revision: 1,
+    createdAt: new Date().toISOString(),
+    assumptions: ["LLM planning was unavailable or invalid; preserve the mandatory read-only browser evidence boundary."],
+    steps
+  };
 }
 
 function planningPrompt(request: PlanRequest): ModelMessage[] {

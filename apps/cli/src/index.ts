@@ -318,8 +318,8 @@ taskCommand
       failureReason: outcome.failureReason,
       failureClass: outcome.execution.failure?.failureClass,
       phase: outcome.execution.failure?.phase,
-      lastProvider: outcome.execution.attempts?.filter((a) => a.phase !== "TOOL_EXECUTION" && a.provider !== "deterministic").at(-1)?.provider,
-      lastModel: outcome.execution.attempts?.filter((a) => a.phase !== "TOOL_EXECUTION" && a.provider !== "deterministic").at(-1)?.model,
+      lastProvider: outcome.execution.attempts?.filter((a) => a.phase !== "TOOL_EXECUTION").at(-1)?.provider,
+      lastModel: outcome.execution.attempts?.filter((a) => a.phase !== "TOOL_EXECUTION").at(-1)?.model,
       attemptCount: outcome.execution.attempts?.length ?? 0,
       planner: runtime.planner.lastResult ? {
         provider: runtime.planner.lastResult.provider,

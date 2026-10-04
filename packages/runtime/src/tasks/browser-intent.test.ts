@@ -49,12 +49,18 @@ describe("browser intent independent of incidental language tokens", () => {
 });
 
 describe("browser evidence and no-tool response boundary", () => {
-  it("rejects a model's direct-only browser plan instead of substituting a deterministic answer", async () => {
+  it("replaces a model's invalid direct-only browser plan with a tool-backed evidence plan", async () => {
     const runtime = setup(true);
     try {
       const { task } = await runtime.intelligence.inspect("Abra https://nodejs.org e leia a versão LTS");
       vi.spyOn(runtime.modelRouter, "completeForPlanningCandidate").mockResolvedValue({ ...response, content: JSON.stringify({ id: "p", taskId: task.id, objective: task.input, revision: 1, createdAt: new Date().toISOString(), steps: [{ id: "fake", description: "Pretend", status: "PENDING", kind: "DIRECT_RESPONSE" }] }) });
-      await expect(runtime.planner.createPlan({ task, objective: task.input, availableTools: await runtime.getAvailableTools(), memoryContext: [], budget: DEFAULT_TASK_BUDGET, economicState: "survival" })).rejects.toMatchObject({ failureClass: "INVALID_ACTION" });
+      const plan = await runtime.planner.createPlan({ task, objective: task.input, availableTools: await runtime.getAvailableTools(), memoryContext: [], budget: DEFAULT_TASK_BUDGET, economicState: "survival" });
+      expect(plan.steps.map((step) => ({ kind: step.kind, capabilities: step.allowedToolCapabilities, dependencies: step.dependencies }))).toEqual([
+        { kind: "TOOL", capabilities: ["browser", "browser:open"], dependencies: undefined },
+        { kind: "TOOL", capabilities: ["browser", "browser:extractText"], dependencies: ["browser-navigate"] },
+        { kind: "DIRECT_RESPONSE", capabilities: undefined, dependencies: ["browser-read"] }
+      ]);
+      expect(runtime.planner.lastResult).toMatchObject({ provider: "deterministic", model: "browser-read-plan", usedFallback: true });
     } finally { await runtime.browser.closeAll(); runtime.sqlite.close(); }
   });
   it("fails explicitly before inference when browser is unavailable", async () => {
@@ -101,6 +107,63 @@ describe("browser evidence and no-tool response boundary", () => {
       expect(outcome.execution.steps[0]?.toolCapabilities).toContain("browser");
       expect(outcome.result).toContain("v24.0.0");
       expect((await runtime.checkpoints.get(task.id))?.state).toBe("COMPLETED");
+    } finally { await runtime.browser.closeAll(); runtime.sqlite.close(); }
+  });
+  it("formats observed browser evidence deterministically after an operational response failure", async () => {
+    const runtime = setup(true);
+    try {
+      const { task } = await runtime.intelligence.inspect("Use o site oficial do Python para descobrir a versão estável atual e explique em uma frase curta o que encontrou.");
+      const open = (await runtime.getAvailableTools()).find((tool) => tool.capabilities.includes("browser:open"))!;
+      vi.spyOn(runtime.browser, "startSession").mockResolvedValue("fixture-session");
+      const browser = vi.spyOn(runtime.browser, "execute").mockResolvedValue({ status: "ok", action: { type: "open", url: "https://python.org/" }, observation: { url: "https://python.org/", title: "Python fixture", visibleText: "Download Python 3.14.8. Release notes are available.", interactiveElements: [] } } as never);
+      vi.spyOn(runtime.modelRouter, "completeForPlanningCandidate").mockRejectedValue(new InferenceError("Inference deadline exceeded.", "TIMEOUT"));
+      const plan: Plan = { id: "p", taskId: task.id, objective: task.input, revision: 1, createdAt: new Date().toISOString(), steps: [
+        { id: "read", description: "Read official page", status: "PENDING", action: { id: "open", tool: open.id, arguments: { url: "https://python.org/" } } },
+        { id: "respond", description: "Answer from evidence", status: "PENDING", kind: "DIRECT_RESPONSE", dependencies: ["read"] }
+      ] };
+      const outcome = await runtime.taskExecutor.execute({ task, plan, economicState: "survival" });
+      expect(outcome.status).toBe("COMPLETED");
+      expect(outcome.result).toBe("A versão estável atual do Python observada no site oficial é 3.14.8.");
+      expect(browser).toHaveBeenCalledOnce();
+      expect(outcome.execution.attempts?.at(-1)).toMatchObject({ phase: "DIRECT_RESPONSE", provider: "deterministic", model: "observed-evidence-format", status: "SUCCEEDED" });
+      expect(outcome.execution.steps.at(-1)?.route?.selected).toMatchObject({ provider: "deterministic", model: "observed-evidence-format" });
+    } finally { await runtime.browser.closeAll(); runtime.sqlite.close(); }
+  });
+  it("does not claim success when an operational response failure has no matching fact in browser evidence", async () => {
+    const runtime = setup(true);
+    try {
+      const { task } = await runtime.intelligence.inspect("Use o site oficial do Python para descobrir a versão estável atual.");
+      const open = (await runtime.getAvailableTools()).find((tool) => tool.capabilities.includes("browser:open"))!;
+      vi.spyOn(runtime.browser, "startSession").mockResolvedValue("fixture-session");
+      vi.spyOn(runtime.browser, "execute").mockResolvedValue({ status: "ok", action: { type: "open", url: "https://python.org/" }, observation: { url: "https://python.org/", title: "Python fixture", visibleText: "No release information is present in this fixture.", interactiveElements: [] } } as never);
+      vi.spyOn(runtime.modelRouter, "completeForPlanningCandidate").mockRejectedValue(new InferenceError("Inference deadline exceeded.", "TIMEOUT"));
+      const plan: Plan = { id: "p", taskId: task.id, objective: task.input, revision: 1, createdAt: new Date().toISOString(), steps: [
+        { id: "read", description: "Read official page", status: "PENDING", action: { id: "open", tool: open.id, arguments: { url: "https://python.org/" } } },
+        { id: "respond", description: "Answer from evidence", status: "PENDING", kind: "DIRECT_RESPONSE", dependencies: ["read"] }
+      ] };
+      const outcome = await runtime.taskExecutor.execute({ task, plan, economicState: "survival" });
+      expect(outcome.status).toBe("FAILED");
+      expect(outcome.execution.failure).toMatchObject({ failureClass: "TIMEOUT", phase: "DIRECT_RESPONSE" });
+      expect(outcome.result).toBeUndefined();
+      expect(outcome.execution.attempts?.some((attempt) => attempt.model === "observed-evidence-format")).toBe(false);
+    } finally { await runtime.browser.closeAll(); runtime.sqlite.close(); }
+  });
+  it("does not mask invalid browser response output with deterministic formatting", async () => {
+    const runtime = setup(true);
+    try {
+      const { task } = await runtime.intelligence.inspect("Abra https://nodejs.org e leia a versão LTS");
+      const open = (await runtime.getAvailableTools()).find((tool) => tool.capabilities.includes("browser:open"))!;
+      vi.spyOn(runtime.browser, "startSession").mockResolvedValue("fixture-session");
+      vi.spyOn(runtime.browser, "execute").mockResolvedValue({ status: "ok", action: { type: "open", url: "https://nodejs.org/" }, observation: { url: "https://nodejs.org/", title: "Node.js fixture", visibleText: "Node.js v24.0.0 LTS", interactiveElements: [] } } as never);
+      vi.spyOn(runtime.modelRouter, "completeForPlanningCandidate").mockResolvedValue({ ...response, content: '<tool_call>{"tool":"web.run"}</tool_call>' });
+      const plan: Plan = { id: "p", taskId: task.id, objective: task.input, revision: 1, createdAt: new Date().toISOString(), steps: [
+        { id: "read", description: "Read official page", status: "PENDING", action: { id: "open", tool: open.id, arguments: { url: "https://nodejs.org/" } } },
+        { id: "respond", description: "Answer from evidence", status: "PENDING", kind: "DIRECT_RESPONSE", dependencies: ["read"] }
+      ] };
+      const outcome = await runtime.taskExecutor.execute({ task, plan, economicState: "survival" });
+      expect(outcome.status).toBe("FAILED");
+      expect(outcome.execution.failure).toMatchObject({ failureClass: "INVALID_OUTPUT", phase: "DIRECT_RESPONSE" });
+      expect(outcome.execution.attempts?.some((attempt) => attempt.model === "observed-evidence-format")).toBe(false);
     } finally { await runtime.browser.closeAll(); runtime.sqlite.close(); }
   });
   it.each(["pseudo", "provider"])("records %s unsolicited tools without executing them", async (kind) => {

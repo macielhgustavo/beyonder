@@ -19,6 +19,7 @@ import { AutonomousTaskExecutor } from "./tasks/task-executor.js";
 import { LlmPlanner } from "./tasks/llm-planner.js";
 import { createActionPlanner } from "./tasks/action-planner.js";
 import { StateTaskCheckpointStore } from "./tasks/checkpoints.js";
+import { StateTaskExecutionLeaseStore } from "./tasks/execution-lease.js";
 import { StateOpportunityStore } from "./opportunities/store.js";
 import { OpportunityEngine } from "./opportunities/engine.js";
 import { DeterministicFixtureOpportunitySource, GitHubPublicOpportunitySource, AgentWorkPublicOpportunitySource, OpenBountyPublicOpportunitySource } from "./opportunities/sources.js";
@@ -87,6 +88,7 @@ export function createRuntime(config: AppConfig, options: RuntimeOptions = {}): 
   const toolExecutor = createRuntimeToolExecutor(tools, audit);
   const getAvailableTools = (context: ToolContext = {}) => tools.getAvailableTools(context, toolExecutor.policy);
   const checkpoints = new StateTaskCheckpointStore(state);
+  const executionLeases = new StateTaskExecutionLeaseStore(state);
   const planner = new LlmPlanner({ modelRouter, memory, allowDeterministicFallback: options.fixture === true });
   const opportunityStore = new StateOpportunityStore(state);
   const sourceReliability = new SourceReliabilityStore(state);
@@ -113,7 +115,8 @@ export function createRuntime(config: AppConfig, options: RuntimeOptions = {}): 
     beforeStep: options.beforeStep,
     isPaused: options.isPaused,
     actionPlanner: createActionPlanner(modelRouter, tools),
-    checkpointStore: checkpoints
+    checkpointStore: checkpoints,
+    executionLeaseStore: executionLeases
   });
   const agent = new AgentLoop(
     config,

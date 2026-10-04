@@ -77,7 +77,8 @@ export class LocalDashboardDataSource implements DashboardDataSource {
     const state = this.readControlState();
     const approvals = await this.getApprovals({ limit: 200 });
     const latestError = (await this.getAuditEvents({ level: "error", limit: 1 }))[0];
-    const activeTask = (await this.getTasks({ limit: 20 })).find((task) => task.status === "running" || task.status === "planning" || task.status === "queued");
+    const tasks = await this.getTasks({ limit: 20 });
+    const activeTask = tasks.find((task) => task.status === "running" || task.status === "planning" || task.status === "queued");
     const age = state.lastHeartbeatAt ? Date.now() - Date.parse(state.lastHeartbeatAt) : Infinity;
     const heartbeat = age > 60_000 ? "OFFLINE" : age > 10_000 ? "DEGRADED" : state.paused ? "PAUSED" : "ONLINE";
     if (heartbeat === "OFFLINE" || heartbeat === "DEGRADED") return { global: heartbeat, heartbeat, label: heartbeat === "OFFLINE" ? "Offline" : "Degradado", detail: heartbeat === "OFFLINE" ? "Beyonder não está em execução." : `Runtime não respondeu há ${Math.floor(age / 1000)} segundos.`, lastHeartbeatAt: state.lastHeartbeatAt, currentActivity: null };
@@ -88,7 +89,9 @@ export class LocalDashboardDataSource implements DashboardDataSource {
     if (approvals.some((approval) => approval.status === "PENDING")) {
       return { global: "WAITING_FOR_YOU", heartbeat, label: "Esperando voce", detail: "Existe uma decisao aguardando aprovacao.", lastHeartbeatAt: state.lastHeartbeatAt, currentActivity: state.currentActivity };
     }
-    if ((await this.getTasks({ limit: 20 })).some((task) => task.status === "waiting")) return { global: "WAITING_FOR_YOU", heartbeat, label: "Esperando você", detail: "Uma tarefa aguarda retomada.", lastHeartbeatAt: state.lastHeartbeatAt, currentActivity: state.currentActivity };
+    if (tasks.some((task) => task.status === "waiting")) return { global: "WAITING_FOR_YOU", heartbeat, label: "Esperando você", detail: "Uma tarefa aguarda retomada.", lastHeartbeatAt: state.lastHeartbeatAt, currentActivity: state.currentActivity };
+    const blockedTask = tasks.find((task) => task.status === "blocked");
+    if (blockedTask) return { global: "ATTENTION_REQUIRED", heartbeat, label: "Precisa de atenção", detail: blockedTask.humanStatus, lastHeartbeatAt: state.lastHeartbeatAt, currentActivity: state.currentActivity };
     if (activeTask) {
       return { global: "WORKING", heartbeat, label: "Trabalhando", detail: activeTask.humanStatus, lastHeartbeatAt: state.lastHeartbeatAt, currentActivity: state.currentActivity ?? activeTask.title };
     }
@@ -118,7 +121,7 @@ export class LocalDashboardDataSource implements DashboardDataSource {
     const db = this.open();
     try {
       const ids = readState<string[]>(db, TASK_INDEX_KEY, []);
-      const checkpoints = (db.prepare("SELECT key, value FROM state WHERE key LIKE 'task-checkpoint:%'").all() as Array<{ key: string; value: string }>).map((row) => ({ id: row.key.slice("task-checkpoint:".length), execution: (JSON.parse(row.value) as { execution?: Record<string, unknown> } | null)?.execution }));
+      const checkpoints = (db.prepare("SELECT key, value FROM state WHERE key LIKE 'task-checkpoint:%'").all() as Array<{ key: string; value: string }>).map((row) => ({ id: row.key.slice("task-checkpoint:".length), execution: checkpointExecution(row.value) }));
       const allIds = [...new Set([...ids, ...checkpoints.map((row) => row.id)])];
       const seenTasks = new Set<string>();
       const rows = allIds.flatMap((id) => {
@@ -414,7 +417,7 @@ function taskView(execution: Record<string, unknown>, provenance: "local"): Task
     attempts: attempts.map((attempt) => ({ ...attempt, error: attempt.error ? redactText(attempt.error) : undefined })),
     id: humanTaskId(stringField(execution, "id")),
     title: stringField(plan, "objective") || stringField(task, "objective") || stringField(task, "input") || "Objetivo sem titulo",
-    humanStatus: execution.interruptionReason === "PROCESS_RESTART" ? "Execução interrompida; pronta para retomada segura." : execution.interruptionReason === "PROCESS_RESTART_NO_CHECKPOINT" ? "Execução interrompida antes de um checkpoint recuperável." : humanTaskStatus(state, latestStep ? stringField(latestStep, "observationSummary") : undefined),
+    humanStatus: execution.interruptionReason === "PROCESS_RESTART" ? "Execução interrompida; pronta para retomada segura." : execution.interruptionReason === "PROCESS_RESTART_NO_CHECKPOINT" ? "Execução interrompida antes de um checkpoint recuperável." : execution.interruptionReason ? stringField(execution, "error") || String(execution.interruptionReason) : humanTaskStatus(state, latestStep ? stringField(latestStep, "observationSummary") : undefined),
     status: normalizeTaskStatus(state),
     result: typeof execution.result === "string" ? humanTaskResult(redactText(execution.result)) : null,
     provider: resultAttempt?.provider ?? (latestStep ? stringField(objectField(latestStep, "route").selected as Record<string, unknown> | undefined, "provider") || null : null),
@@ -757,6 +760,15 @@ function humanAuditEvent(event: string, details: Record<string, unknown>) {
   if (event === "tool.denied") return "Uma acao foi bloqueada por politica.";
   if (event.includes("failed")) return "Uma operacao falhou; detalhes tecnicos disponiveis.";
   return event.replaceAll(".", " ");
+}
+
+function checkpointExecution(raw: string): Record<string, unknown> | undefined {
+  try {
+    const payload = JSON.parse(raw) as { version?: unknown; execution?: unknown } | null;
+    return payload?.version === 1 && payload.execution && typeof payload.execution === "object" ? payload.execution as Record<string, unknown> : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function safeExternalUrl(value: string): string | undefined { try { const url = new URL(value); return ["http:", "https:"].includes(url.protocol) && !url.username && !url.password ? url.href : undefined; } catch { return undefined; } }

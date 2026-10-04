@@ -125,6 +125,20 @@ describe("H1 persistent scoped operational health", () => {
     const result = await runCandidates({ taskId: "t", phase: "DIRECT_RESPONSE", candidates: [candidate("a"), candidate("b"), candidate("c"), local], messages: [], maxCandidates: 3, maxMonetaryCostUsd: 0, maxShadowCostUsd: 0.01, maxDurationMs: 1000, complete, validate: (r) => r.content, canAttempt: async () => true });
     expect(result.attempts.map((a) => a.provider)).toEqual(["a", "b", "ollama"]);
   });
+  it("accounts every physical request inside one logical inference operation", async () => {
+    const local = { ...candidate("ollama", "local"), local: true, externalQuotaConsumption: false, costClass: "FREE_CONFIRMED" as const, shadowCostUsd: 0 };
+    const complete = vi.fn()
+      .mockRejectedValueOnce(httpFailure(429, "limited"))
+      .mockResolvedValueOnce({ provider: "ollama", model: "local", estimatedCostUsd: 0, content: "OK" });
+    const records: InferenceAttempt[] = [];
+    const result = await runCandidates({ taskId: "logical-task", phase: "DIRECT_RESPONSE", candidates: [candidate("groq"), local], messages: [], ...inferenceAttemptPolicy("survival"), maxCandidates: 1, maxMonetaryCostUsd: 0, maxShadowCostUsd: 0.01, maxDurationMs: 1000, complete, validate: (r) => r.content, record: async (entry) => { records.push({ ...entry }); } });
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(result.attempts.map(({ attempt, provider, status }) => ({ attempt, provider, status }))).toEqual([
+      { attempt: 1, provider: "groq", status: "FAILED" },
+      { attempt: 2, provider: "ollama", status: "SUCCEEDED" }
+    ]);
+    expect(records.filter((entry) => entry.status !== "STARTED")).toHaveLength(2);
+  });
 });
 
 describe("Q1 quota snapshots", () => {

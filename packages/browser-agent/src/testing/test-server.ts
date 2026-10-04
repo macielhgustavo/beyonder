@@ -21,6 +21,17 @@ export async function startBrowserTestServer(): Promise<BrowserTestServer> {
       response.end();
       return;
     }
+    if (url.pathname === "/cookie-set") {
+      response.writeHead(302, { location: "/cookie-check", "set-cookie": "beyonder_session=present; Path=/; HttpOnly; SameSite=Lax" });
+      response.end();
+      return;
+    }
+    if (url.pathname === "/cookie-check") {
+      const present = request.headers.cookie?.includes("beyonder_session=present") === true;
+      response.writeHead(present ? 200 : 401, { "content-type": "text/html; charset=utf-8" });
+      response.end(page(present ? "Session preserved" : "Session missing", `<h1>${present ? "Session preserved" : "Session missing"}</h1>`));
+      return;
+    }
     if (url.pathname === "/docs") {
       response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       response.end(page("Documentation", '<h1>Documentation</h1><p id="docs-copy">Deterministic browser documentation page.</p>'));

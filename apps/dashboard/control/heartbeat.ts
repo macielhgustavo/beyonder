@@ -1,4 +1,4 @@
-import { createRuntime } from "@beyonder/runtime";
+import { createRuntime, findReconciliationRequired } from "@beyonder/runtime";
 import { loadControlConfig } from "./commands";
 export async function startHeartbeat() {
   const runtime = createRuntime(loadControlConfig());
@@ -22,7 +22,22 @@ export async function markInterruptedTasks(runtime: ReturnType<typeof createRunt
     if (["CREATED", "PLANNING", "READY", "RUNNING", "WAITING", "RECOVERING", "REPLANNING"].includes(String(execution.state))) {
       const task = execution.task && typeof execution.task === "object" ? execution.task as Record<string, unknown> : {};
       const taskId = typeof task.id === "string" ? task.id : "";
-      const checkpoint = taskId ? await runtime.checkpoints.get(taskId) : undefined;
+      const lookup = taskId ? await runtime.checkpoints.inspect(taskId) : { status: "CHECKPOINT_NOT_FOUND" as const };
+      if (["CHECKPOINT_CORRUPT", "CHECKPOINT_VERSION_UNSUPPORTED", "CHECKPOINT_IO_ERROR"].includes(lookup.status)) {
+        const { completedAt: _completedAt, result: _result, ...persisted } = execution;
+        await runtime.state.set(`control-center:task:${id}`, { ...persisted, state: "BLOCKED", error: lookup.status, interruptionReason: lookup.status });
+        continue;
+      }
+      const checkpoint = lookup.status === "CHECKPOINT_VALID" ? lookup.execution : undefined;
+      if (checkpoint) {
+        const reconciliation = findReconciliationRequired(checkpoint, await runtime.getAvailableTools({ taskId }));
+        if (reconciliation) {
+          const blocked = { ...checkpoint, state: "BLOCKED" as const, error: `RECONCILIATION_REQUIRED: outcome of '${reconciliation.tool}' is unknown; operator evidence is required.`, reconciliationRequired: reconciliation };
+          await runtime.checkpoints.save(blocked);
+          await runtime.state.set(`control-center:task:${id}`, { ...blocked, fixture: execution.fixture === true, interruptionReason: "RECONCILIATION_REQUIRED" });
+          continue;
+        }
+      }
       if (checkpoint && ["COMPLETED", "FAILED", "BLOCKED", "BUDGET_EXHAUSTED", "CANCELLED"].includes(checkpoint.state)) {
         await runtime.state.set(`control-center:task:${id}`, { ...checkpoint, fixture: execution.fixture === true });
       } else if (checkpoint) {

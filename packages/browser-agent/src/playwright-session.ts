@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import { BrowserElementNotFoundError, BrowserTimeoutError } from "./errors.js";
-import { BrowserPolicyEngine } from "./policy.js";
+import { BrowserPolicyEngine, type AddressResolver } from "./policy.js";
+import { PinnedHttpTransport, type BrowserNetworkTransport } from "./pinned-transport.js";
 import type {
   BrowserElementInfo,
   BrowserFormObservation,
@@ -33,11 +34,15 @@ interface BrowserContextLike {
 
 interface RouteLike {
   continue(): Promise<void>;
+  fulfill(options: { status: number; headers: Record<string, string>; body: Buffer }): Promise<void>;
   abort(errorCode?: string): Promise<void>;
 }
 
 interface RequestLike {
   url(): string;
+  method(): string;
+  headers(): Record<string, string>;
+  postDataBuffer(): Buffer | null;
 }
 
 interface DownloadLike {
@@ -192,6 +197,8 @@ export interface PlaywrightBrowserSessionFactoryOptions {
   navigationTimeoutMs?: number;
   actionTimeoutMs?: number;
   executablePath?: string;
+  addressResolver?: AddressResolver;
+  networkTransport?: BrowserNetworkTransport;
 }
 
 export class PlaywrightBrowserSessionFactory implements BrowserSessionFactory {
@@ -210,7 +217,8 @@ export class PlaywrightBrowserSessionFactory implements BrowserSessionFactory {
       ]
     });
 
-    const policyEngine = new BrowserPolicyEngine(policy);
+    const policyEngine = new BrowserPolicyEngine(policy, this.options.addressResolver);
+    const networkTransport = this.options.networkTransport ?? new PinnedHttpTransport({ timeoutMs: this.options.navigationTimeoutMs ?? 15_000 });
     const context = await browser.newContext({
       acceptDownloads: policy.allowDownload,
       permissions: [],
@@ -218,9 +226,7 @@ export class PlaywrightBrowserSessionFactory implements BrowserSessionFactory {
     });
 
     await context.route("**/*", async (route, request) => {
-      const decision = await policyEngine.evaluateNavigation(request.url());
-      if (decision.allowed) await route.continue();
-      else await route.abort("blockedbyclient");
+      await proxyBrowserRequest(route, request, policyEngine, networkTransport);
     });
 
     const page = await context.newPage();
@@ -228,6 +234,30 @@ export class PlaywrightBrowserSessionFactory implements BrowserSessionFactory {
       navigationTimeoutMs: this.options.navigationTimeoutMs ?? 15_000,
       actionTimeoutMs: this.options.actionTimeoutMs ?? 10_000
     });
+  }
+}
+
+export async function proxyBrowserRequest(
+  route: RouteLike,
+  request: RequestLike,
+  policyEngine: BrowserPolicyEngine,
+  transport: BrowserNetworkTransport
+): Promise<void> {
+  const resolved = await policyEngine.resolveConnection(request.url());
+  if (!resolved.decision.allowed || !resolved.target) {
+    await route.abort("blockedbyclient");
+    return;
+  }
+  try {
+    const response = await transport.fetch({
+      url: request.url(),
+      method: request.method(),
+      headers: request.headers(),
+      body: request.postDataBuffer()
+    }, resolved.target);
+    await route.fulfill(response);
+  } catch {
+    await route.abort("failed");
   }
 }
 

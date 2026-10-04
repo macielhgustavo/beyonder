@@ -6,9 +6,19 @@ export class StateStore {
   constructor(private readonly db: Db) {}
 
   async get<T>(key: string, fallback: T): Promise<T> {
+    const raw = await this.readRaw(key);
+    if (!raw.found) return fallback;
+    return JSON.parse(raw.value) as T;
+  }
+
+  async readRaw(key: string): Promise<{ found: false } | { found: true; value: string }> {
     const rows = await this.db.select().from(state).where(eq(state.key, key)).limit(1);
-    if (rows.length === 0) return fallback;
-    return JSON.parse(rows[0].value) as T;
+    return rows.length === 0 ? { found: false } : { found: true, value: rows[0].value };
+  }
+
+  insertIfAbsent(key: string, value: unknown): boolean {
+    const payload = { key, value: JSON.stringify(value), updatedAt: new Date().toISOString() };
+    return this.db.insert(state).values(payload).onConflictDoNothing().run().changes === 1;
   }
 
   async update<T>(key: string, fallback: T, change: (current: T) => T): Promise<T> {

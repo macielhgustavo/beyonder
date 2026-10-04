@@ -24,7 +24,8 @@ import { DefaultRecoveryPolicy, type RecoveryPolicy } from "./recovery.js";
 import type { Planner } from "./planner.js";
 import { validatePlan } from "./planner.js";
 import { assertTaskStateTransition, isTerminalTaskState } from "./state-machine.js";
-import type { TaskCheckpointStore } from "./checkpoints.js";
+import { findReconciliationRequired, type TaskCheckpointStore } from "./checkpoints.js";
+import type { TaskExecutionLeaseStore } from "./execution-lease.js";
 import { classifyFailure, InferenceError, runCandidates, validateDirectResponse } from "../models/inference.js";
 import { getEconomicRoutingPolicy, inferenceAttemptPolicy } from "../models/router-config.js";
 import { hasBrowserEvidence, isReadOnlyBrowserTool } from "./browser-evidence.js";
@@ -43,6 +44,7 @@ export interface TaskExecutorOptions {
   recoveryPolicy?: RecoveryPolicy;
   completionEvaluator?: CompletionEvaluator;
   checkpointStore?: TaskCheckpointStore;
+  executionLeaseStore?: TaskExecutionLeaseStore;
   now?: () => number;
   id?: () => string;
 }
@@ -103,12 +105,26 @@ export class AutonomousTaskExecutor {
       startedAt: new Date(this.now()).toISOString()
     };
 
-    return this.runExecution(execution, request);
+    return this.withExecutionLease(execution, request);
   }
 
   async resume(request: ResumeTaskRequest): Promise<AutonomousTaskOutcome> {
     const execution = cloneExecution(request.execution);
     if (isTerminalTaskState(execution.state)) throw new Error(`Task '${execution.task.id}' is already terminal: ${execution.state}.`);
+    const availableTools = await this.availableTools(execution, request.economicState);
+    const reconciliation = findReconciliationRequired(execution, availableTools);
+    if (reconciliation) {
+      execution.state = "BLOCKED";
+      execution.error = `RECONCILIATION_REQUIRED: outcome of '${reconciliation.tool}' is unknown; operator evidence is required.`;
+      execution.reconciliationRequired = reconciliation;
+      const planStep = execution.plan.steps.find((step) => step.id === reconciliation.stepId);
+      if (planStep) planStep.status = "BLOCKED";
+      const running = execution.steps.find((step) => step.stepId === reconciliation.stepId && step.status === "RUNNING");
+      if (running) { running.status = "BLOCKED"; running.error = execution.error; }
+      await this.options.checkpointStore?.save(execution);
+      await this.options.onProgress?.(execution);
+      return { execution, status: "BLOCKED", success: false, failureReason: execution.error };
+    }
     execution.activeDurationBeforeResumeMs = execution.usage.durationMs;
     execution.resumedAt = new Date(this.now()).toISOString();
     for (const step of execution.plan.steps) {
@@ -117,7 +133,7 @@ export class AutonomousTaskExecutor {
     execution.state = "READY";
     execution.completedAt = undefined;
     execution.error = undefined;
-    return this.runExecution(execution, {
+    return this.withExecutionLease(execution, {
       task: execution.task,
       plan: execution.plan,
       economicState: request.economicState,
@@ -125,6 +141,16 @@ export class AutonomousTaskExecutor {
       signal: request.signal,
       budget: execution.budget
     });
+  }
+
+  private async withExecutionLease(execution: TaskExecution, request: ExecuteTaskRequest): Promise<AutonomousTaskOutcome> {
+    const lease = await this.options.executionLeaseStore?.acquire(
+      execution.task.id,
+      execution.id,
+      Math.max(300_000, execution.budget.maxDurationMs + 60_000)
+    );
+    try { return await this.runExecution(execution, request); }
+    finally { if (lease) await this.options.executionLeaseStore?.release(lease); }
   }
 
   private async runExecution(execution: TaskExecution, request: ExecuteTaskRequest): Promise<AutonomousTaskOutcome> {
@@ -238,7 +264,9 @@ export class AutonomousTaskExecutor {
       remainingBudget: remainingBudget(execution), selectedModel: route?.selected
     }, execution);
     stepExecution.toolCall = action;
-    stepExecution.toolCapabilities = [...(availableTools.find((tool) => tool.id === action.tool)?.capabilities ?? [])];
+    const selectedTool = availableTools.find((tool) => tool.id === action.tool);
+    stepExecution.toolCapabilities = [...(selectedTool?.capabilities ?? [])];
+    stepExecution.toolSideEffects = [...(selectedTool?.sideEffects ?? [])];
     // An operator may pause while inference is in flight. Recheck at the tool boundary.
     if (await this.options.isPaused?.()) {
       await this.transition(execution, "WAITING", { reason: "runtime-paused-before-tool" });
@@ -308,6 +336,15 @@ export class AutonomousTaskExecutor {
       execution.usage.consecutiveFailures = 0;
       execution.usage.noProgressSteps = noProgressCount(execution, stepExecution.observationSummary);
       await this.telemetry("info", "step.completed", { taskId: execution.task.id, planId: execution.plan.id, stepId: step.id });
+    } else if (["TIMEOUT", "EXECUTION_ERROR"].includes(result.error?.code ?? "") && stepExecution.toolSideEffects?.some((effect) => effect !== "READ" && effect !== "NONE")) {
+      execution.reconciliationRequired = { stepId: step.id, tool: action.tool, reason: "OUTCOME_UNKNOWN" };
+      execution.error = `RECONCILIATION_REQUIRED: outcome of '${action.tool}' is unknown; operator evidence is required.`;
+      execution.failure = { failureClass: "OUTCOME_UNKNOWN", phase: "TOOL_EXECUTION", provider: stepExecution.route?.selected?.provider, model: stepExecution.route?.selected?.model };
+      step.status = "BLOCKED";
+      stepExecution.status = "BLOCKED";
+      stepExecution.error = execution.error;
+      await this.transition(execution, "BLOCKED", { stepId: step.id, reason: "RECONCILIATION_REQUIRED", tool: action.tool });
+      await this.telemetry("warn", "tool.reconciliation_required", { taskId: execution.task.id, planId: execution.plan.id, stepId: step.id, tool: action.tool });
     } else {
       execution.failure = { failureClass: "TOOL_ERROR", phase: "TOOL_EXECUTION", provider: stepExecution.route?.selected?.provider, model: stepExecution.route?.selected?.model };
       stepExecution.error = result.error?.message ?? "tool execution failed";

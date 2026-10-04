@@ -121,7 +121,16 @@ describe("real operation honesty", () => {
     execution.steps.push({ id: "in-flight", stepId: "two", attempt: 1, status: "RUNNING", startedAt: new Date().toISOString(), toolCall: execution.plan.steps[1].action });
     const runtime = createRuntime(loadConfig(), { fixture: true });
     try { await runtime.checkpoints.save(execution); } finally { runtime.sqlite.close(); }
-    await expect(runControlCommand({ type: "resumeTask", taskId: "resume-unsafe" })).rejects.toThrow("não está disponível");
+    const startup = createRuntime(loadConfig(), { fixture: true });
+    try {
+      await startup.state.set("control-center:tasks:index", [execution.id]);
+      await startup.state.set(`control-center:task:${execution.id}`, execution);
+      await markInterruptedTasks(startup);
+    } finally { startup.sqlite.close(); }
+    const view = (await new LocalDashboardDataSource(process.env.BEYONDER_DB_PATH).getTasks())[0];
+    expect(view).toMatchObject({ status: "blocked", canResume: false, result: null });
+    expect(view.humanStatus).toContain("RECONCILIATION_REQUIRED");
+    await expect(runControlCommand({ type: "resumeTask", taskId: "resume-unsafe" })).rejects.toThrow("já terminou");
     const reader = createRuntime(loadConfig(), { fixture: true });
     try { expect((await reader.checkpoints.get("resume-unsafe"))?.usage.toolInvocations).toBe(1); } finally { reader.sqlite.close(); }
   });
@@ -135,6 +144,22 @@ describe("real operation honesty", () => {
     } finally { runtime.sqlite.close(); }
     const task = (await new LocalDashboardDataSource(process.env.BEYONDER_DB_PATH).getTasks())[0];
     expect(task).toMatchObject({ status: "blocked", canResume: false, result: null, humanStatus: "Execução interrompida antes de um checkpoint recuperável." });
+  });
+  it.each([
+    ["corrupt", "{broken", "CHECKPOINT_CORRUPT"],
+    ["version", JSON.stringify({ version: 99, execution: {} }), "CHECKPOINT_VERSION_UNSUPPORTED"]
+  ])("surfaces %s checkpoint truth as blocked attention", async (_name, raw, reason) => {
+    const execution = resumableExecution(`checkpoint-${_name}`);
+    const runtime = createRuntime(loadConfig(), { fixture: true });
+    try {
+      await runtime.state.set("control-center:tasks:index", [execution.id]);
+      await runtime.state.set(`control-center:task:${execution.id}`, execution);
+      runtime.sqlite.prepare("INSERT INTO state(key,value,updated_at) VALUES(?,?,?)").run(`task-checkpoint:${execution.task.id}`, raw, new Date().toISOString());
+      await markInterruptedTasks(runtime);
+    } finally { runtime.sqlite.close(); }
+    const task = (await new LocalDashboardDataSource(process.env.BEYONDER_DB_PATH).getTasks())[0];
+    expect(task).toMatchObject({ status: "blocked", canResume: false, result: null });
+    expect(task.humanStatus).toContain(reason);
   });
 });
 

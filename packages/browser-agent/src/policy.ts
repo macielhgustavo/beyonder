@@ -30,6 +30,16 @@ export interface AddressResolver {
   resolve(hostname: string): Promise<string[]>;
 }
 
+export interface BrowserConnectionTarget {
+  url: URL;
+  address?: string;
+  family?: 4 | 6;
+}
+
+export type BrowserConnectionDecision =
+  | { decision: BrowserPolicyDecision; target: BrowserConnectionTarget }
+  | { decision: BrowserPolicyDecision; target?: undefined };
+
 export class SystemAddressResolver implements AddressResolver {
   async resolve(hostname: string): Promise<string[]> {
     const records = await lookup(hostname, { all: true, verbatim: true });
@@ -38,46 +48,50 @@ export class SystemAddressResolver implements AddressResolver {
 }
 
 export class BrowserPolicyEngine {
-  private readonly dnsCache = new Map<string, Promise<string[]>>();
-
   constructor(
     readonly policy: BrowserPolicy = DEFAULT_BROWSER_POLICY,
     private readonly resolver: AddressResolver = new SystemAddressResolver()
   ) {}
 
   async evaluateNavigation(rawUrl: string): Promise<BrowserPolicyDecision> {
-    if (!this.policy.allowNavigation) return denied("navigation-disabled");
+    return (await this.resolveConnection(rawUrl)).decision;
+  }
+
+  /**
+   * Resolves and validates the exact address that the network transport must use.
+   * A caller must not discard `target.address` and perform an independent DNS
+   * lookup; doing so would reopen a DNS-rebinding window.
+   */
+  async resolveConnection(rawUrl: string): Promise<BrowserConnectionDecision> {
+    if (!this.policy.allowNavigation) return { decision: denied("navigation-disabled") };
 
     let url: URL;
     try {
       url = new URL(rawUrl);
     } catch {
-      return denied("unsupported-scheme", "URL could not be parsed.");
+      return { decision: denied("unsupported-scheme", "URL could not be parsed.") };
     }
 
     if (url.protocol !== "http:" && url.protocol !== "https:") {
-      return denied("unsupported-scheme", `Protocol ${url.protocol || "unknown"} is not allowed.`);
+      return { decision: denied("unsupported-scheme", `Protocol ${url.protocol || "unknown"} is not allowed.`) };
     }
     if (url.username || url.password) {
-      return denied("credentials-in-url", "Credentials embedded in URLs are not allowed.");
+      return { decision: denied("credentials-in-url", "Credentials embedded in URLs are not allowed.") };
     }
 
     const hostname = normalizeHostname(url.hostname);
     if (matchesAnyDomain(hostname, this.policy.denyDomains)) {
-      return denied("domain-denied", `Domain ${hostname} is denied by policy.`);
+      return { decision: denied("domain-denied", `Domain ${hostname} is denied by policy.`) };
     }
     if (this.policy.allowDomains.length > 0 && !matchesAnyDomain(hostname, this.policy.allowDomains)) {
-      return denied("domain-not-allowed", `Domain ${hostname} is not in allowDomains.`);
+      return { decision: denied("domain-not-allowed", `Domain ${hostname} is not in allowDomains.`) };
     }
     if (EXECUTABLE_EXTENSIONS.test(`${url.pathname}${url.search}`)) {
-      return denied("executable-download-blocked", "Executable downloads are always blocked.");
+      return { decision: denied("executable-download-blocked", "Executable downloads are always blocked.") };
     }
-    if (!this.policy.allowInternalNetwork) {
-      const internalDecision = await this.evaluateInternalNetwork(hostname);
-      if (!internalDecision.allowed) return internalDecision;
-    }
-
-    return allowed();
+    const target = await this.resolveNetworkTarget(url, hostname);
+    if (!target.decision.allowed) return target;
+    return target;
   }
 
   evaluateFill(element: BrowserElementInfo): BrowserPolicyDecision {
@@ -134,29 +148,32 @@ export class BrowserPolicyEngine {
     return allowed();
   }
 
-  private async evaluateInternalNetwork(hostname: string): Promise<BrowserPolicyDecision> {
+  private async resolveNetworkTarget(url: URL, hostname: string): Promise<BrowserConnectionDecision> {
+    if (this.policy.allowInternalNetwork) return { decision: allowed(), target: { url } };
     if (hostname === "localhost" || hostname.endsWith(".localhost")) {
-      return denied("internal-network-blocked", "localhost is blocked by default.");
+      return { decision: denied("internal-network-blocked", "localhost is blocked by default.") };
     }
 
     if (isIP(hostname)) {
-      return isPrivateAddress(hostname) ? denied("internal-network-blocked", `Private/internal address ${hostname} is blocked.`) : allowed();
+      return isPrivateAddress(hostname)
+        ? { decision: denied("internal-network-blocked", `Private/internal address ${hostname} is blocked.`) }
+        : { decision: allowed(), target: { url, address: hostname, family: isIP(hostname) as 4 | 6 } };
     }
 
     try {
-      let pending = this.dnsCache.get(hostname);
-      if (!pending) {
-        pending = this.resolver.resolve(hostname);
-        this.dnsCache.set(hostname, pending);
-      }
-      const addresses = await pending;
-      if (addresses.length === 0) return denied("dns-resolution-failed", `No address resolved for ${hostname}.`);
+      // Resolve every physical request. The selected address is returned to the
+      // egress transport and is therefore the one used by the socket itself.
+      const addresses = await this.resolver.resolve(hostname);
+      if (addresses.length === 0) return { decision: denied("dns-resolution-failed", `No address resolved for ${hostname}.`) };
       if (addresses.some(isPrivateAddress)) {
-        return denied("internal-network-blocked", `Domain ${hostname} resolves to a private/internal address.`);
+        return { decision: denied("internal-network-blocked", `Domain ${hostname} resolves to a private/internal address.`) };
       }
-      return allowed();
+      const address = addresses[0];
+      const family = isIP(address);
+      if (!family) return { decision: denied("dns-resolution-failed", `Resolver returned an invalid address for ${hostname}.`) };
+      return { decision: allowed(), target: { url, address, family: family as 4 | 6 } };
     } catch {
-      return denied("dns-resolution-failed", `DNS resolution failed for ${hostname}.`);
+      return { decision: denied("dns-resolution-failed", `DNS resolution failed for ${hostname}.`) };
     }
   }
 }
@@ -198,7 +215,13 @@ export function isPrivateAddress(address: string): boolean {
     if (normalized.startsWith("fc") || normalized.startsWith("fd")) return true;
     if (normalized.startsWith("::ffff:")) {
       const mapped = normalized.slice("::ffff:".length);
-      return isPrivateAddress(mapped);
+      if (isIP(mapped) === 4) return isPrivateAddress(mapped);
+      const groups = mapped.split(":");
+      if (groups.length === 2 && groups.every((group) => /^[0-9a-f]{1,4}$/.test(group))) {
+        const high = Number.parseInt(groups[0], 16);
+        const low = Number.parseInt(groups[1], 16);
+        return isPrivateAddress(`${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`);
+      }
     }
   }
   return false;

@@ -93,4 +93,9 @@ suite("BrowserAgent Playwright deterministic integration", () => {
       }
     });
   });
+
+  it("preserves browser cookies across pinned redirects", async () => {
+    const result = await agent.execute(sessionId, { type: "navigate", url: `${server.baseUrl}/cookie-set` });
+    expect(result).toMatchObject({ status: "ok", observation: { title: "Session preserved" } });
+  });
 });

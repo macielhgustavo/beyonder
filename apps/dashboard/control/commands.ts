@@ -3,10 +3,12 @@ import {
   createRuntime,
   DEFAULT_TASK_BUDGET,
   classifyEconomicState,
+  findReconciliationRequired,
   loadConfig,
   validatePlan,
   type Plan,
-  type TaskExecution
+  type TaskExecution,
+  type ToolDescriptor
 } from "@beyonder/runtime";
 import { nanoid } from "nanoid";
 import { mkdir, unlink, writeFile } from "node:fs/promises";
@@ -116,8 +118,12 @@ async function resumeTask(taskId: string) {
   lifecycle.controllers.add(controller);
   try {
     await assertNotPaused(runtime);
-    const checkpoint = await runtime.checkpoints.get(taskId);
-    if (!checkpoint) throw new Error("Checkpoint de recuperação não encontrado para esta tarefa.");
+    const lookup = await runtime.checkpoints.inspect(taskId);
+    if (lookup.status === "CHECKPOINT_NOT_FOUND") throw new Error("Checkpoint de recuperação não encontrado para esta tarefa.");
+    if (lookup.status === "CHECKPOINT_CORRUPT") throw new Error("Checkpoint corrompido. A tarefa foi bloqueada e não será reiniciada do zero.");
+    if (lookup.status === "CHECKPOINT_VERSION_UNSUPPORTED") throw new Error(`Versão de checkpoint não suportada: ${String(lookup.version)}.`);
+    if (lookup.status === "CHECKPOINT_IO_ERROR") throw new Error("Falha de armazenamento ao ler o checkpoint. A tarefa não será reiniciada.");
+    const checkpoint = lookup.execution;
     assertSafeToResume(checkpoint, await runtime.getAvailableTools({ taskId }));
     await writeHeartbeat(runtime, `Retomando: ${checkpoint.plan.objective}`);
     await runtime.audit.record("info", "control.task_resume_started", { taskId, executionId: checkpoint.id });
@@ -137,16 +143,10 @@ async function resumeTask(taskId: string) {
   }
 }
 
-function assertSafeToResume(execution: TaskExecution, availableTools: readonly { id: string; sideEffects: readonly string[] }[]) {
+function assertSafeToResume(execution: TaskExecution, availableTools: readonly ToolDescriptor[]) {
   if (["COMPLETED", "FAILED", "BLOCKED", "BUDGET_EXHAUSTED", "CANCELLED"].includes(execution.state)) throw new Error("Esta tarefa já terminou e não pode ser retomada.");
-  for (const step of execution.steps) {
-    if (step.status !== "RUNNING" || !step.toolCall || step.toolResult) continue;
-    const tool = availableTools.find((candidate) => candidate.id === step.toolCall?.tool);
-    if (!tool) throw new Error("A ferramenta do passo interrompido não está disponível. A tarefa não foi repetida.");
-    if (tool.sideEffects.some((effect) => effect !== "READ" && effect !== "NONE")) {
-      throw new Error("O estado da ação externa interrompida é desconhecido. Revise a evidência antes de tentar novamente.");
-    }
-  }
+  const reconciliation = findReconciliationRequired(execution, availableTools);
+  if (reconciliation) throw new Error("O resultado da ação externa interrompida é desconhecido. Reconciliação ou evidência do operador é obrigatória antes de nova tentativa.");
 }
 
 async function setStartup(enabled: boolean) {

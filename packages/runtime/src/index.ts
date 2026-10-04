@@ -73,7 +73,10 @@ export type {
 } from "./tasks/planner.js";
 export type { RecoveryDecision, RecoveryDecisionType, RecoveryPolicy, RecoveryRequest } from "./tasks/recovery.js";
 export type { LlmPlannerOptions, LlmPlannerResult } from "./tasks/llm-planner.js";
-export type { TaskCheckpointStore } from "./tasks/checkpoints.js";
+export type { TaskCheckpointStore, CheckpointLookup } from "./tasks/checkpoints.js";
+export { CheckpointReadError, findReconciliationRequired } from "./tasks/checkpoints.js";
+export type { TaskExecutionLeaseStore, ExecutionLease } from "./tasks/execution-lease.js";
+export { StateTaskExecutionLeaseStore, ExecutionLeaseConflictError } from "./tasks/execution-lease.js";
 export { OpportunityEngine, StateOpportunityStore, DeterministicFixtureOpportunitySource, GitHubPublicOpportunitySource, AgentWorkPublicOpportunitySource, OpenBountyPublicOpportunitySource, normalizeOpportunity, OpportunityEvaluator, OpportunityQueue, ApprovalGate, OpportunityBridge, FixtureApplicationAdapter, FixtureSubmissionAdapter, SourceReliabilityStore } from "./opportunities/index.js";
 export { sourceHealthFromError, StateWorkRunStore, WorkRunManager } from "./opportunities/index.js";
 export type { Opportunity, OpportunityDiscoveryContext, OpportunityDiscoveryResult, OpportunityRequirements, OpportunityReward, OpportunitySource, OpportunityStatus, OpportunityTelemetry, OpportunityType, RawOpportunity, PreparedApplication, WorkRun, WorkRunState, ApplicationState, ExecutionState, DeliverableState, SettlementEvidence, SettlementEvidenceType, SettlementState, ExternalActionEvidence, ExternalActor, VerificationStatus, DeliverableType, EconomicDecision, FeasibilityStatus, OpportunityEvaluation, ApprovalRequest, ApprovalDecision, ApprovalActionType, ApprovalStatus, ApplicationAdapter, SubmissionAdapter, SourceReliability, SourceHealthStatus, WorkRunStore } from "./opportunities/index.js";

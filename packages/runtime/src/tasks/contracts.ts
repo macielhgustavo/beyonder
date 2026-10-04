@@ -1,4 +1,4 @@
-import type { ToolCall, ToolDescriptor, ToolExecutionResult } from "@beyonder/tools";
+import type { ToolCall, ToolDescriptor, ToolExecutionResult, ToolSideEffect } from "@beyonder/tools";
 import type { IntelligenceTask } from "../intelligence/contracts.js";
 import type { EconomicState } from "../types.js";
 import type { ModelCandidate, RouteDecision } from "../models/adaptive-types.js";
@@ -87,6 +87,7 @@ export interface TaskBudgetUsage {
 
 export interface StepExecution {
   toolCapabilities?: string[];
+  toolSideEffects?: ToolSideEffect[];
   id: string;
   stepId: string;
   attempt: number;
@@ -134,6 +135,7 @@ export interface TaskExecution {
   completedAt?: string;
   result?: string;
   error?: string;
+  reconciliationRequired?: { stepId: string; tool: string; reason: "OUTCOME_UNKNOWN" };
 }
 
 export interface AutonomousTaskOutcome {

@@ -3,6 +3,7 @@ export * from "./browser-agent.js";
 export * from "./browser-tools.js";
 export * from "./errors.js";
 export * from "./playwright-session.js";
+export * from "./pinned-transport.js";
 export * from "./policy.js";
 export * from "./redaction.js";
 export * from "./telemetry.js";

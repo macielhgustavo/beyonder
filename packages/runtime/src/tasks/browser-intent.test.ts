@@ -57,10 +57,36 @@ describe("browser evidence and no-tool response boundary", () => {
       const plan = await runtime.planner.createPlan({ task, objective: task.input, availableTools: await runtime.getAvailableTools(), memoryContext: [], budget: DEFAULT_TASK_BUDGET, economicState: "survival" });
       expect(plan.steps.map((step) => ({ kind: step.kind, capabilities: step.allowedToolCapabilities, dependencies: step.dependencies }))).toEqual([
         { kind: "TOOL", capabilities: ["browser", "browser:open"], dependencies: undefined },
-        { kind: "TOOL", capabilities: ["browser", "browser:extractText"], dependencies: ["browser-navigate"] },
-        { kind: "DIRECT_RESPONSE", capabilities: undefined, dependencies: ["browser-read"] }
+        { kind: "DIRECT_RESPONSE", capabilities: undefined, dependencies: ["browser-navigate"] }
       ]);
+      expect(plan.steps[0]?.action).toMatchObject({ tool: "browser.open", arguments: { url: "https://nodejs.org/" } });
       expect(runtime.planner.lastResult).toMatchObject({ provider: "deterministic", model: "browser-read-plan", usedFallback: true });
+    } finally { await runtime.browser.closeAll(); runtime.sqlite.close(); }
+  });
+  it("executes a canonical official-site fallback without another planning inference", async () => {
+    const runtime = setup(true);
+    try {
+      const { task } = await runtime.intelligence.inspect("Use o site oficial do Python para descobrir a versão estável atual.");
+      const complete = vi.spyOn(runtime.modelRouter, "completeForPlanningCandidate").mockResolvedValue({ ...response, content: "not a plan" });
+      const plan = await runtime.planner.createPlan({ task, objective: task.input, availableTools: await runtime.getAvailableTools(), memoryContext: [], budget: DEFAULT_TASK_BUDGET, economicState: "survival" });
+      expect(plan.steps[0]?.action).toMatchObject({ tool: "browser.open", arguments: { url: "https://www.python.org/downloads/" } });
+      vi.spyOn(runtime.browser, "startSession").mockResolvedValue("fixture-session");
+      const browser = vi.spyOn(runtime.browser, "execute").mockResolvedValue({ status: "ok", action: { type: "open", url: "https://www.python.org/downloads/" }, observation: { url: "https://www.python.org/downloads/", title: "Python fixture", visibleText: "Download Python 3.14.8", interactiveElements: [] } } as never);
+      complete.mockRejectedValue(new InferenceError("Inference deadline exceeded.", "TIMEOUT"));
+      const outcome = await runtime.taskExecutor.execute({ task, plan, economicState: "survival" });
+      expect(outcome.status).toBe("COMPLETED");
+      expect(outcome.result).toContain("3.14.8");
+      expect(browser).toHaveBeenCalledOnce();
+      expect(outcome.execution.usage.toolInvocations).toBe(1);
+      expect(outcome.execution.attempts?.filter((attempt) => attempt.phase === "ACTION_PLANNING")).toEqual([]);
+    } finally { await runtime.browser.closeAll(); runtime.sqlite.close(); }
+  });
+  it("fails safely when fallback planning cannot resolve an authoritative target", async () => {
+    const runtime = setup(true);
+    try {
+      const { task } = await runtime.intelligence.inspect("Consulte o site oficial e descubra a versão");
+      vi.spyOn(runtime.modelRouter, "completeForPlanningCandidate").mockResolvedValue({ ...response, content: "not a plan" });
+      await expect(runtime.planner.createPlan({ task, objective: task.input, availableTools: await runtime.getAvailableTools(), memoryContext: [], budget: DEFAULT_TASK_BUDGET, economicState: "survival" })).rejects.toMatchObject({ failureClass: "INVALID_ACTION" });
     } finally { await runtime.browser.closeAll(); runtime.sqlite.close(); }
   });
   it("fails explicitly before inference when browser is unavailable", async () => {

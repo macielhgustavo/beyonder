@@ -146,40 +146,28 @@ export class LlmPlanner implements Planner {
 
 function deterministicBrowserPlan(request: PlanRequest, browserTools: ToolDescriptor[]): Plan {
   const open = browserTools.find((tool) => tool.capabilities.includes("browser:open"));
-  const extract = browserTools.find((tool) => tool.capabilities.includes("browser:extractText"));
-  const read = extract ?? open ?? browserTools[0];
-  if (!read) throw new InferenceError("Browser reading is required but no compatible read-only browser tool is available.", "TOOL_UNAVAILABLE");
+  if (!open) throw new InferenceError("Browser reading is required but no compatible read-only browser open tool is available.", "TOOL_UNAVAILABLE");
+  const url = resolveAuthoritativeBrowserTarget(request.objective);
+  if (!url) throw new InferenceError("Browser planning failed and no explicit or known authoritative HTTP(S) target could be resolved safely.", "INVALID_ACTION");
 
-  const steps: Plan["steps"] = [];
-  if (open) {
-    steps.push({
+  const steps: Plan["steps"] = [
+    {
       id: "browser-navigate",
       kind: "TOOL",
       description: "Navigate to the authoritative page requested by the objective using a read-only browser tool.",
       status: "PENDING",
       expectedOutcome: "The requested public page is open and its visible contents are observed.",
-      allowedToolCapabilities: ["browser", "browser:open"]
-    });
-  }
-  if (extract && extract.id !== open?.id) {
-    steps.push({
-      id: "browser-read",
-      kind: "TOOL",
-      description: "Extract the relevant visible text from the opened page as external evidence.",
-      status: "PENDING",
-      expectedOutcome: "Bounded read-only page evidence relevant to the objective is available.",
-      allowedToolCapabilities: ["browser", "browser:extractText"],
-      ...(open ? { dependencies: ["browser-navigate"] } : {})
-    });
-  }
-  const evidenceStep = steps.at(-1)?.id;
+      allowedToolCapabilities: ["browser", "browser:open"],
+      action: { id: `call_${request.task.id}_browser_open`, tool: open.id, arguments: { url } }
+    }
+  ];
   steps.push({
     id: "browser-respond",
     kind: "DIRECT_RESPONSE",
     description: "Answer the objective using only the browser evidence produced by the preceding step.",
     status: "PENDING",
     expectedOutcome: "A concise response grounded in observed external evidence.",
-    dependencies: evidenceStep ? [evidenceStep] : []
+    dependencies: ["browser-navigate"]
   });
   return {
     id: `plan_${request.task.id}`,
@@ -190,6 +178,26 @@ function deterministicBrowserPlan(request: PlanRequest, browserTools: ToolDescri
     assumptions: ["LLM planning was unavailable or invalid; preserve the mandatory read-only browser evidence boundary."],
     steps
   };
+}
+
+const AUTHORITATIVE_BROWSER_TARGETS: ReadonlyArray<{ matches: RegExp; url: string }> = [
+  { matches: /\bpython\b/i, url: "https://www.python.org/downloads/" },
+  { matches: /\bnode(?:\.js)?\b/i, url: "https://nodejs.org/" },
+  { matches: /\btypescript\b/i, url: "https://www.typescriptlang.org/docs/" }
+];
+
+function resolveAuthoritativeBrowserTarget(objective: string): string | undefined {
+  const explicit = objective.match(/https?:\/\/[^\s<>"']+/i)?.[0]?.replace(/[),.;!?]+$/, "");
+  if (explicit) {
+    try {
+      const url = new URL(explicit);
+      if (["http:", "https:"].includes(url.protocol) && !url.username && !url.password) return url.href;
+    } catch {
+      return undefined;
+    }
+  }
+  if (!/(?:site|website|documenta(?:cao|ção|tion)|oficial|official)/i.test(objective)) return undefined;
+  return AUTHORITATIVE_BROWSER_TARGETS.find((target) => target.matches.test(objective))?.url;
 }
 
 function planningPrompt(request: PlanRequest): ModelMessage[] {

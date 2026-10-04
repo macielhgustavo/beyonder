@@ -401,21 +401,23 @@ function taskView(execution: Record<string, unknown>, provenance: "local"): Task
   const stepExecutions = Array.isArray(execution.steps) ? execution.steps as Record<string, unknown>[] : [];
   const latestStep = stepExecutions.at(-1);
   const attempts = (Array.isArray(execution.attempts) ? execution.attempts : []) as NonNullable<TaskView["attempts"]>;
-  const lastAttempt = attempts.filter((attempt) => attempt.phase !== "TOOL_EXECUTION" && attempt.provider !== "deterministic").at(-1);
+  const inferenceAttempts = attempts.filter((attempt) => attempt.phase !== "TOOL_EXECUTION");
+  const resultAttempt = inferenceAttempts.filter((attempt) => attempt.status === "SUCCEEDED").at(-1) ?? inferenceAttempts.at(-1);
+  const failureAttempt = inferenceAttempts.filter((attempt) => attempt.status === "FAILED").at(-1);
   const phaseLabels: Record<string, string> = { PLANNING: "criação do plano", REPLANNING: "revisão do plano", ACTION_PLANNING: "escolha da ferramenta", DIRECT_RESPONSE: "resposta ao objetivo", TOOL_EXECUTION: "execução da ferramenta" };
   const failureLabels: Record<string, string> = { BAD_REQUEST: "recusou a solicitação", AUTH_REQUIRED: "precisa de credenciais válidas", FORBIDDEN: "negou acesso", MODEL_UNAVAILABLE: "não disponibilizou o modelo", RATE_LIMITED: "atingiu o limite de uso", PROVIDER_UNAVAILABLE: "está indisponível", TIMEOUT: "não respondeu no prazo", NETWORK_ERROR: "não pôde ser acessado", INVALID_OUTPUT: "não produziu uma resposta válida", INVALID_ACTION: "não produziu uma ação válida" };
   return {
     canResume: state === "WAITING" && execution.interruptionReason === "PROCESS_RESTART",
     resumeTaskId: state === "WAITING" && execution.interruptionReason === "PROCESS_RESTART" ? stringField(task, "id") : undefined,
-    failureSummary: state === "FAILED" ? lastAttempt?.failureClass ? `${lastAttempt.provider} ${failureLabels[lastAttempt.failureClass] ?? "falhou"} durante a ${phaseLabels[lastAttempt.phase] ?? "execução"}. As tentativas permitidas foram encerradas.` : "Não consegui concluir esta tarefa." : undefined,
+    failureSummary: state === "FAILED" ? failureAttempt?.failureClass ? `${failureAttempt.provider} ${failureLabels[failureAttempt.failureClass] ?? "falhou"} durante a ${phaseLabels[failureAttempt.phase] ?? "execução"}. As tentativas permitidas foram encerradas.` : "Não consegui concluir esta tarefa." : undefined,
     attempts: attempts.map((attempt) => ({ ...attempt, error: attempt.error ? redactText(attempt.error) : undefined })),
     id: humanTaskId(stringField(execution, "id")),
     title: stringField(plan, "objective") || stringField(task, "objective") || stringField(task, "input") || "Objetivo sem titulo",
     humanStatus: execution.interruptionReason === "PROCESS_RESTART" ? "Execução interrompida; pronta para retomada segura." : execution.interruptionReason === "PROCESS_RESTART_NO_CHECKPOINT" ? "Execução interrompida antes de um checkpoint recuperável." : humanTaskStatus(state, latestStep ? stringField(latestStep, "observationSummary") : undefined),
     status: normalizeTaskStatus(state),
     result: typeof execution.result === "string" ? humanTaskResult(redactText(execution.result)) : null,
-    provider: lastAttempt?.provider ?? (latestStep ? stringField(objectField(latestStep, "route").selected as Record<string, unknown> | undefined, "provider") || null : null),
-    model: lastAttempt?.model ?? (latestStep ? stringField(objectField(latestStep, "route").selected as Record<string, unknown> | undefined, "model") || null : null),
+    provider: resultAttempt?.provider ?? (latestStep ? stringField(objectField(latestStep, "route").selected as Record<string, unknown> | undefined, "provider") || null : null),
+    model: resultAttempt?.model ?? (latestStep ? stringField(objectField(latestStep, "route").selected as Record<string, unknown> | undefined, "model") || null : null),
     fixture: execution.fixture === true,
     current: steps.find((step) => step.status === "RUNNING")?.description as string | undefined,
     next: steps.find((step) => step.status === "PENDING")?.description as string | undefined,

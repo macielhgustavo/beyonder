@@ -45,6 +45,10 @@ describe("Control Center data source", () => {
       completedAt: "2026-10-03T00:00:08Z",
       steps: []
     });
+    insertState(db, "task-attempts:task_1", [
+      { phase: "DIRECT_RESPONSE", provider: "groq", model: "remote-model", status: "FAILED", failureClass: "RATE_LIMITED", monetaryCostUsd: 0, shadowCostUsd: 0 },
+      { phase: "DIRECT_RESPONSE", provider: "deterministic", model: "tool-result-format", status: "SUCCEEDED", monetaryCostUsd: 0, shadowCostUsd: 0 }
+    ]);
     insertState(db, "opportunities:index", ["opp_1"]);
     insertState(db, "opportunity:item:opp_1", {
       id: "opp_1",
@@ -65,7 +69,7 @@ describe("Control Center data source", () => {
     expect(home.status.global).toBe("WAITING_FOR_YOU");
     expect(home.healthChecks.find((check) => check.label === "Compute")).toMatchObject({ status: "warn", detail: expect.stringContaining("nenhuma inferência foi verificada") });
     expect((await source.getProviders()).filter((provider) => provider.status === "KEYLESS")).toEqual(expect.arrayContaining([expect.objectContaining({ verified: false, health: null })]));
-    expect((await source.getTasks())[0].result).toBe("4821");
+    expect((await source.getTasks())[0]).toMatchObject({ result: "4821", provider: "deterministic", model: "tool-result-format" });
     expect((await source.getOpportunities())[0].rewardLabel).toBe("$25.00");
     expect((await source.getApprovals())[0].payloadPreview).toContain("[REDACTED]");
     expect((await source.getMemories())[0].content).toContain("[REDACTED]");

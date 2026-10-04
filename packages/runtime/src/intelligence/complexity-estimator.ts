@@ -1,5 +1,6 @@
 import type { IntelligenceRequirements, IntelligenceTaskType } from "./contracts.js";
 import { browserIntent } from "./browser-intent.js";
+import { calculatorIntent } from "./calculator-intent.js";
 
 export interface ComplexityEstimate {
   complexity: number;
@@ -48,7 +49,7 @@ export class ComplexityEstimator {
 
     if (type === "browser") requirements.tools = ["browser"];
     if (type === "tool-use") requirements.tools = ["restricted-tool"];
-    requirements.calculator = /\b(calculator|calculadora|calculate|calcule|calcular|multiplique|multiply|somar|subtract|divide)\b/i.test(input);
+    requirements.calculator = calculatorIntent(input).required;
     requirements.browser = browserIntent(input).required || type === "browser" || (type === "research" && /\b(web|online|internet|site|sources|fontes)\b/i.test(input));
     if (requirements.calculator) requirements.tools = ["calculation"];
     if (requirements.browser) requirements.tools = [...new Set([...(requirements.tools ?? []), "browser"])];

@@ -90,10 +90,10 @@ export async function runCandidates<T>(input: {
   let last: InferenceError = new InferenceError("Adequate models for this mission are unavailable. Available compute is below the required quality floor or policy constraints.", "NEEDS_CAPABILITY");
   const remoteAttemptBudget = Math.max(0, input.remoteAttemptBudget ?? input.maxCandidates ?? 3);
   const localFallbackBudget = Math.max(0, input.localFallbackBudget ?? 1);
-  const remoteCandidates = input.candidates.filter((candidate) => !candidate.local).slice(0, remoteAttemptBudget);
-  const localCandidates = input.candidates
-    .filter((candidate) => candidate.local && (candidate.computeTier === undefined || candidate.computeTier === "LOCAL_EMERGENCY") && candidate.eligible !== false)
-    .slice(0, localFallbackBudget);
+  // Do not slice before canAttempt: a sibling invalidated by provider health must not
+  // consume a physical-attempt slot or prevent a later healthy cloud from being tried.
+  const remoteCandidates = input.candidates.filter((candidate) => !candidate.local);
+  const localCandidates = input.candidates.filter(isAcceptableLocalFallback).slice(0, localFallbackBudget);
   const candidates = [...remoteCandidates, ...localCandidates];
   let remoteAttempts = 0;
   let localAttempts = 0;
@@ -139,4 +139,14 @@ export async function runCandidates<T>(input: {
     }
   }
   throw last;
+}
+
+function isAcceptableLocalFallback(candidate: ModelCandidate): boolean {
+  return candidate.local === true
+    && candidate.provider === "ollama"
+    && candidate.externalQuotaConsumption === false
+    && candidate.monetaryCostUsd === 0
+    && candidate.costClass === "FREE_CONFIRMED"
+    && (candidate.computeTier === undefined || candidate.computeTier === "LOCAL_EMERGENCY")
+    && candidate.eligible !== false;
 }

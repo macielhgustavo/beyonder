@@ -4,7 +4,7 @@ import type { ModelCandidate } from "./adaptive-types.js";
 import type { ModelMessage, ModelResponse } from "../types.js";
 
 export type InferencePhase = "PLANNING" | "ACTION_PLANNING" | "DIRECT_RESPONSE" | "TOOL_EXECUTION" | "REPLANNING" | "OBJECTIVE_VERIFICATION";
-export type FailureClass = "BAD_REQUEST" | "AUTH_REQUIRED" | "FORBIDDEN" | "MODEL_UNAVAILABLE" | "RATE_LIMITED" | "PROVIDER_UNAVAILABLE" | "TIMEOUT" | "NETWORK_ERROR" | "INVALID_OUTPUT" | "INVALID_ACTION" | "NO_CANDIDATES" | "BUDGET_EXHAUSTED" | "TOOL_ERROR" | "TOOL_UNAVAILABLE";
+export type FailureClass = "BAD_REQUEST" | "AUTH_REQUIRED" | "FORBIDDEN" | "MODEL_UNAVAILABLE" | "RATE_LIMITED" | "PROVIDER_UNAVAILABLE" | "TIMEOUT" | "NETWORK_ERROR" | "INVALID_OUTPUT" | "INVALID_ACTION" | "NO_CANDIDATES" | "NEEDS_CAPABILITY" | "BUDGET_EXHAUSTED" | "TOOL_ERROR" | "TOOL_UNAVAILABLE";
 export interface InferenceAttempt {
   id: string; taskId: string; stepId?: string; phase: InferencePhase; attempt: number;
   provider: string; model: string; startedAt: string; completedAt?: string;
@@ -88,31 +88,31 @@ export async function runCandidates<T>(input: {
   const attempts: InferenceAttempt[] = [];
   let monetaryCostUsd = 0, shadowCostUsd = 0;
   let last: InferenceError = new InferenceError("No compatible candidates are available.", "NO_CANDIDATES");
-  const limit = input.maxCandidates ?? 3;
-  const candidates = input.canAttempt ? [...input.candidates] : input.candidates.slice(0, limit);
-  // Reserve one bounded fallback slot for eligible local compute, rather than letting
-  // a long stale remote catalog prevent the installed models from ever being tried.
-  const local = input.candidates.find((candidate) => candidate.local);
-  if (limit > 1 && local && !candidates.includes(local)) candidates[candidates.length - 1] = local;
-  if (input.canAttempt && limit > 1 && local && candidates.indexOf(local) >= limit) {
-    candidates.splice(candidates.indexOf(local), 1);
-    candidates.splice(limit - 1, 0, local);
-  }
-  const survivalFallback = input.remoteAttemptBudget !== undefined;
-  if (survivalFallback) {
-    candidates.splice(0);
-    // Remote quota attempts and zero-quota local fallback have independent caps.
-    candidates.push(...input.candidates.filter((c) => !c.local).slice(0, input.canAttempt ? undefined : input.remoteAttemptBudget));
-    candidates.push(...input.candidates.filter((c) => c.local && c.provider === "ollama" && c.costClass === "FREE_CONFIRMED" && c.monetaryCostUsd === 0 && c.externalQuotaConsumption === false).slice(0, input.localFallbackBudget ?? 0));
-  }
+  const remoteAttemptBudget = Math.max(0, input.remoteAttemptBudget ?? input.maxCandidates ?? 3);
+  const localFallbackBudget = Math.max(0, input.localFallbackBudget ?? 1);
+  const remoteCandidates = input.candidates.filter((candidate) => !candidate.local).slice(0, remoteAttemptBudget);
+  const localCandidates = input.candidates
+    .filter((candidate) => candidate.local && candidate.computeTier === "LOCAL_EMERGENCY" && candidate.eligible !== false)
+    .slice(0, localFallbackBudget);
+  const candidates = [...remoteCandidates, ...localCandidates];
+  let remoteAttempts = 0;
+  let localAttempts = 0;
+  const localFallbackFailureClasses = input.localFallbackFailureClasses ?? ["BAD_REQUEST", "AUTH_REQUIRED", "FORBIDDEN", "MODEL_UNAVAILABLE", "RATE_LIMITED", "PROVIDER_UNAVAILABLE", "TIMEOUT", "NETWORK_ERROR"];
+
   for (const candidate of candidates) {
-    if (survivalFallback && !candidate.local && attempts.filter((a) => a.provider !== "ollama").length >= (input.remoteAttemptBudget ?? 0)) continue;
-    if (!survivalFallback && attempts.length >= limit) break;
+    if (candidate.local) {
+      if (localAttempts >= localFallbackBudget) continue;
+      if (remoteAttempts > 0 && !localFallbackFailureClasses.includes(last.failureClass)) break;
+    } else if (remoteAttempts >= remoteAttemptBudget) {
+      continue;
+    }
     if (input.canAttempt && !await input.canAttempt(candidate)) continue;
-    if (survivalFallback && candidate.local && attempts.length && !(input.localFallbackFailureClasses ?? ["BAD_REQUEST", "AUTH_REQUIRED", "FORBIDDEN", "MODEL_UNAVAILABLE", "RATE_LIMITED", "PROVIDER_UNAVAILABLE", "TIMEOUT", "NETWORK_ERROR"]).includes(last.failureClass)) break;
     if (Date.now() - start >= input.maxDurationMs || monetaryCostUsd + candidate.monetaryCostUsd > input.maxMonetaryCostUsd || shadowCostUsd + candidate.shadowCostUsd > input.maxShadowCostUsd) {
       last = new InferenceError("Inference budget exhausted.", "BUDGET_EXHAUSTED"); break;
     }
+
+    if (candidate.local) localAttempts++;
+    else remoteAttempts++;
     const attempt: InferenceAttempt = { id: nanoid(), taskId: input.taskId, stepId: input.stepId, phase: input.phase, attempt: attempts.length + 1, provider: candidate.provider, model: candidate.model, startedAt: new Date().toISOString(), status: "STARTED", monetaryCostUsd: 0, shadowCostUsd: candidate.shadowCostUsd };
     attempts.push(attempt);
     await input.record?.(attempt);

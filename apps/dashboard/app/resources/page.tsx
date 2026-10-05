@@ -41,7 +41,14 @@ export default async function ResourcesPage() {
               <div data-label="Runway / quota"><strong className={provider.runway.state === "UNKNOWN" ? "unknown-value" : ""}>{provider.runway.state}</strong><span>{provider.runway.label}</span></div>
               <div data-label="Latency"><strong className={provider.latencyMs == null ? "unknown-value" : ""}>{provider.latencyMs == null ? "UNKNOWN" : formatDuration(provider.latencyMs)}</strong><span>{provider.lastCheckAt ? "observed" : "not observed"}</span></div>
               <div data-label="Placement"><strong className="unknown-value">UNKNOWN</strong><span>cloud/local not exposed</span></div>
-              {!provider.configured && provider.setupEnvVar ? <div className="resource-setup"><SecretForm providerId={provider.id} envVar={provider.setupEnvVar} /></div> : null}
+              {!provider.configured && provider.setupEnvVar ? (
+                <div className="resource-setup">
+                  <details className="resource-setup-disclosure">
+                    <summary><span>Configure credentials</span><code>{provider.setupEnvVar}</code></summary>
+                    <div className="resource-setup-form"><SecretForm providerId={provider.id} envVar={provider.setupEnvVar} /></div>
+                  </details>
+                </div>
+              ) : null}
             </article>;
           })}
         </section>

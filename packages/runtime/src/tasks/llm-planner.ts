@@ -136,10 +136,16 @@ export class LlmPlanner implements Planner {
           usedFallback: true
         };
       }
+      const failure = classifyFailure(error);
+      if (failure.failureClass === "NEEDS_CAPABILITY") {
+        const attempts = await this.options.modelRouter.attemptsFor?.(request.task.id) ?? [];
+        const last = attempts.at(-1);
+        await this.options.memory?.recordOutcome({ task: request.task, attempts: attempts.map((attempt) => ({ ...attempt, tools: [], success: attempt.status === "SUCCEEDED" })), success: false, error: failure.message, failureClass: failure.failureClass, phase: last?.phase ?? "PLANNING", provider: last?.provider, model: last?.model, tokens: 0, monetaryCostUsd: attempts.reduce((sum, a) => sum + a.monetaryCostUsd, 0), shadowCostUsd: attempts.reduce((sum, a) => sum + a.shadowCostUsd, 0), latencyMs: attempts.reduce((sum, a) => sum + (a.latencyMs ?? 0), 0), tools: [], completedAt: new Date().toISOString() });
+        throw failure;
+      }
       if (this.options.allowDeterministicFallback === false) {
         const attempts = await this.options.modelRouter.attemptsFor?.(request.task.id) ?? [];
         const last = attempts.at(-1);
-        const failure = classifyFailure(error);
         await this.options.memory?.recordOutcome({ task: request.task, attempts: attempts.map((attempt) => ({ ...attempt, tools: [], success: attempt.status === "SUCCEEDED" })), success: false, error: failure.message, failureClass: failure.failureClass, phase: last?.phase ?? "PLANNING", provider: last?.provider, model: last?.model, tokens: 0, monetaryCostUsd: attempts.reduce((sum, a) => sum + a.monetaryCostUsd, 0), shadowCostUsd: attempts.reduce((sum, a) => sum + a.shadowCostUsd, 0), latencyMs: attempts.reduce((sum, a) => sum + (a.latencyMs ?? 0), 0), tools: [], completedAt: new Date().toISOString() });
         throw error;
       }

@@ -36,6 +36,14 @@ export interface CompletionEvaluator {
 /** Deterministic objective invariants. It never treats terminal execution alone as success. */
 export class ObjectiveVerifier implements CompletionEvaluator {
   evaluate(execution: TaskExecution, criteria: CompletionCriteria = {}): CompletionEvaluation {
+    if (execution.failure?.failureClass === "NEEDS_CAPABILITY" || execution.objectiveStatus === "NEEDS_CAPABILITY") {
+      return terminal(
+        "BLOCKED",
+        "NEEDS_CAPABILITY",
+        execution.error ?? "Adequate models for this mission are unavailable. Available compute is below the required quality floor.",
+        "ENABLE_CAPABILITY"
+      );
+    }
     if (execution.state === "BLOCKED") return terminal("BLOCKED", execution.reconciliationRequired ? "RECONCILIATION_REQUIRED" : "BLOCKED", execution.error ?? "Task was blocked by policy or dependencies.", execution.reconciliationRequired ? "RECONCILE" : "NONE");
     if (execution.state === "BUDGET_EXHAUSTED") return terminal("BUDGET_EXHAUSTED", "FAILED", "Task exhausted an explicit budget.");
     if (execution.state === "CANCELLED") return terminal("CANCELLED", "FAILED", "Task was cancelled.");
@@ -92,10 +100,15 @@ export function outcomeWithCompletion(outcome: AutonomousTaskOutcome, evaluation
   outcome.execution.objectiveVerification = evaluation;
   outcome.execution.executionPhase = evaluation.taskCompleted ? "OBJECTIVE_VERIFIED" : "EXECUTION_FINISHED";
   outcome.success = evaluation.taskCompleted;
-  if (!evaluation.taskCompleted && ["COMPLETED", "EXECUTION_FINISHED"].includes(outcome.execution.state)) {
-    const blocked = ["NEEDS_CAPABILITY", "NEEDS_INPUT", "BLOCKED", "RECONCILIATION_REQUIRED"].includes(evaluation.objectiveStatus);
-    outcome.status = blocked ? "BLOCKED" : "FAILED";
-    outcome.execution.state = blocked ? "BLOCKED" : "FAILED";
+  const blocked = ["NEEDS_CAPABILITY", "NEEDS_INPUT", "BLOCKED", "RECONCILIATION_REQUIRED"].includes(evaluation.objectiveStatus);
+  if (!evaluation.taskCompleted && blocked) {
+    outcome.status = "BLOCKED";
+    outcome.execution.state = "BLOCKED";
+    outcome.execution.error = evaluation.reason;
+    outcome.failureReason = evaluation.reason;
+  } else if (!evaluation.taskCompleted && ["COMPLETED", "EXECUTION_FINISHED"].includes(outcome.execution.state)) {
+    outcome.status = "FAILED";
+    outcome.execution.state = "FAILED";
     outcome.execution.error = evaluation.reason;
     outcome.failureReason = evaluation.reason;
   } else if (evaluation.taskCompleted) {

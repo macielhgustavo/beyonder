@@ -11,11 +11,27 @@ export default async function OpportunitiesPage() {
 
   return (
     <DashboardShell provenance={source.provenance}>
-      <PageHeader title="Oportunidades" eyebrow="DESCOBERTA" description="Pesquisa de oportunidades, avaliação econômica e preparação de candidaturas com aprovação humana." />
-      <div className="action-row spaced">
-        <CommandButton payload={{ type: "discoverOpportunities" }}>Procurar oportunidades</CommandButton>
-      </div>
-      <Panel title="Fontes"><div className="action-row">{health.map((item) => <span key={item.sourceId}>{item.sourceId}: {item.status === "HEALTHY" ? "✓ disponível" : "⚠ indisponível"}</span>)}</div></Panel>
+      <PageHeader
+        title="Oportunidades"
+        eyebrow="DESCOBERTA"
+        description="Pesquisa de oportunidades, avaliação econômica e preparação de candidaturas com aprovação humana."
+        right={<CommandButton payload={{ type: "discoverOpportunities" }}>Procurar oportunidades</CommandButton>}
+      />
+      <Panel title="Fontes" meta={`${health.length} monitoradas`}>
+        <div className="compact-list">
+          {health.map((item) => (
+            <div className="compact-row" key={item.sourceId}>
+              <div>
+                <strong>{item.sourceId}</strong>
+                <span>Fonte de descoberta</span>
+              </div>
+              <StatusBadge status={item.status === "HEALTHY" ? "good" : "warn"}>
+                {item.status === "HEALTHY" ? "Disponível" : "Indisponível"}
+              </StatusBadge>
+            </div>
+          ))}
+        </div>
+      </Panel>
       <Panel title="Oportunidades avaliadas" meta={`${opportunities.length} encontradas`}>
         {opportunities.length ? (
           <div className="opportunity-grid">
@@ -46,7 +62,7 @@ export default async function OpportunitiesPage() {
               </article>
             ))}
           </div>
-        ) : <EmptyState title="Nenhuma oportunidade encontrada ainda" detail="Clique em Procurar oportunidades. Falhas de uma fonte nao significam ausencia total de oportunidades." />}
+        ) : <EmptyState title="Nenhuma oportunidade encontrada ainda" detail="Clique em Procurar oportunidades. Falhas de uma fonte não significam ausência total de oportunidades." />}
       </Panel>
     </DashboardShell>
   );

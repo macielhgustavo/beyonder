@@ -29,8 +29,10 @@ export default async function HomePage() {
 
       <ProvenanceNotice provenance={source.provenance} />
 
+      <ObjectiveBox />
+
       {home.firstRun ? (
-        <Panel title="Primeira abertura" meta="health check" className="first-run-panel">
+        <Panel title="Primeira abertura" meta="health check" className="first-run-panel first-run-panel-secondary">
           <div className="health-grid">
             {home.healthChecks.map((check) => (
               <div className="health-item" key={check.label}>
@@ -39,11 +41,9 @@ export default async function HomePage() {
               </div>
             ))}
           </div>
-          <div className="action-row spaced"><CommandButton payload={{ type: "completeFirstRun" }}>Começar</CommandButton></div>
+          <div className="action-row spaced"><CommandButton payload={{ type: "completeFirstRun" }}>Concluir verificação inicial</CommandButton></div>
         </Panel>
       ) : null}
-
-      <ObjectiveBox />
 
       <section className="operator-context" aria-label="Resumo operacional">
         <div className={home.needsYouCount ? "operator-context-item context-attention" : "operator-context-item"}>

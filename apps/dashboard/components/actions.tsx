@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 
 type Command = Record<string, unknown> & { type: string };
@@ -17,26 +17,49 @@ export function ObjectiveBox() {
     setMessage("Executando objetivo...");
     const result = await command({ type: "submitObjective", objective });
     setPending(false);
-    setMessage(result.ok ? "Objetivo concluído. Resultado registrado em Trabalhos." : String(result.error ?? "Falha ao executar."));
+    setMessage(result.ok ? "Objetivo concluido. Resultado registrado em Trabalhos." : String(result.error ?? "Falha ao executar."));
     if (result.ok) {
       setObjective("");
       router.refresh();
     }
   }
 
+  function handleShortcut(event: KeyboardEvent<HTMLTextAreaElement>) {
+    if ((event.ctrlKey || event.metaKey) && event.key === "Enter" && objective.trim().length >= 3 && !pending) {
+      event.preventDefault();
+      event.currentTarget.form?.requestSubmit();
+    }
+  }
+
   return (
     <form className="objective-box" onSubmit={submit}>
-      <label htmlFor="objective">O que voce quer que o Beyonder faca?</label>
-      <textarea
-        id="objective"
-        value={objective}
-        onChange={(event) => setObjective(event.target.value)}
-        placeholder="Ex: procure oportunidades de programacao que valham a pena hoje"
-        rows={4}
-      />
-      <div className="action-row">
-        <button className="primary-button" type="submit" disabled={pending || objective.trim().length < 3}>{pending ? "Executando..." : "Executar"}</button>
-        {message ? <span className="inline-message">{message}</span> : null}
+      <div className="objective-head">
+        <div>
+          <div className="micro-label">NOVO OBJETIVO</div>
+          <label htmlFor="objective">O que voce quer que o Beyonder faca?</label>
+        </div>
+        <span className="objective-mode">LOCAL COMMAND</span>
+      </div>
+      <div className="objective-editor">
+        <span className="command-glyph" aria-hidden="true">›</span>
+        <textarea
+          id="objective"
+          value={objective}
+          onChange={(event) => setObjective(event.target.value)}
+          onKeyDown={handleShortcut}
+          placeholder="Descreva o resultado. Ex: encontre oportunidades de programacao que valham a pena hoje"
+          rows={4}
+        />
+      </div>
+      <div className="objective-foot">
+        <div className="objective-hint">
+          <span>Defina o resultado; o Beyonder decide o caminho.</span>
+          <kbd>Ctrl / Cmd + Enter</kbd>
+        </div>
+        <div className="action-row objective-actions">
+          {message ? <span className="inline-message">{message}</span> : null}
+          <button className="primary-button" type="submit" disabled={pending || objective.trim().length < 3}>{pending ? "Executando..." : "Executar"}</button>
+        </div>
       </div>
     </form>
   );
@@ -78,7 +101,7 @@ export function SecretForm({ providerId, envVar }: { providerId: string; envVar:
     setPending(false);
     setValue("");
     setVaultPassword("");
-    setMessage(result.ok ? (result.status === "READY" ? "Credencial validada. Disponível nesta sessão." : "Chave salva, mas não validada. Verifique a chave e a conexão.") : String(result.error ?? "Falha ao configurar."));
+    setMessage(result.ok ? (result.status === "READY" ? "Credencial validada. Disponivel nesta sessao." : "Chave salva, mas nao validada. Verifique a chave e a conexao.") : String(result.error ?? "Falha ao configurar."));
     if (result.ok) router.refresh();
   }
 
@@ -110,13 +133,13 @@ export function ShutdownButton() {
     setPending(true);
     try {
       const result = await command({ type: "safeShutdown" });
-      setMessage(result.ok ? "Parada solicitada. O painel ficará offline após salvar o estado." : String(result.error ?? "Falha ao parar."));
+      setMessage(result.ok ? "Parada solicitada. O painel ficara offline apos salvar o estado." : String(result.error ?? "Falha ao parar."));
       if (result.ok) setOpen(false);
-    } catch { setMessage("Não foi possível solicitar a parada."); } finally { setPending(false); }
+    } catch { setMessage("Nao foi possivel solicitar a parada."); } finally { setPending(false); }
   }
   return <span className="button-stack">
     <button type="button" className="secondary-button button-danger" onClick={() => setOpen(true)}>Parar Beyonder</button>
-    {open ? <div className="shutdown-overlay"><div className="shutdown-dialog" role="dialog" aria-modal="true" aria-labelledby="shutdown-title"><h3 id="shutdown-title">Parar Beyonder</h3><p>O Beyonder vai parar após salvar o estado atual.</p><div className="action-row"><button type="button" className="secondary-button" disabled={pending} autoFocus onClick={() => setOpen(false)}>Cancelar</button><button type="button" className="secondary-button button-danger" disabled={pending} onClick={stop}>{pending ? "Salvando..." : "Parar com segurança"}</button></div></div></div> : null}
+    {open ? <div className="shutdown-overlay"><div className="shutdown-dialog" role="dialog" aria-modal="true" aria-labelledby="shutdown-title"><h3 id="shutdown-title">Parar Beyonder</h3><p>O Beyonder vai parar apos salvar o estado atual.</p><div className="action-row"><button type="button" className="secondary-button" disabled={pending} autoFocus onClick={() => setOpen(false)}>Cancelar</button><button type="button" className="secondary-button button-danger" disabled={pending} onClick={stop}>{pending ? "Salvando..." : "Parar com seguranca"}</button></div></div></div> : null}
     {message ? <span role="status">{message}</span> : null}
   </span>;
 }

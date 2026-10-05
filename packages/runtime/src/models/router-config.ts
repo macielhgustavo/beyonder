@@ -73,7 +73,10 @@ export const ROUTER_CONFIG = {
       explorationRate: 0.005,
       costSensitivity: 1.6,
       qualityBias: 0.85,
-      maxAttempts: 2,
+      // Legacy maxAttempts remains one for callers that do not carry the
+      // cloud-first tier metadata. The adaptive cloud cascade has its own
+      // explicit remote budget below, so v0.5 can try a second qualified cloud.
+      maxAttempts: 1,
       maxEscalations: 0,
       maxMonetaryCostUsd: 0,
       maxEffectiveCostUsd: 0.006,
@@ -104,7 +107,7 @@ export function getEconomicRoutingPolicy(state: EconomicState): EconomicRoutingP
 export function inferenceAttemptPolicy(state: EconomicState) {
   const policy = getEconomicRoutingPolicy(state);
   return {
-    remoteAttemptBudget: policy.maxAttempts,
+    remoteAttemptBudget: state === "survival" && policy.allowInference ? 2 : policy.maxAttempts,
     localFallbackBudget: policy.allowInference ? 1 : 0
   };
 }

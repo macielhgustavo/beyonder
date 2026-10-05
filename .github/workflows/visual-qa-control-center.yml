@@ -35,10 +35,12 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Build workspace
         run: pnpm build
+      - name: Build Control Center production bundle
+        run: pnpm control-center:build
       - run: pnpm --filter @beyonder/browser-agent exec playwright install --with-deps chromium
-      - name: Start Control Center
+      - name: Start Control Center production bundle
         run: |
-          pnpm --filter @beyonder/control-center dev > /tmp/control-center.log 2>&1 &
+          pnpm --filter @beyonder/control-center start > /tmp/control-center.log 2>&1 &
           echo $! > /tmp/control-center.pid
           for i in {1..60}; do
             if curl --fail --silent http://127.0.0.1:4187/ > /dev/null; then

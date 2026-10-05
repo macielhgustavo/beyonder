@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import "./globals.css";
 import "./premium.css";
 import "./premium-secondary.css";
+import "./premium-polish.css";
 
 export const metadata: Metadata = {
   title: "Beyonder Control Center",

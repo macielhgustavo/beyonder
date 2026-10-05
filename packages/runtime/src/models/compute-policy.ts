@@ -1,0 +1,180 @@
+import type { GoalContract, IntelligenceTask, RequiredCapability } from "../intelligence/contracts.js";
+import type { CandidateCapabilityFit, CapabilityDimension, ComputeTier, ModelCandidate, QualityFloor } from "./adaptive-types.js";
+
+export const CLOUD_FIRST_POLICY = {
+  paidEscalationEnabled: false,
+  localEmergencyFallbackBudget: 1,
+  localShadowCostFloorUsd: 0.0015,
+  strongCloudHeadroom: 0.08,
+  strongCloudReliability: 0.72
+} as const;
+
+const LEVEL_BASE: Record<QualityFloor["level"], number> = {
+  MINIMAL: 0.46,
+  STANDARD: 0.59,
+  HIGH: 0.71
+};
+
+const CAPABILITY_DIMENSION: Partial<Record<RequiredCapability, CapabilityDimension>> = {
+  "web-research": "research",
+  "browser-read": "research",
+  comparison: "synthesis",
+  citations: "freshnessEvidence",
+  coding: "coding",
+  reasoning: "reasoning",
+  planning: "planning",
+  "structured-output": "structuredOutput"
+};
+
+export function resolveQualityFloor(task: IntelligenceTask): QualityFloor {
+  const contract = task.goalContract;
+  let level: QualityFloor["level"] = contract?.qualityTarget ?? defaultLevel(task);
+  if (isEvidenceHeavy(contract) || isCurrentResearch(task, contract)) level = "HIGH";
+
+  const complexityBump = task.complexity >= 0.72 ? 0.06 : task.complexity >= 0.52 ? 0.035 : task.complexity >= 0.35 ? 0.015 : 0;
+  const minimumOverall = clamp(LEVEL_BASE[level] + complexityBump);
+  const dimensions: QualityFloor["dimensions"] = {};
+  const reasons = [`qualityTarget=${level}`, `complexity=${task.complexity.toFixed(3)}`];
+
+  const require = (dimension: CapabilityDimension, floor = minimumOverall) => {
+    dimensions[dimension] = Math.max(dimensions[dimension] ?? 0, clamp(floor));
+  };
+
+  if (task.requirements.reasoning || task.type === "reasoning") require("reasoning");
+  if (task.requirements.planning || task.type === "planning") require("planning");
+  if (task.requirements.coding || task.type === "coding") require("coding");
+  if (task.type === "research" || task.type === "browser" || task.requirements.browser) require("research");
+  if (task.requirements.toolUse || task.requirements.tools?.length) require("toolUse", Math.max(0.5, minimumOverall - 0.05));
+  if (task.requirements.structuredOutput) require("structuredOutput", Math.max(0.52, minimumOverall - 0.04));
+
+  if (contract) {
+    for (const capability of contract.requiredCapabilities) {
+      const dimension = CAPABILITY_DIMENSION[capability];
+      if (dimension) require(dimension);
+    }
+    if (contract.expectedResultKind === "COMPARISON") require("synthesis");
+    if (["EXPLANATION", "COMPARISON", "CODE", "PLAN"].includes(contract.expectedResultKind)) require("verification", Math.max(0.54, minimumOverall - 0.03));
+    if (contract.freshness !== "STATIC" || contract.evidenceRequirement === "REQUIRED") {
+      require("freshnessEvidence", Math.max(0.58, minimumOverall));
+      reasons.push(`freshness=${contract.freshness}`, `evidence=${contract.evidenceRequirement}:${contract.minimumEvidenceSources}`);
+    }
+  }
+
+  if (Object.keys(dimensions).length === 0) require("synthesis", Math.max(0.42, minimumOverall - 0.06));
+  return { level, minimumOverall, dimensions, reasons };
+}
+
+export function assessCapability(candidate: ModelCandidate, task: IntelligenceTask, floor: QualityFloor): CandidateCapabilityFit {
+  const prior = clamp(candidate.predictedQuality);
+  const outcome = candidate.performance.samples > 0
+    ? clamp((candidate.performance.avgEvaluationScore + candidate.performance.successRate) / 2)
+    : prior;
+  const reliability = clamp(candidate.reliability);
+  const overall = clamp(prior * 0.62 + outcome * 0.2 + reliability * 0.18);
+  const caps = new Set(candidate.capabilities.map((capability) => capability.toLowerCase()));
+  const dimensions: CandidateCapabilityFit["dimensions"] = {};
+  const evidence = [
+    `quality=${candidate.predictedQuality.toFixed(3)}:${candidate.capabilityEvidence.source}`,
+    `reliability=${candidate.reliability.toFixed(3)}`,
+    `history=${candidate.performance.samples}`
+  ];
+
+  const supported = (dimension: CapabilityDimension): number => {
+    let value = overall;
+    if (dimension === "reasoning") {
+      if (caps.has("reasoning")) value += 0.06;
+      else if (task.requirements.reasoning) value -= 0.035;
+    }
+    if (dimension === "planning") {
+      if (caps.has("reasoning")) value += 0.035;
+      if (candidate.structuredOutput === "native") value += 0.025;
+    }
+    if (dimension === "coding") {
+      if (caps.has("code") || caps.has("coding") || /(?:^|[-_.:/])(code|coder)(?:[-_.:/]|$)/i.test(candidate.model)) value += 0.07;
+      else if (task.type === "coding") value -= 0.03;
+    }
+    if (dimension === "research") {
+      if (caps.has("reasoning")) value += 0.025;
+      if (candidate.contextWindow !== "unknown" && candidate.contextWindow >= 16_000) value += 0.035;
+    }
+    if (dimension === "synthesis") {
+      if (candidate.contextWindow !== "unknown" && candidate.contextWindow >= 8_000) value += 0.025;
+    }
+    if (dimension === "toolUse") {
+      if (candidate.toolCalling === "yes") value += 0.08;
+      else if (candidate.toolCalling === "unknown") value -= 0.035;
+      else value -= 0.18;
+    }
+    if (dimension === "structuredOutput") {
+      if (candidate.structuredOutput === "native") value += 0.08;
+      else if (candidate.structuredOutput === "prompted") value -= 0.025;
+      else value -= 0.2;
+    }
+    if (dimension === "verification") {
+      value += Math.min(0.05, candidate.performance.samples / 200);
+    }
+    if (dimension === "freshnessEvidence") {
+      value = clamp(value * 0.9 + reliability * 0.1);
+      if (candidate.contextWindow !== "unknown" && candidate.contextWindow >= 16_000) value += 0.025;
+    }
+    return clamp(value);
+  };
+
+  const gaps: string[] = [];
+  for (const [dimension, required] of Object.entries(floor.dimensions) as Array<[CapabilityDimension, number]>) {
+    const score = supported(dimension);
+    dimensions[dimension] = score;
+    if (score < required) gaps.push(`${dimension}=${score.toFixed(3)}<${required.toFixed(3)}`);
+  }
+  if (overall < floor.minimumOverall) gaps.unshift(`overall=${overall.toFixed(3)}<${floor.minimumOverall.toFixed(3)}`);
+
+  return { overall, dimensions, passes: gaps.length === 0, gaps, evidence };
+}
+
+export function computeTier(candidate: ModelCandidate, fit: CandidateCapabilityFit, floor: QualityFloor): ComputeTier {
+  if (candidate.local || candidate.provider === "ollama") return "LOCAL_EMERGENCY";
+  if (candidate.costClass === "PAID" || candidate.monetaryCostUsd > 0) return "PAID_DISABLED";
+  const headroom = fit.overall - floor.minimumOverall;
+  return headroom >= CLOUD_FIRST_POLICY.strongCloudHeadroom && candidate.reliability >= CLOUD_FIRST_POLICY.strongCloudReliability
+    ? "STRONG_FREE_CLOUD"
+    : "OTHER_FREE_CLOUD";
+}
+
+export function routingScore(candidate: ModelCandidate, fit: CandidateCapabilityFit, tier: ComputeTier): number {
+  const tierBias = tier === "STRONG_FREE_CLOUD" ? 0.12 : tier === "OTHER_FREE_CLOUD" ? 0.04 : tier === "LOCAL_EMERGENCY" ? -0.18 : -1;
+  return Number((
+    fit.overall * 0.46
+    + candidate.predictedQuality * 0.2
+    + candidate.reliability * 0.12
+    + candidate.historicalSuccess * 0.08
+    + candidate.utility * 0.08
+    - candidate.latencyPenalty * 0.025
+    - Math.min(1, candidate.shadowCostUsd / 0.01) * 0.025
+    + tierBias
+  ).toFixed(6));
+}
+
+export function executionTierRank(tier: ComputeTier | undefined): number {
+  return tier === "STRONG_FREE_CLOUD" ? 0 : tier === "OTHER_FREE_CLOUD" ? 1 : tier === "PAID_DISABLED" ? 2 : 3;
+}
+
+export function paidCandidateAllowed(): boolean {
+  return CLOUD_FIRST_POLICY.paidEscalationEnabled;
+}
+
+function defaultLevel(task: IntelligenceTask): QualityFloor["level"] {
+  if (task.complexity >= 0.62 || ["research", "reasoning", "coding", "planning"].includes(task.type)) return "STANDARD";
+  return "MINIMAL";
+}
+
+function isEvidenceHeavy(contract?: GoalContract): boolean {
+  return Boolean(contract && contract.evidenceRequirement === "REQUIRED" && contract.minimumEvidenceSources >= 2 && ["RESEARCH", "COMPARISON", "FACTUAL"].includes(contract.primaryIntent));
+}
+
+function isCurrentResearch(task: IntelligenceTask, contract?: GoalContract): boolean {
+  return Boolean(contract && ["CURRENT", "REALTIME"].includes(contract.freshness) && (task.type === "research" || contract.primaryIntent === "RESEARCH" || contract.primaryIntent === "COMPARISON"));
+}
+
+function clamp(value: number): number {
+  return Math.max(0, Math.min(1, Number(value.toFixed(4))));
+}

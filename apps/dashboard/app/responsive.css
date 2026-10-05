@@ -1,0 +1,44 @@
+/*
+ * Responsive constraints that protect the Control Center from intrinsic-width
+ * expansion caused by dense operational content. Keep these rules explicit:
+ * hiding document overflow would mask real layout defects.
+ */
+
+@media (max-width: 960px) {
+  .shell {
+    grid-template-columns: minmax(0, 1fr);
+    width: 100%;
+    min-width: 0;
+  }
+
+  .sidebar,
+  .main,
+  .main-content,
+  .runtime-bar {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .page-header,
+  .home-hero,
+  .objective-box,
+  .quick-actions,
+  .home-metrics,
+  .grid-main,
+  .panel {
+    min-width: 0;
+  }
+}
+
+@media (max-width: 700px) {
+  .objective-foot,
+  .objective-hint,
+  .objective-actions {
+    min-width: 0;
+  }
+
+  .objective-hint > span,
+  .inline-message {
+    overflow-wrap: anywhere;
+  }
+}

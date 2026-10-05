@@ -23,6 +23,7 @@ sessions/
 # local reports/artifacts
 coverage/
 outputs/
+apps/dashboard/test-artifacts/
 
 # Next.js generated output
 .next/

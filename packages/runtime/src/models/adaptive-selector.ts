@@ -3,7 +3,8 @@ import type { IntelligenceTask } from "../intelligence/contracts.js";
 import type { EconomicState } from "../types.js";
 import type { ModelCapabilitySource } from "./capability-source.js";
 import { NullCapabilitySource, predictCapability } from "./capability-source.js";
-import type { CapabilityPredictionEvidence, HistoricalPerformance, ModelCandidate, RouteDecision, RouterTelemetry } from "./adaptive-types.js";
+import type { CapabilityPredictionEvidence, HistoricalPerformance, ModelCandidate, RejectedCandidate, RouteDecision, RouterTelemetry } from "./adaptive-types.js";
+import { CLOUD_FIRST_POLICY, assessCapability, computeTier, executionTierRank, paidCandidateAllowed, resolveQualityFloor, routingScore } from "./compute-policy.js";
 import type { PerformanceRepository } from "./performance-repository.js";
 import { EmptyPerformanceRepository } from "./performance-repository.js";
 import type { QuotaSource } from "./quota.js";
@@ -49,15 +50,31 @@ export class AdaptiveModelSelector {
 
   async route(task: IntelligenceTask, economicState: EconomicState): Promise<RouteDecision> {
     const policy = getEconomicRoutingPolicy(economicState);
+    const qualityFloor = resolveQualityFloor(task);
+    const baseDecision = {
+      task,
+      economicState,
+      qualityFloor,
+      paidEscalationEnabled: CLOUD_FIRST_POLICY.paidEscalationEnabled
+    } as const;
+
+    await this.telemetry("info", "router.quality_floor_resolved", {
+      taskId: task.id,
+      taskType: task.type,
+      ...qualityFloor
+    });
+
     if (!policy.allowInference) {
-      return { task, economicState, candidates: [], explored: false, reason: "economic state halted blocks normal inference" };
+      return { ...baseDecision, candidates: [], consideredCandidates: [], rejectedCandidates: [], explored: false, capacityStatus: "NEEDS_CAPABILITY", reason: "economic state halted blocks normal inference" };
     }
 
     const state = await new AutopilotStateStore(this.providerStatePath).read();
     const inventory = [...buildComputeInventory(state), ...(this.options.ollamaBaseUrl ? await discoverOllama(this.options.ollamaBaseUrl) : [])];
     const viablePairs = inventory.flatMap((entry) => this.expandCompatible(entry, task));
     const alternativesAvailable = Math.max(0, viablePairs.length - 1);
+    const consideredCandidates: ModelCandidate[] = [];
     const candidates: ModelCandidate[] = [];
+    const rejectedCandidates: RejectedCandidate[] = [];
 
     await this.telemetry("info", "router.candidates_generated", {
       taskId: task.id,
@@ -67,7 +84,18 @@ export class AdaptiveModelSelector {
     });
 
     for (const pair of viablePairs) {
-      if (this.options.canAttempt && !await this.options.canAttempt({ provider: pair.entry.providerId, model: pair.model })) continue;
+      if (this.options.canAttempt && !await this.options.canAttempt({ provider: pair.entry.providerId, model: pair.model })) {
+        const rejected: RejectedCandidate = {
+          provider: pair.entry.providerId,
+          model: pair.model,
+          computeTier: pair.entry.providerId === "ollama" ? "LOCAL_EMERGENCY" : "OTHER_FREE_CLOUD",
+          reasons: ["operational cooldown prevents another attempt"]
+        };
+        rejectedCandidates.push(rejected);
+        await this.telemetry("debug", "router.candidate_rejected", { taskId: task.id, ...rejected });
+        continue;
+      }
+
       const performance = await this.performance.get(pair.entry.providerId, pair.model, task.type);
       const benchmarkCapability = await this.capabilitySource.getCapability({
         provider: pair.entry.providerId,
@@ -91,14 +119,16 @@ export class AdaptiveModelSelector {
         predictedScore: capabilityEvidence.predictedScore,
         source: capabilityEvidence.source
       });
+
       const quota = await this.quotaSource.get(pair.entry.providerId, pair.model);
-      if (quota.health === "unknown") {
-        quota.health = pair.entry.status === "keyless" ? "keyless" : "healthy";
-      }
+      if (quota.health === "unknown") quota.health = pair.entry.status === "keyless" ? "keyless" : "healthy";
       await this.telemetry("debug", "quota.updated", { provider: pair.entry.providerId, model: pair.model, quota });
 
       const shadow = this.shadowCost.calculate({ quota, economicState, alternativesAvailable });
-      if (pair.entry.providerId === "ollama") shadow.shadowCostUsd = 0;
+      if (pair.entry.providerId === "ollama") {
+        shadow.shadowCostUsd = Math.max(shadow.shadowCostUsd, CLOUD_FIRST_POLICY.localShadowCostFloorUsd);
+        shadow.reason = `${shadow.reason}; local emergency compute carries CPU/GPU opportunity cost`;
+      }
       await this.telemetry("debug", "shadow_cost.calculated", {
         provider: pair.entry.providerId,
         model: pair.model,
@@ -138,7 +168,7 @@ export class AdaptiveModelSelector {
         structuredOutput: metadata?.structuredOutput ?? "unknown",
         provider: pair.entry.providerId,
         model: pair.model,
-        capabilities: capabilitiesFor(pair.entry),
+        capabilities: capabilitiesFor(pair.entry, pair.model),
         contextWindow: typeof pair.entry.contextWindow === "number" ? pair.entry.contextWindow : "unknown",
         toolCalling: pair.entry.toolCalling,
         predictedQuality,
@@ -180,38 +210,102 @@ export class AdaptiveModelSelector {
         }
       };
 
+      const capabilityFit = assessCapability(candidate, task, qualityFloor);
+      const tier = computeTier(candidate, capabilityFit, qualityFloor);
+      const score = routingScore(candidate, capabilityFit, tier);
+      const rejectionReasons: string[] = [];
+      if (!capabilityFit.passes) rejectionReasons.push(...capabilityFit.gaps.map((gap) => `quality-floor:${gap}`));
+      if (tier === "PAID_DISABLED" && !paidCandidateAllowed()) rejectionReasons.push("paid escalation is architecturally represented but disabled in v0.5");
+      if (candidate.monetaryCostUsd > policy.maxMonetaryCostUsd) rejectionReasons.push(`monetary-cost>${policy.maxMonetaryCostUsd}`);
+      if (candidate.effectiveResourceCost > policy.maxEffectiveCostUsd) rejectionReasons.push(`effective-resource-cost>${policy.maxEffectiveCostUsd}`);
+
+      Object.assign(candidate, {
+        capabilityFit,
+        computeTier: tier,
+        routingScore: score,
+        eligible: rejectionReasons.length === 0,
+        rejectionReasons
+      });
+      candidate.explanation.constraints.push(`compute-tier=${tier}`, `quality-floor=${qualityFloor.level}:${qualityFloor.minimumOverall}`, `capability-fit=${capabilityFit.overall}`);
+      consideredCandidates.push(candidate);
+
       await this.telemetry("debug", "router.candidate_scored", serializeCandidate(candidate, task.id));
-      if (candidate.monetaryCostUsd <= policy.maxMonetaryCostUsd && candidate.effectiveResourceCost <= policy.maxEffectiveCostUsd) {
+      if (rejectionReasons.length === 0) {
         candidates.push(candidate);
+      } else {
+        const rejected: RejectedCandidate = {
+          provider: candidate.provider,
+          model: candidate.model,
+          computeTier: tier,
+          reasons: rejectionReasons,
+          capabilityFit,
+          predictedQuality: candidate.predictedQuality,
+          reliability: candidate.reliability,
+          latencyPenalty: candidate.latencyPenalty,
+          monetaryCostUsd: candidate.monetaryCostUsd,
+          shadowCostUsd: candidate.shadowCostUsd
+        };
+        rejectedCandidates.push(rejected);
+        await this.telemetry("debug", "router.candidate_rejected", { taskId: task.id, ...rejected });
       }
     }
 
-    candidates.sort((a, b) => b.utility - a.utility || b.predictedQuality - a.predictedQuality);
+    candidates.sort((a, b) => executionTierRank(a.computeTier) - executionTierRank(b.computeTier) || (b.routingScore ?? -Infinity) - (a.routingScore ?? -Infinity) || b.predictedQuality - a.predictedQuality);
+    consideredCandidates.sort((a, b) => executionTierRank(a.computeTier) - executionTierRank(b.computeTier) || (b.routingScore ?? -Infinity) - (a.routingScore ?? -Infinity));
+
     if (candidates.length === 0) {
-      return { task, economicState, candidates: [], explored: false, reason: `no compatible candidate fits ${economicState} constraints` };
+      await this.telemetry("warn", "router.needs_capability", {
+        taskId: task.id,
+        taskType: task.type,
+        qualityFloor,
+        rejectedCandidates: rejectedCandidates.map((candidate) => ({ provider: candidate.provider, model: candidate.model, tier: candidate.computeTier, reasons: candidate.reasons }))
+      });
+      return {
+        ...baseDecision,
+        candidates: [],
+        consideredCandidates,
+        rejectedCandidates,
+        explored: false,
+        capacityStatus: "NEEDS_CAPABILITY",
+        reason: "adequate models for this mission are unavailable; available compute is below the mission quality floor or policy constraints"
+      };
     }
 
+    const cloudCandidates = candidates.filter((candidate) => candidate.computeTier !== "LOCAL_EMERGENCY");
     let selected = candidates[0];
     let explored = false;
-    if (candidates.length > 1 && this.random.next() < policy.explorationRate) {
-      const offset = Math.floor(this.random.next() * (candidates.length - 1));
-      selected = candidates[1 + offset] ?? selected;
+    const explorationPool = cloudCandidates.length > 1 ? cloudCandidates : [];
+    if (explorationPool.length > 1 && this.random.next() < policy.explorationRate) {
+      const offset = Math.floor(this.random.next() * (explorationPool.length - 1));
+      selected = explorationPool[1 + offset] ?? selected;
       explored = selected !== candidates[0];
-      if (explored) {
-        await this.telemetry("info", "router.exploration_selected", serializeCandidate(selected, task.id));
-      }
+      if (explored) await this.telemetry("info", "router.exploration_selected", serializeCandidate(selected, task.id));
+    }
+
+    const capacityStatus = cloudCandidates.length > 0 ? "NORMAL" : "CAPACITY_REDUCED";
+    if (capacityStatus === "CAPACITY_REDUCED") {
+      await this.telemetry("warn", "router.capacity_reduced", {
+        taskId: task.id,
+        selected: `${selected.provider}/${selected.model}`,
+        qualityFloor,
+        reason: "only quality-qualified local emergency compute is available"
+      });
     }
 
     await this.telemetry("info", "router.selected", serializeCandidate(selected, task.id));
     return {
-      task,
-      economicState,
+      ...baseDecision,
       candidates,
+      consideredCandidates,
+      rejectedCandidates,
       selected,
       explored,
-      reason: explored
-        ? `controlled exploration within ${economicState} safety constraints`
-        : `highest expected utility under ${economicState} constraints`
+      capacityStatus,
+      reason: capacityStatus === "CAPACITY_REDUCED"
+        ? "cloud capacity unavailable; quality-qualified local emergency compute selected as airbag"
+        : explored
+          ? `controlled cloud exploration within ${economicState} safety and quality constraints`
+          : `highest mission-adjusted cloud quality under ${economicState} zero-money constraints`
     };
   }
 
@@ -244,11 +338,13 @@ export class AdaptiveModelSelector {
   }
 }
 
-function capabilitiesFor(entry: InventoryEntry): string[] {
-  const result = ["text"];
-  if (entry.toolCalling === "yes") result.push("tool-calling");
-  if (typeof entry.contextWindow === "number") result.push(`context:${entry.contextWindow}`);
-  return result;
+function capabilitiesFor(entry: InventoryEntry, model: string): string[] {
+  const metadata = entry.modelMetadata.find((item) => item.id === model);
+  const result = new Set<string>(["text"]);
+  for (const capability of metadata?.capabilities ?? []) result.add(String(capability).toLowerCase());
+  if (entry.toolCalling === "yes") result.add("tool-calling");
+  if (typeof entry.contextWindow === "number") result.add(`context:${entry.contextWindow}`);
+  return [...result];
 }
 
 export function workloadForTask(taskType: IntelligenceTask["type"]): ModelWorkload {
@@ -260,6 +356,11 @@ function serializeCandidate(candidate: ModelCandidate, taskId: string): Record<s
     taskId,
     provider: candidate.provider,
     model: candidate.model,
+    computeTier: candidate.computeTier,
+    eligible: candidate.eligible,
+    rejectionReasons: candidate.rejectionReasons,
+    routingScore: candidate.routingScore,
+    capabilityFit: candidate.capabilityFit,
     predictedQuality: candidate.predictedQuality,
     capabilityEvidence: candidate.capabilityEvidence,
     historicalSuccess: candidate.historicalSuccess,

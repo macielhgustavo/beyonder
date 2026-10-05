@@ -4,7 +4,7 @@ on:
     branches: [main]
     paths: ['apps/dashboard/**', 'packages/**', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'tsconfig*.json', '.github/workflows/validate-control-center.yml']
   push:
-    branches: [feat/control-center, main]
+    branches: [feat/control-center, feat/control-center-ultra-v6, main]
     paths: ['apps/dashboard/**', 'packages/**', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'tsconfig*.json', '.github/workflows/validate-control-center.yml']
 jobs:
   validate:
@@ -32,6 +32,14 @@ jobs:
       - run: pnpm control-center:security-smoke
       - run: pnpm --filter @beyonder/browser-agent exec playwright install --with-deps chromium
       - run: pnpm control-center:supervisor-smoke
+      - name: Upload visual QA screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: control-center-visual-qa
+          path: apps/dashboard/test-artifacts/*.png
+          if-no-files-found: ignore
+          retention-days: 14
       - run: pnpm browser:smoke
       - run: pnpm web:evals:smoke
       - run: pnpm autonomy:smoke

@@ -4,7 +4,7 @@ on:
     branches: [main]
     paths: ['apps/dashboard/**', 'packages/**', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'tsconfig*.json', '.github/workflows/validate-control-center.yml']
   push:
-    branches: [feat/control-center, main]
+    branches: [feat/control-center, feat/v05-premium-ui, main]
     paths: ['apps/dashboard/**', 'packages/**', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'tsconfig*.json', '.github/workflows/validate-control-center.yml']
 jobs:
   validate:

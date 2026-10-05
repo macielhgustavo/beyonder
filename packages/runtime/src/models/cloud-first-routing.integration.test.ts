@@ -39,7 +39,7 @@ class JourneyQuotaSource implements QuotaSource {
 class JourneyCapabilitySource implements ModelCapabilitySource {
   constructor(private readonly localScore: number, private readonly cloudScore = 0.94) {}
   async getCapability(input: ModelCapabilityRequest) {
-    return { score: input.provider === "ollama" ? this.localScore : this.cloudScore, samples: 10, source: "BIB" };
+    return { score: input.provider === "ollama" ? this.localScore : this.cloudScore, samples: 10, source: "BIB" as const };
   }
   async getCapabilityScore(input: ModelCapabilityRequest) {
     return (await this.getCapability(input)).score;

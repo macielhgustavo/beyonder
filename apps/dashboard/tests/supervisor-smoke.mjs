@@ -8,9 +8,10 @@ import { createServer } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 
 const dir = mkdtempSync(join(tmpdir(), "beyonder-supervisor-test-"));
+const dashboardDir = fileURLToPath(new URL("..", import.meta.url));
 const launcher = fileURLToPath(new URL("../bin/launch-control-center.mjs", import.meta.url));
 const url = "http://127.0.0.1:4187";
-const visualDir = process.env.BEYONDER_VISUAL_QA_DIR || join(process.cwd(), "apps/dashboard/test-artifacts");
+const visualDir = process.env.BEYONDER_VISUAL_QA_DIR || join(dashboardDir, "test-artifacts");
 rmSync(visualDir, { recursive: true, force: true });
 mkdirSync(visualDir, { recursive: true });
 
@@ -101,9 +102,8 @@ async function captureVisualState(page, route, fileName, viewport) {
   await page.setViewportSize(viewport);
   await page.goto(`${url}${route}`, { waitUntil: "load" });
   await page.locator(".main-content").waitFor();
-  const audit = await visualAudit(page, `${fileName} (${viewport.width}x${viewport.height})`);
   await page.screenshot({ path: join(visualDir, `${fileName}.png`), fullPage: true });
-  return audit;
+  return visualAudit(page, `${fileName} (${viewport.width}x${viewport.height})`);
 }
 
 let collision;

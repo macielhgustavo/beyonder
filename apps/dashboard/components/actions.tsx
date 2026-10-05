@@ -28,6 +28,7 @@ export function ObjectiveBox() {
         if (["succeeded", "failed", "blocked", "cancelled"].includes(payload.mission.status)) {
           setTaskId(null);
           setPending(false);
+          setMessage(null);
           router.refresh();
         }
       } catch { /* The next poll may recover after a local restart. */ }
@@ -40,12 +41,13 @@ export function ObjectiveBox() {
   async function submit(event: FormEvent) {
     event.preventDefault();
     setPending(true);
-    setMessage("Criando missão...");
+    setMission(null);
+    setMessage("Criando missão…");
     const result = await command({ type: "submitObjective", objective });
     if (result.ok && typeof result.taskId === "string") {
       setSubmittedObjective(objective.trim());
       setTaskId(result.taskId);
-      setMessage("Missão criada. O Beyonder está entendendo o objetivo.");
+      setMessage("Missão criada. Aguardando o primeiro estado persistido…");
       setObjective("");
     } else {
       setPending(false);
@@ -54,21 +56,38 @@ export function ObjectiveBox() {
   }
 
   return (
-    <form className="objective-box" onSubmit={submit}>
-      <label htmlFor="objective">O que voce quer que o Beyonder faca?</label>
-      <textarea
-        id="objective"
-        value={objective}
-        onChange={(event) => setObjective(event.target.value)}
-        placeholder="Ex: procure oportunidades de programacao que valham a pena hoje"
-        rows={4}
-      />
-      <div className="action-row objective-actions">
-        <button className="primary-button" type="submit" disabled={pending || objective.trim().length < 3}>{pending ? "Missão em andamento" : "Iniciar missão"}</button>
-        {message ? <span className="inline-message" role="status" aria-live="polite">{message}</span> : null}
+    <section className={`command-surface${pending || mission ? " command-surface-engaged" : ""}`} aria-label="Command Beyonder">
+      <div className="command-surface-head">
+        <div>
+          <span className="eyebrow">COMMAND</span>
+          <h2>O que precisa ser feito?</h2>
+        </div>
+        <span className="command-hint">objetivo → execução → resultado</span>
       </div>
-      {mission ? <MissionCard mission={mission} featured /> : pending && submittedObjective ? <div className="mission-launching" aria-live="polite"><span className="mission-pulse" /><div><strong>{submittedObjective}</strong><span>Preparando a primeira leitura persistida da missão…</span></div></div> : null}
-    </form>
+      <form className="objective-box" onSubmit={submit}>
+        <label className="sr-only" htmlFor="objective">O que você quer que o Beyonder faça?</label>
+        <textarea
+          id="objective"
+          value={objective}
+          onChange={(event) => setObjective(event.target.value)}
+          placeholder="Descreva um objetivo concreto…"
+          rows={3}
+        />
+        <div className="objective-footer">
+          <span className="objective-help">Beyonder cria uma missão persistente e verifica o resultado antes de declarar sucesso.</span>
+          <button className="primary-button" type="submit" disabled={pending || objective.trim().length < 3}>
+            {pending ? "Executando" : "Iniciar missão"}
+          </button>
+        </div>
+        {message ? <div className="command-progress" role="status" aria-live="polite"><span className="mission-pulse" /><span>{message}</span></div> : null}
+      </form>
+      {mission ? <div className="command-mission"><MissionCard mission={mission} featured /></div> : pending && submittedObjective ? (
+        <div className="mission-launching" aria-live="polite">
+          <span className="mission-pulse" />
+          <div><strong>{submittedObjective}</strong><span>Preparando a primeira leitura persistida da missão…</span></div>
+        </div>
+      ) : null}
+    </section>
   );
 }
 
@@ -82,14 +101,14 @@ export function CommandButton({ children, payload, tone = "default", confirm, re
     setPending(true);
     const result = await command(payload);
     setPending(false);
-    setMessage(result.ok ? (result.status === "APPROVED" ? "Autorizado. Consulte Trabalhos para realizar o envio manual." : "Registrado") : String(result.error ?? "falhou"));
+    setMessage(result.ok ? (result.status === "APPROVED" ? "Autorizado. Consulte Work para realizar o envio manual." : "Registrado") : String(result.error ?? "Falhou"));
     if (result.ok && refresh) router.refresh();
   }
 
   return (
     <span className="button-stack">
-      <button className={`secondary-button button-${tone}`} type="button" disabled={pending} onClick={run}>{pending ? "..." : children}</button>
-      {message ? <span className="mini-message">{message}</span> : null}
+      <button className={`secondary-button button-${tone}`} type="button" disabled={pending} onClick={run}>{pending ? "Processando…" : children}</button>
+      {message ? <span className="mini-message" role="status">{message}</span> : null}
     </span>
   );
 }
@@ -117,7 +136,7 @@ export function SecretForm({ providerId, envVar }: { providerId: string; envVar:
       <label>{envVar}</label>
       <input type="password" value={value} onChange={(event) => setValue(event.target.value)} placeholder="API key" autoComplete="off" />
       <input type="password" value={vaultPassword} onChange={(event) => setVaultPassword(event.target.value)} placeholder="Vault password" autoComplete="off" />
-      <button className="secondary-button" type="submit" disabled={pending || value.length === 0 || vaultPassword.length < 12}>{pending ? "Salvando..." : "Salvar"}</button>
+      <button className="secondary-button" type="submit" disabled={pending || value.length === 0 || vaultPassword.length < 12}>{pending ? "Salvando…" : "Salvar"}</button>
       {message ? <span className="mini-message">{message}</span> : null}
     </form>
   );
@@ -146,7 +165,7 @@ export function ShutdownButton() {
   }
   return <span className="button-stack">
     <button type="button" className="secondary-button button-danger" onClick={() => setOpen(true)}>Parar Beyonder</button>
-    {open ? <div className="shutdown-overlay"><div className="shutdown-dialog" role="dialog" aria-modal="true" aria-labelledby="shutdown-title"><h3 id="shutdown-title">Parar Beyonder</h3><p>O Beyonder vai parar após salvar o estado atual.</p><div className="action-row"><button type="button" className="secondary-button" disabled={pending} autoFocus onClick={() => setOpen(false)}>Cancelar</button><button type="button" className="secondary-button button-danger" disabled={pending} onClick={stop}>{pending ? "Salvando..." : "Parar com segurança"}</button></div></div></div> : null}
+    {open ? <div className="shutdown-overlay"><div className="shutdown-dialog" role="dialog" aria-modal="true" aria-labelledby="shutdown-title"><h3 id="shutdown-title">Parar Beyonder</h3><p>O Beyonder vai parar após salvar o estado atual.</p><div className="action-row"><button type="button" className="secondary-button" disabled={pending} autoFocus onClick={() => setOpen(false)}>Cancelar</button><button type="button" className="secondary-button button-danger" disabled={pending} onClick={stop}>{pending ? "Salvando…" : "Parar com segurança"}</button></div></div></div> : null}
     {message ? <span role="status">{message}</span> : null}
   </span>;
 }

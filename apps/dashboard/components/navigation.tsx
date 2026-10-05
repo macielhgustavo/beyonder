@@ -3,7 +3,10 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 
-const groups = [
+type NavItem = readonly [href: string, label: string];
+type NavGroup = { readonly label: string; readonly items: readonly NavItem[] };
+
+const groups: readonly NavGroup[] = [
   {
     label: "Operate",
     items: [
@@ -28,7 +31,7 @@ const groups = [
       ["/settings", "Settings"]
     ]
   }
-] as const;
+];
 
 function activeFor(pathname: string, href: string) {
   if (href === "/") return pathname === "/";
@@ -38,7 +41,7 @@ function activeFor(pathname: string, href: string) {
 export function Navigation() {
   const pathname = usePathname();
   const router = useRouter();
-  const items = groups.flatMap((group) => group.items);
+  const items: readonly NavItem[] = groups.flatMap((group) => group.items);
   const activeHref = items.find(([href]) => activeFor(pathname, href))?.[0] ?? "/";
 
   return (

@@ -1,0 +1,57 @@
+name: visual-qa-control-center
+
+on:
+  push:
+    branches: [feat/v05-premium-ui]
+    paths:
+      - 'apps/dashboard/**'
+      - 'packages/browser-agent/scripts/control-center-visual-qa.mjs'
+      - '.github/workflows/visual-qa-control-center.yml'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+
+jobs:
+  visual-qa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      BEYONDER_MODEL_PROVIDER: none
+      BEYONDER_CONTROL_FIXTURE: '1'
+      CONTROL_CENTER_URL: http://127.0.0.1:4187
+      VISUAL_QA_LABEL: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @beyonder/browser-agent exec playwright install --with-deps chromium
+      - name: Start Control Center
+        run: |
+          pnpm --filter @beyonder/control-center dev > /tmp/control-center.log 2>&1 &
+          echo $! > /tmp/control-center.pid
+          for i in {1..60}; do
+            if curl --fail --silent http://127.0.0.1:4187/ > /dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          cat /tmp/control-center.log
+          exit 1
+      - name: Capture desktop and mobile surfaces
+        run: pnpm --filter @beyonder/browser-agent exec node scripts/control-center-visual-qa.mjs
+      - name: Upload visual QA evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: control-center-visual-qa-${{ github.sha }}
+          path: artifacts/control-center-visual-qa
+          retention-days: 14
+      - name: Show server log on failure
+        if: failure()
+        run: cat /tmp/control-center.log || true

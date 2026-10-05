@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import "./globals.css";
 import "./premium.css";
+import "./premium-secondary.css";
 
 export const metadata: Metadata = {
   title: "Beyonder Control Center",

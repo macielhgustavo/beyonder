@@ -179,7 +179,7 @@ describe("AdaptiveModelSelector", () => {
     expect(groq?.predictedQuality).toBeGreaterThan(0.78);
   });
 
-  it("combines BIB prior with real outcomes and exposes evidence", async () => {
+  it("combines BIB prior with real outcomes and exposes evidence even when the quality floor rejects execution", async () => {
     const path = await providerStatePath();
     const telemetry = new CapturingTelemetry();
     const selector = new AdaptiveModelSelector(path, {
@@ -193,7 +193,7 @@ describe("AdaptiveModelSelector", () => {
       })
     });
     const route = await selector.route(task(), "normal");
-    const groq = route.candidates.find((candidate) => candidate.provider === "groq");
+    const groq = route.consideredCandidates?.find((candidate) => candidate.provider === "groq");
     expect(groq?.capabilityEvidence).toMatchObject({ bibScore: 0.9, bibSamples: 6, realScore: 0.6, realSamples: 20, source: "BIB + outcomes" });
     expect(groq?.predictedQuality).toBeGreaterThan(0.6);
     expect(telemetry.events.some((entry) => entry.event === "capability.resolved" && entry.details?.bibScore === 0.9)).toBe(true);

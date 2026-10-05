@@ -87,12 +87,12 @@ export async function runCandidates<T>(input: {
   const start = Date.now();
   const attempts: InferenceAttempt[] = [];
   let monetaryCostUsd = 0, shadowCostUsd = 0;
-  let last: InferenceError = new InferenceError("No compatible candidates are available.", "NO_CANDIDATES");
+  let last: InferenceError = new InferenceError("Adequate models for this mission are unavailable. Available compute is below the required quality floor or policy constraints.", "NEEDS_CAPABILITY");
   const remoteAttemptBudget = Math.max(0, input.remoteAttemptBudget ?? input.maxCandidates ?? 3);
   const localFallbackBudget = Math.max(0, input.localFallbackBudget ?? 1);
   const remoteCandidates = input.candidates.filter((candidate) => !candidate.local).slice(0, remoteAttemptBudget);
   const localCandidates = input.candidates
-    .filter((candidate) => candidate.local && candidate.computeTier === "LOCAL_EMERGENCY" && candidate.eligible !== false)
+    .filter((candidate) => candidate.local && (candidate.computeTier === undefined || candidate.computeTier === "LOCAL_EMERGENCY") && candidate.eligible !== false)
     .slice(0, localFallbackBudget);
   const candidates = [...remoteCandidates, ...localCandidates];
   let remoteAttempts = 0;

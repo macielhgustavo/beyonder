@@ -12,11 +12,17 @@ export default async function TasksPage() {
 
   return (
     <DashboardShell provenance={source.provenance}>
-      <PageHeader title="Trabalhos" eyebrow="EXECUCAO" description="Acompanhe objetivos, candidaturas, entregas e pagamento com estados registrados." />
-      <div className="action-row spaced">
-        <CommandButton payload={{ type: "pauseRuntime" }} tone="danger">Pausar</CommandButton>
-        <CommandButton payload={{ type: "resumeRuntime" }}>Retomar</CommandButton>
-      </div>
+      <PageHeader
+        title="Trabalhos"
+        eyebrow="EXECUCAO"
+        description="Acompanhe objetivos, candidaturas, entregas e pagamento com estados registrados."
+        right={
+          <div className="action-row">
+            <CommandButton payload={{ type: "pauseRuntime" }} tone="danger">Pausar</CommandButton>
+            <CommandButton payload={{ type: "resumeRuntime" }}>Retomar</CommandButton>
+          </div>
+        }
+      />
       <Panel title="Trabalhos recentes" meta={`${tasks.length} visiveis`}>
         {tasks.length ? (
           <div className="task-list">

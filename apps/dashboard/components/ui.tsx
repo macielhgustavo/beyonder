@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 export function PageHeader({ eyebrow, title, description, right }: { eyebrow?: string; title: string; description: string; right?: ReactNode }) {
   return (
     <header className="page-header">
-      <div>
+      <div className="page-heading">
         {eyebrow ? <div className="eyebrow">{eyebrow}</div> : null}
         <h1>{title}</h1>
         <p>{description}</p>
@@ -13,11 +13,11 @@ export function PageHeader({ eyebrow, title, description, right }: { eyebrow?: s
   );
 }
 
-export function Metric({ label, value, hint, tone }: { label: string; value: ReactNode; hint?: string; tone?: "good" | "warn" | "bad" | "neutral" | "info" }) {
+export function Metric({ label, value, hint, tone = "neutral" }: { label: string; value: ReactNode; hint?: string; tone?: "good" | "warn" | "bad" | "neutral" | "info" }) {
   return (
-    <div className="metric">
+    <div className={`metric metric-${tone}`}>
       <div className="metric-label">{label}</div>
-      <div className={`metric-value ${tone ? `tone-${tone}` : ""}`}>{value}</div>
+      <div className={`metric-value tone-${tone}`}>{value}</div>
       {hint ? <div className="metric-hint">{hint}</div> : null}
     </div>
   );
@@ -42,7 +42,7 @@ export function StatusBadge({ children, status = "neutral" }: { children: ReactN
 export function EmptyState({ title, detail }: { title: string; detail: string }) {
   return (
     <div className="empty-state">
-      <div className="empty-line" />
+      <div className="empty-signal" aria-hidden="true"><span /><span /><span /></div>
       <strong>{title}</strong>
       <span>{detail}</span>
     </div>
@@ -51,12 +51,12 @@ export function EmptyState({ title, detail }: { title: string; detail: string })
 
 export function ProvenanceNotice({ provenance }: { provenance: "local" | "mock" | "empty" }) {
   if (provenance === "mock") {
-    return <div className="provenance provenance-demo"><strong>DEMO DATA</strong><span>Visual fixture only. Nothing on this screen is presented as runtime truth.</span></div>;
+    return <div className="provenance provenance-demo"><strong>DEMO / TEST DATA</strong><span>Dados de fixture para validacao visual e funcional. Nada aqui e apresentado como verdade do runtime.</span></div>;
   }
   if (provenance === "empty") {
-    return <div className="provenance"><strong>NO DATA SOURCE</strong><span>The control plane is running without a connected runtime source.</span></div>;
+    return <div className="provenance"><strong>SEM FONTE DE DADOS</strong><span>O Control Center esta aberto, mas ainda nao existe runtime conectado.</span></div>;
   }
-  return <div className="provenance"><strong>LOCAL READ-ONLY</strong><span>Data is read from the local Beyonder SQLite store. Sensitive fields are redacted.</span></div>;
+  return <div className="provenance"><strong>LOCAL / REDACTED</strong><span>Dados lidos do armazenamento local do Beyonder. Campos sensiveis permanecem ocultos.</span></div>;
 }
 
 export function formatUsd(value: number | null) {
@@ -75,5 +75,5 @@ export function formatDuration(value: number | null) {
 
 export function formatTime(value: string | null) {
   if (!value) return "—";
-  return new Intl.DateTimeFormat("en", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(value));
+  return new Intl.DateTimeFormat("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date(value));
 }

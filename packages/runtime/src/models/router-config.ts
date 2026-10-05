@@ -73,7 +73,7 @@ export const ROUTER_CONFIG = {
       explorationRate: 0.005,
       costSensitivity: 1.6,
       qualityBias: 0.85,
-      maxAttempts: 1,
+      maxAttempts: 2,
       maxEscalations: 0,
       maxMonetaryCostUsd: 0,
       maxEffectiveCostUsd: 0.006,
@@ -100,6 +100,11 @@ export function getEconomicRoutingPolicy(state: EconomicState): EconomicRoutingP
   return ROUTER_CONFIG.economicStates[state];
 }
 
+/** Cloud attempts and local emergency fallback have independent caps; cumulative time/cost budgets remain authoritative. */
 export function inferenceAttemptPolicy(state: EconomicState) {
-  return state === "survival" ? { remoteAttemptBudget: 1, localFallbackBudget: 1 } : {};
+  const policy = getEconomicRoutingPolicy(state);
+  return {
+    remoteAttemptBudget: policy.maxAttempts,
+    localFallbackBudget: policy.allowInference ? 1 : 0
+  };
 }

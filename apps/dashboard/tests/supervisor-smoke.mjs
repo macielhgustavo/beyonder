@@ -1,6 +1,6 @@
 import { createRequire } from "node:module";
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, copyFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -32,9 +32,30 @@ async function completedMission(taskId) {
   throw new Error(`Mission ${taskId} did not reach a terminal state`);
 }
 function assert(condition, message) { if (!condition) throw new Error(message); }
+function assertVerifiedMission(mission, taskId, objective) {
+  assert(mission && mission.taskId === taskId && mission.title === objective, "Result must belong to the submitted mission");
+  assert(mission.status === "succeeded" && mission.objectiveStatus === "SUCCEEDED" && mission.executionPhase === "OBJECTIVE_VERIFIED" && mission.resultVerified === true && mission.completedAt, `Mission must finish objective verification: ${JSON.stringify(mission)}`);
+  assert(mission.result === "Objetivo registrado no modo de teste." && mission.fixture === true, "Expected deterministic fixture result, not a semantic model answer");
+  assert(mission.steps.some((step) => step.state === "complete") && mission.attempts.some((attempt) => attempt.phase === "TOOL_EXECUTION" && attempt.status === "SUCCEEDED"), "Persisted execution evidence must exist");
+}
+async function assertMissionCard(card, mission, compact = false) {
+  await card.locator(':scope[data-state="succeeded"][data-objective-status="SUCCEEDED"][data-execution-phase="OBJECTIVE_VERIFIED"][data-result-verified="true"]').waitFor();
+  assert(await card.locator("h2").innerText() === mission.title, "UI must show the submitted objective");
+  if (compact) {
+    // Home's recent list intentionally shows an outcome summary, with full result in detail.
+    assert(await card.getByRole("link", { name: "Abrir missão", exact: true }).getAttribute("href") === `/missions/${mission.taskId}`, "Home must retain a link to the persisted verified result");
+  } else {
+    const result = card.getByRole("region", { name: "Resultado verificado", exact: true }).locator("p");
+    await result.waitFor({ state: "visible" });
+    assert(await result.innerText() === mission.result, "UI must show the actual persisted verified result");
+  }
+}
 async function stopped() { for (let i = 0; i < 60; i++) { if (!(await health()) && !existsSync(join(dir, "supervisor.pid"))) return; await delay(500); } throw new Error("Safe shutdown did not exit or left a stale PID"); }
 let collision;
 let browser;
+let page;
+let browserMission;
+const browserObjective = "Objetivo pelo navegador de teste";
 try {
   collision = createServer((socket) => socket.destroy());
   await new Promise((accept, reject) => { collision.once("error", reject); collision.listen(port, "127.0.0.1", accept); });
@@ -53,26 +74,53 @@ try {
   assert((await command({ type: "resumeRuntime" })).ok, "Resume"); const resumed = await command({ type: "submitObjective", objective: "Resumed work executes" }); assert(resumed.ok && (await completedMission(resumed.taskId)).status === "succeeded", "Resumed work must execute");
   const { chromium } = createRequire(new URL("../../../packages/browser-agent/package.json", import.meta.url))("playwright");
   browser = await chromium.launch({ headless: true });
-  const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+  page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(url);
-  await page.locator("#objective").fill("Objetivo pelo navegador de teste");
+  // A transient missed update must recover through the real polling lifecycle.
+  let missedPoll = false;
+  await page.route("**/api/control/missions/*", async (route) => {
+    if (!missedPoll) { missedPoll = true; await route.fulfill({ status: 503, contentType: "application/json", body: JSON.stringify({ ok: false }) }); }
+    else await route.continue();
+  });
+  await page.locator("#objective").fill(browserObjective);
+  const submitted = page.waitForResponse((response) => response.url().endsWith("/api/control/command") && response.request().method() === "POST");
   await page.getByRole("button", { name: "Iniciar missão", exact: true }).click();
-  await page.locator(".objective-box").getByText("Objetivo atendido", { exact: true }).waitFor();
+  const queued = await (await submitted).json();
+  assert(queued.ok && queued.status === "PLANNING" && queued.taskId, "Browser objective must be durably queued");
+  browserMission = await completedMission(queued.taskId);
+  assertVerifiedMission(browserMission, queued.taskId, browserObjective);
+  const missionSelector = `[data-mission-id="${queued.taskId}"]`;
+  // No navigation or manual refresh may deliver the initial result to Command.
+  await assertMissionCard(page.getByRole("region", { name: "Command Beyonder", exact: true }).locator(missionSelector), browserMission);
+  assert(missedPoll, "Polling recovery must be exercised");
+  assert((await health())?.pid === first.pid, "Supervisor must stay alive through execution and verification");
+  const home = await (await fetch(`${url}/api/control/overview`)).json();
+  assertVerifiedMission(home.recentMissions.find((mission) => mission.taskId === queued.taskId), queued.taskId, browserObjective);
+  await page.reload();
+  await assertMissionCard(page.locator(".home-recent").locator(missionSelector), browserMission, true);
   await page.goto(`${url}/missions`);
-  assert((await page.locator(".mission-list").innerText()).includes("Objetivo pelo navegador de teste"), "Browser mission result must be visible");
+  await assertMissionCard(page.locator(".mission-list").locator(missionSelector), browserMission);
   await page.goto(`${url}/opportunities`);
-  const prepared = page.waitForResponse((response) => response.url().endsWith("/api/control/command") && response.request().method() === "POST");
-  await page.getByRole("button", { name: "Preparar candidatura" }).first().click();
-  assert((await (await prepared).json()).ok, "Browser application preparation");
+  const [prepared] = await Promise.all([
+    page.waitForResponse((response) => response.url().endsWith("/api/control/command") && response.request().method() === "POST"),
+    page.getByRole("button", { name: "Preparar candidatura" }).first().click()
+  ]);
+  const application = await prepared.json();
+  assert(application.ok && application.workRunId && application.approvalId, "Browser application preparation");
   await page.goto(`${url}/decisions`);
+  const approvalSelector = `[data-approval-id="${application.approvalId}"]`;
+  await page.locator(`${approvalSelector}[data-state="PENDING"]`).waitFor();
   page.once("dialog", (dialog) => dialog.accept());
-  const approved = page.waitForResponse((response) => response.url().endsWith("/api/control/command") && response.request().method() === "POST");
-  await page.getByRole("button", { name: "Sim, autorizar" }).first().click();
-  assert((await (await approved).json()).status === "CONSUMED", "Fixture approval must be consumed");
+  const [approved] = await Promise.all([
+    page.waitForResponse((response) => response.url().endsWith("/api/control/command") && response.request().method() === "POST"),
+    page.locator(approvalSelector).locator('button[data-command="approveAction"]').click()
+  ]);
+  assert((await approved.json()).status === "CONSUMED", "Fixture approval must be consumed");
+  await page.locator(`${approvalSelector}[data-state="CONSUMED"]`).waitFor();
   await page.goto(`${url}/tasks`);
-  assert((await page.locator(".main").innerText()).includes("✓ enviada"), "Fixture application state visible");
+  await page.locator(`[data-work-run-id="${application.workRunId}"][data-state="APPLICATION_SENT"][data-application-status="SENT"]`).waitFor();
   await page.screenshot({ path: join(tmpdir(), "beyonder-control-hardening.png"), fullPage: true });
   assert(errors.length === 0, `Browser errors: ${errors.join(", ")}`);
   await page.goto(`${url}/settings`);
@@ -85,8 +133,32 @@ try {
   assert((await (await shutdown).json()).ok, "Shutdown should respond before termination");
   await browser.close(); browser = null; await stopped();
   result = await launch(); assert(result.code === 0, result.output); assert((await health())?.status.global === "READY", "Restart must become READY");
+  const restartedMission = await completedMission(browserMission.taskId);
+  assertVerifiedMission(restartedMission, browserMission.taskId, browserObjective);
+  assert(restartedMission.result === browserMission.result, "Verified result must survive supervisor restart");
+  browser = await chromium.launch({ headless: true });
+  page = await browser.newPage();
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto(url);
+  const restoredCard = page.locator(".home-recent").locator(`[data-mission-id="${browserMission.taskId}"]`);
+  await assertMissionCard(restoredCard, browserMission, true);
+  await restoredCard.getByRole("link", { name: "Abrir missão", exact: true }).click();
+  await assertMissionCard(page.locator(`[data-mission-id="${browserMission.taskId}"]`), browserMission);
+  assert(errors.length === 0, `Browser errors after restart: ${errors.join(", ")}`);
+  await browser.close(); browser = null;
   assert((await command({ type: "safeShutdown" })).ok, "Second shutdown"); await stopped();
-  console.log(JSON.stringify({ status: "PASS", production: true, browserE2E: true, heartbeat: true, duplicateLaunch: true, stalePidRecovery: true, portCollision: true, safeShutdown: true, restart: true, monetaryCostUsd: 0 }, null, 2));
+  console.log(JSON.stringify({ status: "PASS", production: true, browserE2E: true, verifiedPersistedResult: true, homePollingRecovery: true, refreshPersistence: true, restartPersistence: true, heartbeat: true, duplicateLaunch: true, stalePidRecovery: true, portCollision: true, safeShutdown: true, restart: true, monetaryCostUsd: 0 }, null, 2));
+} catch (error) {
+  const evidence = fileURLToPath(new URL("../../../artifacts/supervisor-smoke/", import.meta.url));
+  mkdirSync(evidence, { recursive: true });
+  if (existsSync(join(dir, "control-center.log"))) copyFileSync(join(dir, "control-center.log"), join(evidence, "control-center.log"));
+  if (page && !page.isClosed()) {
+    await page.screenshot({ path: join(evidence, "home.png"), fullPage: true }).catch(() => {});
+    writeFileSync(join(evidence, "page.html"), await page.content().catch(() => "Page unavailable"));
+  }
+  const overview = await fetch(`${url}/api/control/overview`, { signal: AbortSignal.timeout(2000) }).then((response) => response.json()).catch(() => null);
+  writeFileSync(join(evidence, "failure.json"), JSON.stringify({ error: String(error), browserMission, overview, health: await health() }, null, 2));
+  throw error;
 } finally {
   if (browser) await browser.close();
   if (collision?.listening) await new Promise((accept) => collision.close(accept));

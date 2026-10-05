@@ -1288,6 +1288,9 @@ button:disabled {
   border-color: rgba(255, 255, 255, 0.055) !important;
 }
 
+/* Persisted memory can contain long JSON tokens; wrap within the existing grid. */
+.memory-content { min-width: 0; overflow-wrap: anywhere; }
+
 .filter-bar,
 .toolbar {
   border-color: var(--v05-border) !important;

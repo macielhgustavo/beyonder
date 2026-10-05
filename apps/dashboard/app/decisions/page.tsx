@@ -39,7 +39,7 @@ export default async function DecisionsPage() {
 
 function ApprovalCard({ approval, compact = false }: { approval: Awaited<ReturnType<ReturnType<typeof getDashboardDataSource>["getApprovals"]>>[number]; compact?: boolean }) {
   const tone = approval.status === "PENDING" ? "warn" : approval.status === "CONSUMED" || approval.status === "APPROVED" ? "good" : "neutral";
-  return <article className={`approval-card${compact ? " approval-card-compact" : ""}`}>
+  return <article className={`approval-card${compact ? " approval-card-compact" : ""}`} data-approval-id={approval.technicalId} data-state={approval.status}>
     <div className="approval-title">
       <div>
         <div className="eyebrow">{approval.status === "PENDING" ? "EXTERNAL ACTION" : "DECISION"}</div>

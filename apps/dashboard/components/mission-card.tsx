@@ -9,7 +9,14 @@ export function MissionCard({ mission, featured = false }: { mission: TaskView; 
   const needsInput = mission.status === "blocked" && mission.objectiveStatus === "NEEDS_INPUT";
 
   return (
-    <article className={`mission-card${featured ? " mission-card-featured" : ""}${needsInput ? " mission-card-needs-input" : ""}`}>
+    <article
+      className={`mission-card${featured ? " mission-card-featured" : ""}${needsInput ? " mission-card-needs-input" : ""}`}
+      data-mission-id={mission.taskId}
+      data-state={mission.status}
+      data-objective-status={mission.objectiveStatus}
+      data-execution-phase={mission.executionPhase}
+      data-result-verified={mission.resultVerified}
+    >
       <div className="mission-primary">
         <div className="mission-kicker">
           <StatusBadge status={tone}>{missionLabel(mission)}</StatusBadge>

@@ -5,7 +5,7 @@ on:
     branches: [feat/v05-premium-ui]
     paths:
       - 'apps/dashboard/**'
-      - 'packages/browser-agent/scripts/control-center-visual-qa.mjs'
+      - 'packages/browser-agent/scripts/**'
       - '.github/workflows/visual-qa-control-center.yml'
       - 'package.json'
       - 'pnpm-lock.yaml'
@@ -51,7 +51,9 @@ jobs:
           cat /tmp/control-center.log
           exit 1
       - name: Capture desktop and mobile surfaces
-        run: pnpm --filter @beyonder/browser-agent exec node scripts/control-center-visual-qa.mjs
+        run: |
+          node --test packages/browser-agent/scripts/network-failures.test.mjs
+          pnpm --filter @beyonder/browser-agent exec node scripts/control-center-visual-qa.mjs
       - name: Upload visual QA evidence
         if: always()
         uses: actions/upload-artifact@v4

@@ -34,7 +34,7 @@ function WorkRunCard({ run }: { run: WorkRunView }) {
   const requiresAction = ["MANUAL_APPLICATION_REQUIRED", "MANUAL_SUBMISSION_REQUIRED", "AWAITING_APPLICATION_APPROVAL", "AWAITING_SUBMISSION_APPROVAL"].includes(run.state);
   const stages = workStages(run);
 
-  return <article className={`work-run${requiresAction ? " work-run-attention" : ""}`}>
+  return <article className={`work-run${requiresAction ? " work-run-attention" : ""}`} data-work-run-id={run.id} data-state={run.state} data-application-status={run.application?.status}>
     <header className="work-run-head">
       <div>
         <div className="work-run-kicker"><span className="eyebrow">{run.source}</span>{run.fixture ? <span className="demo-badge inline-demo">TEST DATA</span> : null}<StatusBadge status={requiresAction ? "warn" : run.state === "COMPLETED" ? "good" : "info"}>{workState(run.state)}</StatusBadge></div>

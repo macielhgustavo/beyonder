@@ -107,7 +107,7 @@ export function CommandButton({ children, payload, tone = "default", confirm, re
 
   return (
     <span className="button-stack">
-      <button className={`secondary-button button-${tone}`} type="button" disabled={pending} onClick={run}>{pending ? "Processando…" : children}</button>
+      <button className={`secondary-button button-${tone}`} data-command={payload.type} type="button" disabled={pending} onClick={run}>{pending ? "Processando…" : children}</button>
       {message ? <span className="mini-message" role="status">{message}</span> : null}
     </span>
   );

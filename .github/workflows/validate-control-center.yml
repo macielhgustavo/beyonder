@@ -40,3 +40,11 @@ jobs:
       - run: pnpm approvals:smoke
       - run: pnpm work-loop:smoke
       - run: pnpm marketplace:real-smoke
+      - name: Upload supervisor failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: supervisor-smoke-failure-${{ github.sha }}
+          path: artifacts/supervisor-smoke
+          if-no-files-found: ignore
+          retention-days: 14

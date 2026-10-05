@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ComplexityEstimator } from "../intelligence/complexity-estimator.js";
-import type { IntelligenceTask, IntelligenceTaskType, PrimaryIntent } from "../intelligence/contracts.js";
+import type { IntelligenceTask, IntelligenceTaskType, ObjectiveIntent } from "../intelligence/contracts.js";
 import { analyzeGoalContract } from "../intelligence/goal-contract.js";
 import { TaskClassifier } from "../intelligence/task-classifier.js";
 import { resolveQualityFloor } from "./compute-policy.js";
@@ -27,7 +27,7 @@ const journeys: Array<{
   name: string;
   prompt: string;
   expectedType?: IntelligenceTaskType;
-  expectedIntent?: PrimaryIntent;
+  expectedIntent?: ObjectiveIntent;
 }> = [
   { name: "trivial response", prompt: "Answer briefly: what does immutable mean in programming?", expectedType: "chat" },
   { name: "calculation", prompt: "Calculate exactly 17 * 23.", expectedType: "tool-use" },

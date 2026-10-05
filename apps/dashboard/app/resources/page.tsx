@@ -1,6 +1,6 @@
 import { SecretForm } from "../../components/actions";
 import { DashboardShell } from "../../components/shell";
-import { EmptyState, PageHeader, Panel, StatusBadge, formatDuration } from "../../components/ui";
+import { EmptyState, PageHeader, StatusBadge, formatDuration, formatPercent, formatUsd } from "../../components/ui";
 import { getDashboardDataSource } from "../../data";
 
 export const dynamic = "force-dynamic";
@@ -13,47 +13,64 @@ export default async function ResourcesPage() {
     source.getEconomySummary()
   ]);
 
+  const ready = providers.filter((provider) => (provider.status === "READY" || provider.status === "KEYLESS") && provider.verified).length;
+  const unavailable = providers.filter((provider) => ["UNHEALTHY", "RATE_LIMITED", "DISABLED"].includes(provider.status)).length;
+
   return (
     <DashboardShell provenance={source.provenance}>
-      <PageHeader title="Recursos" eyebrow="MODELOS E COMPUTE" description="Quanto de inteligencia esta disponivel, quais modelos foram escolhidos e como custo real e resource cost permanecem separados." />
-      <section className="metric-strip">
-        <div className="metric"><div className="metric-label">Dinheiro real gasto</div><div className="metric-value">{new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(economy.realMoneySpentUsd)}</div></div>
-        <div className="metric"><div className="metric-label">Compute consumido</div><div className="metric-value">{economy.computeConsumed}</div></div>
-        <div className="metric"><div className="metric-label">Shadow/resource cost</div><div className="metric-value">{economy.shadowCostUsd.toFixed(4)}</div></div>
-        <div className="metric"><div className="metric-label">Receita real</div><div className="metric-value">{new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(economy.realRevenueUsd)}</div></div>
-        <div className="metric"><div className="metric-label">Receita simulada</div><div className="metric-value">{new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(economy.simulatedRevenueUsd)}</div></div>
-      </section>
-      <div className="grid-main">
-        <Panel title="Providers" meta={`${providers.length} conhecidos`}>
-          {providers.length ? (
-            <div className="compact-list">
-              {providers.map((provider) => (
-                <div className="compact-row" key={provider.id}>
-                  <div><strong>{provider.name}</strong><span>{provider.note ?? provider.runway.label}</span></div>
-                  <div className="right-stack">
-                    <StatusBadge status={(provider.status === "READY" || provider.status === "KEYLESS") && provider.verified ? "good" : provider.status === "UNKNOWN" || provider.status === "KEYLESS" ? "neutral" : "warn"}>{provider.status}</StatusBadge>
-                    <span>{provider.runway.state}: {provider.runway.label}</span>
-                    <span>{provider.latencyMs ? formatDuration(provider.latencyMs) : "latencia desconhecida"}</span>
-                    {!provider.configured && provider.setupEnvVar ? <SecretForm providerId={provider.id} envVar={provider.setupEnvVar} /> : null}
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : <EmptyState title="Nenhum provider observado" detail="Configure providers quando quiser ampliar a capacidade. O frontend nunca recebe secrets existentes." />}
-        </Panel>
-        <Panel title="Por que este modelo?" meta="historico recente">
-          {decisions.length ? (
-            <div className="compact-list">
-              {decisions.map((decision) => (
-                <details className="decision-mini" key={decision.id}>
-                  <summary>{decision.selectedLabel}</summary>
-                  <ul>{decision.humanWhy.map((why) => <li key={why}>{why}</li>)}</ul>
-                </details>
-              ))}
-            </div>
-          ) : <EmptyState title="Nenhuma decisao de modelo ainda" detail="As decisoes aparecerao quando o Adaptive Router registrar selecoes." />}
-        </Panel>
+      <PageHeader title="Resources" eyebrow="COMPUTE / CAPACITY" description="Capacidade observável primeiro. Quota, saúde, latência e custo só aparecem quando existe verdade registrada." />
+
+      <div className="page-facts resources-facts">
+        <span><strong>{ready}</strong> ready</span>
+        <span className={unavailable ? "fact-attention" : ""}><strong>{unavailable}</strong> degraded / unavailable</span>
+        <span><strong>{providers.length}</strong> providers</span>
+        <span><strong>{providers.filter((provider) => provider.status === "UNKNOWN").length}</strong> unknown</span>
       </div>
+
+      {providers.length ? (
+        <section className="resource-table" aria-label="Provider capacity">
+          <div className="resource-table-head"><span>Provider</span><span>Health</span><span>Runway / quota</span><span>Latency</span><span>Placement</span></div>
+          {providers.map((provider) => {
+            const tone = (provider.status === "READY" || provider.status === "KEYLESS") && provider.verified ? "good" : ["UNHEALTHY", "RATE_LIMITED", "DISABLED"].includes(provider.status) ? "bad" : provider.status === "UNKNOWN" ? "neutral" : "warn";
+            return <article className="resource-row" key={provider.id}>
+              <div className="resource-provider">
+                <div><strong>{provider.name}</strong><span>{provider.note ?? (provider.configured ? "Configured" : "Not configured")}</span></div>
+                <StatusBadge status={tone}>{provider.status}</StatusBadge>
+              </div>
+              <div data-label="Health"><strong>{provider.health == null ? "UNKNOWN" : formatPercent(provider.health)}</strong><span>{provider.verified ? "verified" : "not verified"}</span></div>
+              <div data-label="Runway / quota"><strong className={provider.runway.state === "UNKNOWN" ? "unknown-value" : ""}>{provider.runway.state}</strong><span>{provider.runway.label}</span></div>
+              <div data-label="Latency"><strong className={provider.latencyMs == null ? "unknown-value" : ""}>{provider.latencyMs == null ? "UNKNOWN" : formatDuration(provider.latencyMs)}</strong><span>{provider.lastCheckAt ? "observed" : "not observed"}</span></div>
+              <div data-label="Placement"><strong className="unknown-value">UNKNOWN</strong><span>cloud/local not exposed</span></div>
+              {!provider.configured && provider.setupEnvVar ? (
+                <div className="resource-setup">
+                  <details className="resource-setup-disclosure">
+                    <summary><span>Configure credentials</span><code>{provider.setupEnvVar}</code></summary>
+                    <div className="resource-setup-form"><SecretForm providerId={provider.id} envVar={provider.setupEnvVar} /></div>
+                  </details>
+                </div>
+              ) : null}
+            </article>;
+          })}
+        </section>
+      ) : <EmptyState title="Nenhum provider observado" detail="Configure providers quando quiser ampliar a capacidade. O frontend nunca recebe secrets existentes." />}
+
+      <section className="resource-secondary-grid">
+        <div className="resource-accounting">
+          <div className="section-heading compact-heading"><div><span className="eyebrow">ACCOUNTING</span><h2>Resource truth</h2></div></div>
+          <dl>
+            <div><dt>Dinheiro real gasto</dt><dd>{formatUsd(economy.realMoneySpentUsd)}</dd></div>
+            <div><dt>Compute consumido</dt><dd>{economy.computeConsumed}</dd></div>
+            <div><dt>Shadow/resource cost</dt><dd>{formatUsd(economy.shadowCostUsd)}</dd></div>
+            <div><dt>Receita real</dt><dd>{formatUsd(economy.realRevenueUsd)}</dd></div>
+            <div><dt>Receita simulada</dt><dd>{formatUsd(economy.simulatedRevenueUsd)}</dd></div>
+          </dl>
+        </div>
+
+        <div className="resource-routing">
+          <div className="section-heading compact-heading"><div><span className="eyebrow">ROUTING</span><h2>Recent model decisions</h2></div></div>
+          {decisions.length ? <div className="routing-list">{decisions.slice(0, 8).map((decision) => <details className="routing-row" key={decision.id}><summary><strong>{decision.selectedLabel}</strong><span>{decision.utility == null ? "utility UNKNOWN" : `utility ${formatPercent(decision.utility)}`}</span></summary><ul>{decision.humanWhy.map((why) => <li key={why}>{why}</li>)}</ul></details>)}</div> : <EmptyState title="Nenhuma decisão de modelo" detail="As seleções aparecerão quando o Adaptive Router registrar decisões." />}
+        </div>
+      </section>
     </DashboardShell>
   );
 }

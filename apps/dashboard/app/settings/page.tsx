@@ -1,35 +1,53 @@
 import { CommandButton, ShutdownButton } from "../../components/actions";
 import { DashboardShell } from "../../components/shell";
-import { PageHeader, Panel } from "../../components/ui";
+import { PageHeader } from "../../components/ui";
 
 export const dynamic = "force-dynamic";
 
 export default function SettingsPage() {
   return (
     <DashboardShell>
-      <PageHeader title="Configuracoes" eyebrow="LOCAL" description="Preferencias locais, modo desenvolvedor e controles avancados. Opcoes perigosas ficam fora da Home." />
-      <div className="grid-main">
-        <Panel title="Geral">
-          <div className="settings-list">
-            <div><strong>Iniciar junto com o computador</strong><span>Cria ou remove um autostart user-level. Default OFF.</span><div className="action-row"><CommandButton payload={{ type: "setStartup", enabled: true }}>Ativar</CommandButton><CommandButton payload={{ type: "setStartup", enabled: false }} tone="quiet">Desativar</CommandButton></div></div>
-            <div><strong>Notificacoes</strong><span>Alertas locais aparecem quando a pagina esta aberta.</span></div>
+      <PageHeader title="Settings" eyebrow="LOCAL CONTROL" description="Preferências locais e controles avançados. Operações de risco ficam deliberadamente longe da superfície principal." />
+
+      <div className="settings-stack">
+        <section className="settings-section">
+          <header><div><span className="eyebrow">GENERAL</span><h2>Local behavior</h2></div><p>Configurações do Control Center nesta máquina.</p></header>
+          <div className="settings-rows">
+            <div className="settings-row">
+              <div><strong>Iniciar junto com o computador</strong><span>Cria ou remove um autostart em nível de usuário. Default OFF.</span></div>
+              <div className="action-row"><CommandButton payload={{ type: "setStartup", enabled: true }}>Ativar</CommandButton><CommandButton payload={{ type: "setStartup", enabled: false }} tone="quiet">Desativar</CommandButton></div>
+            </div>
+            <div className="settings-row">
+              <div><strong>Notificações locais</strong><span>Alertas são exibidos enquanto esta página está aberta; nenhuma entrega externa é inferida.</span></div>
+              <span className="settings-readonly">runtime-defined</span>
+            </div>
           </div>
-        </Panel>
-        <Panel title="Developer Mode">
-          <p className="muted">Quando ligado, detalhes tecnicos, IDs e JSON ficam visiveis nos paineis de trace.</p>
-          <div className="action-row">
-            <CommandButton payload={{ type: "setDeveloperMode", enabled: true }}>Ativar</CommandButton>
-            <CommandButton payload={{ type: "setDeveloperMode", enabled: false }} tone="quiet">Desativar</CommandButton>
+        </section>
+
+        <section className="settings-section">
+          <header><div><span className="eyebrow">DEVELOPER</span><h2>Diagnostic detail</h2></div><p>Expõe IDs e traces técnicos sem mudar o comportamento do runtime.</p></header>
+          <div className="settings-rows">
+            <div className="settings-row">
+              <div><strong>Developer Mode</strong><span>Mostra detalhes técnicos, IDs e JSON onde a UI possui disclosure específico.</span></div>
+              <div className="action-row"><CommandButton payload={{ type: "setDeveloperMode", enabled: true }}>Ativar</CommandButton><CommandButton payload={{ type: "setDeveloperMode", enabled: false }} tone="quiet">Desativar</CommandButton></div>
+            </div>
           </div>
-        </Panel>
+        </section>
+
+        <section className="settings-section settings-danger-zone">
+          <header><div><span className="eyebrow">RUNTIME CONTROL</span><h2>Shutdown</h2></div><p>Controles com impacto no processo em execução.</p></header>
+          <div className="settings-rows">
+            <div className="settings-row">
+              <div><strong>Parada segura</strong><span>Solicita shutdown depois de salvar o estado atual.</span></div>
+              <ShutdownButton />
+            </div>
+            <div className="settings-row settings-row-danger">
+              <div><strong>Parada de emergência</strong><span>Pausa imediatamente o Control Center e registra um evento crítico. Use apenas em falha grave.</span></div>
+              <CommandButton payload={{ type: "emergencyStop" }} tone="danger" confirm="Emergency stop pausa imediatamente o Control Center e registra um evento crítico. Use apenas se algo estiver errado.">Parada de emergência</CommandButton>
+            </div>
+          </div>
+        </section>
       </div>
-      <Panel title="Parar Beyonder" className="spaced-panel">
-        <p className="muted">O Beyonder vai parar após salvar o estado atual. A parada de emergência é reservada para falhas graves.</p>
-        <div className="action-row">
-          <ShutdownButton />
-          <CommandButton payload={{ type: "emergencyStop" }} tone="danger" confirm="Emergency stop pausa imediatamente o Control Center e registra um evento critico. Use apenas se algo estiver errado.">Parada de emergência</CommandButton>
-        </div>
-      </Panel>
     </DashboardShell>
   );
 }

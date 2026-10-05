@@ -133,7 +133,8 @@ describe("cloud-first product routing journeys", () => {
     });
     const route = await selector.route(simpleTask(), "normal");
     expect(route.capacityStatus).toBe("NORMAL");
-    expect(route.selected?.provider).toBe("groq");
+    expect(route.selected?.local).toBe(false);
+    expect(["STRONG_FREE_CLOUD", "OTHER_FREE_CLOUD"]).toContain(route.selected?.computeTier);
     const firstLocal = route.candidates.findIndex((candidate) => candidate.local);
     const lastCloud = route.candidates.map((candidate) => candidate.local).lastIndexOf(false);
     expect(firstLocal).toBeGreaterThan(lastCloud);

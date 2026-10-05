@@ -11,6 +11,40 @@ export type IntelligenceTaskType =
   | "memory"
   | "compression";
 
+export type ObjectiveFreshness = "STATIC" | "RECENT" | "CURRENT" | "REALTIME";
+export type EvidenceRequirement = "NONE" | "PREFERRED" | "REQUIRED";
+export type ObjectiveAmbiguity = "LOW" | "MEDIUM" | "HIGH";
+export type ObjectiveQualityTarget = "MINIMAL" | "STANDARD" | "HIGH";
+export type ObjectiveOutcomeStatus = "SUCCEEDED" | "PARTIAL" | "NEEDS_INPUT" | "NEEDS_CAPABILITY" | "BLOCKED" | "FAILED" | "RECONCILIATION_REQUIRED";
+export type ObjectiveResultKind = "SHORT_ANSWER" | "EXPLANATION" | "COMPARISON" | "CODE" | "PLAN" | "STRUCTURED_DATA" | "CALCULATION";
+export type ObjectiveIntent = "FACTUAL" | "RESEARCH" | "COMPARISON" | "CALCULATION" | "CODING" | "REASONING" | "PLANNING" | "EXTRACTION" | "CLASSIFICATION" | "MEMORY" | "OTHER";
+export type RequiredCapability = "web-research" | "browser-read" | "comparison" | "citations" | "calculator" | "coding" | "reasoning" | "planning" | "structured-output" | "memory";
+
+export interface ObjectiveSuccessCriterion {
+  id: string;
+  description: string;
+  required: boolean;
+  kind: "CONTENT" | "EVIDENCE" | "FORMAT" | "CAPABILITY";
+}
+
+/** Persisted, multi-dimensional interpretation of what would actually satisfy the user. */
+export interface GoalContract {
+  version: 1;
+  normalizedObjective: string;
+  primaryIntent: ObjectiveIntent;
+  domain: string;
+  freshness: ObjectiveFreshness;
+  evidenceRequirement: EvidenceRequirement;
+  requiredCapabilities: RequiredCapability[];
+  ambiguityLevel: ObjectiveAmbiguity;
+  clarificationRequired: boolean;
+  successCriteria: ObjectiveSuccessCriterion[];
+  expectedResultKind: ObjectiveResultKind;
+  qualityTarget: ObjectiveQualityTarget;
+  minimumEvidenceSources: number;
+  analysisMethod: "deterministic-high-confidence" | "hybrid";
+}
+
 export interface IntelligenceRequirements {
   directResponse?: boolean;
   toolUse?: boolean;
@@ -33,6 +67,8 @@ export interface IntelligenceTask {
   risk: number;
   estimatedTokens: number;
   requirements: IntelligenceRequirements;
+  /** Present for tasks created through IntelligenceLayer; legacy fixtures are analyzed on use. */
+  goalContract?: GoalContract;
 }
 
 export interface ExecutionPlanStep {

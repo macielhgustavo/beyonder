@@ -7,6 +7,7 @@ import {
   loadConfig,
   validatePlan,
   type Plan,
+  type IntelligenceTask,
   type TaskExecution,
   type ToolDescriptor
 } from "@beyonder/runtime";
@@ -112,6 +113,26 @@ async function dispatch(command: ControlCommand) {
   }
 }
 
+/** Persist a mission identity before its potentially long execution begins. */
+export async function queueControlObjective(objective: string) {
+  if (lifecycle.stopping) throw new Error("Beyonder está encerrando.");
+  const normalized = normalizeObjective(objective);
+  const runtime = controlRuntime();
+  try {
+    await assertNotPaused(runtime);
+    const inspection = await runtime.intelligence.inspect(normalized);
+    const task: IntelligenceTask = { ...inspection.task, id: `task_${nanoid()}` };
+    await saveTask(runtime, { id: task.id, task, state: "PLANNING", executionPhase: "EXECUTING", startedAt: new Date().toISOString(), plan: { objective: normalized, steps: [] }, usage: {}, steps: [] });
+    await runtime.audit.record("info", "mission.created", { taskId: task.id, objective: normalized, goalContract: task.goalContract });
+    return {
+      response: { ok: true, taskId: task.id, status: "PLANNING" },
+      run: () => submitObjective(normalized, task)
+    };
+  } finally {
+    await closeRuntime(runtime);
+  }
+}
+
 async function resumeTask(taskId: string) {
   const runtime = controlRuntime();
   const controller = new AbortController();
@@ -174,9 +195,8 @@ async function setStartup(enabled: boolean) {
   return { ok: true, startup: enabled ? "enabled" : "disabled" };
 }
 
-async function submitObjective(objective: string) {
-  const normalized = objective.trim().replace(/\s+/g, " ");
-  if (normalized.length < 3) throw new Error("Objective is too short.");
+async function submitObjective(objective: string, preparedTask?: IntelligenceTask) {
+  const normalized = normalizeObjective(objective);
   const runtime = controlRuntime();
   const controller = new AbortController();
   lifecycle.controllers.add(controller);
@@ -186,10 +206,13 @@ async function submitObjective(objective: string) {
     await assertNotPaused(runtime);
     await writeHeartbeat(runtime, `Executando: ${normalized}`);
     await runtime.audit.record("info", "control.objective.started", { objective: normalized });
-    const inspection = await runtime.intelligence.inspect(normalized);
-    const task = { ...inspection.task, id: `task_${nanoid()}` };
+    const inspection = preparedTask ? undefined : await runtime.intelligence.inspect(normalized);
+    const task: IntelligenceTask = preparedTask ?? { ...inspection!.task, id: `task_${nanoid()}` };
     taskId = task.id;
-    await saveTask(runtime, { id: task.id, task, state: "PLANNING", startedAt: new Date().toISOString(), plan: { steps: [] }, usage: {}, steps: [] });
+    if (!preparedTask) {
+      await saveTask(runtime, { id: task.id, task, state: "PLANNING", executionPhase: "EXECUTING", startedAt: new Date().toISOString(), plan: { objective: normalized, steps: [] }, usage: {}, steps: [] });
+      await runtime.audit.record("info", "mission.created", { taskId: task.id, objective: normalized, goalContract: task.goalContract });
+    }
     const availableTools = (await runtime.getAvailableTools({ taskId: task.id, economicState: "normal" })).filter((tool) => process.env.BEYONDER_CONTROL_FIXTURE === "1" || tool.id !== "safe-objective");
     const fixturePlan = (): Plan => ( {
       id: `plan_${nanoid()}`,
@@ -226,13 +249,23 @@ async function submitObjective(objective: string) {
     return { ok: outcome.success, taskId: task.id, status: outcome.status, result: outcome.result ?? null, error: outcome.success ? undefined : humanFailure(outcome.failureReason ?? (outcome.status === "BLOCKED" ? "policy blocked" : undefined)) };
   } catch (error) {
     const message = humanFailure(error instanceof Error ? error.message : "Falha na execução.");
-    if (taskId) await saveTask(runtime, { id: taskId, task: { id: taskId, input: normalized }, state: "FAILED", result: message, startedAt: new Date().toISOString(), completedAt: new Date().toISOString(), plan: { steps: [] }, usage: {}, steps: [] });
+    if (taskId) {
+      await saveTask(runtime, { id: taskId, task: preparedTask ?? { id: taskId, input: normalized }, state: "FAILED", objectiveStatus: "FAILED", executionPhase: "EXECUTION_FINISHED", error: message, startedAt: new Date().toISOString(), completedAt: new Date().toISOString(), plan: { objective: normalized, steps: [] }, usage: {}, steps: [] });
+      await runtime.audit.record("warn", "control.objective.failed", { taskId, objective: normalized, status: "FAILED", reason: message });
+      return { ok: false, taskId, status: "FAILED", result: null, error: message };
+    }
     throw new Error(message);
   } finally {
     lifecycle.controllers.delete(controller);
     await writeHeartbeat(runtime, null);
     try { await closeRuntime(runtime); } finally { lifecycle.active--; }
   }
+}
+
+function normalizeObjective(objective: string) {
+  const normalized = objective.trim().replace(/\s+/g, " ");
+  if (normalized.length < 3) throw new Error("Objective is too short.");
+  return normalized;
 }
 
 async function discoverOpportunities(fixture: boolean) {

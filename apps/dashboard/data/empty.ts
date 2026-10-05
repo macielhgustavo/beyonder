@@ -27,6 +27,7 @@ export class EmptyDashboardDataSource implements DashboardDataSource {
       healthChecks: emptyHealthChecks(),
       needsYouCount: 0,
       activeTask: null,
+      recentMissions: [],
       today: { completedTasks: 0, realMoneySpentUsd: 0, realRevenueUsd: 0, simulatedRevenueUsd: 0 },
       economy: await this.getEconomySummary(),
       firstRun: true,
@@ -47,6 +48,7 @@ export class EmptyDashboardDataSource implements DashboardDataSource {
   }
 
   async getTasks(_query?: PageQuery): Promise<TaskView[]> { return []; }
+  async getTask(_taskId: string): Promise<TaskView | null> { return null; }
   async getOpportunities(_query?: PageQuery) { return []; }
   async getApprovals(_query?: PageQuery): Promise<ApprovalView[]> { return []; }
   async getProviders(_query?: PageQuery): Promise<ProviderView[]> { return []; }

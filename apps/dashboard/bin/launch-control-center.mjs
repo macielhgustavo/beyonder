@@ -8,11 +8,19 @@ import { createServer } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 
 const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
-const url = "http://127.0.0.1:4187";
+const port = controlPort(process.env.BEYONDER_CONTROL_PORT);
+const url = `http://127.0.0.1:${port}`;
 const runtimeDir = process.env.BEYONDER_CONTROL_RUNTIME_DIR ?? join(process.env.XDG_RUNTIME_DIR ?? join(homedir(), ".cache"), "beyonder-control");
 const lockPath = join(runtimeDir, "supervisor.pid");
 const logPath = join(runtimeDir, "control-center.log");
 const isSupervisor = process.argv.includes("--supervise");
+function controlPort(raw) {
+  if (raw === undefined || raw === "") return 4187;
+  if (!/^\d+$/.test(raw)) throw new Error("BEYONDER_CONTROL_PORT deve ser uma porta TCP válida.");
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 1024 || parsed > 65535) throw new Error("BEYONDER_CONTROL_PORT deve estar entre 1024 e 65535.");
+  return parsed;
+}
 async function health() {
   try { const response = await fetch(`${url}/api/control/health`, { signal: AbortSignal.timeout(1500) }); const result = await response.json(); return result.service === "beyonder-control-center" ? result : null; } catch { return null; }
 }
@@ -23,8 +31,8 @@ function running() {
 async function freePort() {
   await new Promise((accept, reject) => {
     const server = createServer();
-    server.once("error", () => reject(new Error("Porta 4187 ocupada. Nenhum processo foi encerrado. Libere a porta e tente novamente.")));
-    server.listen(4187, "127.0.0.1", () => server.close(accept));
+    server.once("error", () => reject(new Error(`Porta ${port} ocupada. Nenhum processo foi encerrado. Libere a porta e tente novamente.`)));
+    server.listen(port, "127.0.0.1", () => server.close(accept));
   });
 }
 async function ready() {
@@ -53,7 +61,7 @@ async function supervise() {
   try {
     await freePort();
     if (!existsSync(join(repoRoot, "apps/dashboard/.next/BUILD_ID"))) throw new Error("Execute pnpm control-center:build antes de abrir o Beyonder.");
-    child = spawn(process.execPath, [join(repoRoot, "apps/dashboard/node_modules/next/dist/bin/next"), "start", "--hostname", "127.0.0.1", "--port", "4187"], {
+    child = spawn(process.execPath, [join(repoRoot, "apps/dashboard/node_modules/next/dist/bin/next"), "start", "--hostname", "127.0.0.1", "--port", String(port)], {
       cwd: join(repoRoot, "apps/dashboard"), stdio: "inherit",
       env: { ...process.env, BEYONDER_REPO_ROOT: repoRoot, BEYONDER_NODE_PATH: process.execPath, BEYONDER_DB_PATH: resolve(repoRoot, process.env.BEYONDER_DB_PATH ?? "data/beyonder.sqlite"), NODE_ENV: "production" }
     });

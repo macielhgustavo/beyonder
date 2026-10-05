@@ -8,6 +8,7 @@ export class InvalidTaskStateTransitionError extends Error {
 }
 
 export const TERMINAL_TASK_STATES = new Set<TaskExecutionState>([
+  "EXECUTION_FINISHED",
   "COMPLETED",
   "FAILED",
   "BLOCKED",
@@ -19,10 +20,11 @@ const ALLOWED_TRANSITIONS: Record<TaskExecutionState, readonly TaskExecutionStat
   CREATED: ["PLANNING", "READY", "CANCELLED"],
   PLANNING: ["READY", "FAILED", "BLOCKED", "CANCELLED"],
   READY: ["RUNNING", "CANCELLED", "BUDGET_EXHAUSTED"],
-  RUNNING: ["RUNNING", "WAITING", "RECOVERING", "REPLANNING", "COMPLETED", "FAILED", "BLOCKED", "BUDGET_EXHAUSTED", "CANCELLED"],
+  RUNNING: ["RUNNING", "WAITING", "RECOVERING", "REPLANNING", "EXECUTION_FINISHED", "COMPLETED", "FAILED", "BLOCKED", "BUDGET_EXHAUSTED", "CANCELLED"],
   WAITING: ["RUNNING", "BLOCKED", "CANCELLED"],
   RECOVERING: ["RUNNING", "REPLANNING", "FAILED", "BLOCKED", "BUDGET_EXHAUSTED", "CANCELLED"],
   REPLANNING: ["READY", "RUNNING", "FAILED", "BLOCKED", "BUDGET_EXHAUSTED", "CANCELLED"],
+  EXECUTION_FINISHED: ["RECOVERING", "COMPLETED", "FAILED", "BLOCKED", "BUDGET_EXHAUSTED", "CANCELLED"],
   COMPLETED: [],
   FAILED: [],
   BLOCKED: [],
@@ -41,4 +43,3 @@ export function assertTaskStateTransition(from: TaskExecutionState, to: TaskExec
 export function isTerminalTaskState(state: TaskExecutionState): boolean {
   return TERMINAL_TASK_STATES.has(state);
 }
-

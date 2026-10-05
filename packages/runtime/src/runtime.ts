@@ -17,6 +17,7 @@ import { AgentLoop } from "./agent/agent-loop.js";
 import { createRuntimeToolExecutor, createRuntimeToolRegistry } from "./tools/runtime-tools.js";
 import { AutonomousTaskExecutor } from "./tasks/task-executor.js";
 import { LlmPlanner } from "./tasks/llm-planner.js";
+import { ModelObjectiveVerifier } from "./tasks/model-objective-verifier.js";
 import { createActionPlanner } from "./tasks/action-planner.js";
 import { StateTaskCheckpointStore } from "./tasks/checkpoints.js";
 import { StateTaskExecutionLeaseStore } from "./tasks/execution-lease.js";
@@ -116,7 +117,8 @@ export function createRuntime(config: AppConfig, options: RuntimeOptions = {}): 
     isPaused: options.isPaused,
     actionPlanner: createActionPlanner(modelRouter, tools),
     checkpointStore: checkpoints,
-    executionLeaseStore: executionLeases
+    executionLeaseStore: executionLeases,
+    completionEvaluator: options.fixture ? undefined : new ModelObjectiveVerifier(modelRouter)
   });
   const agent = new AgentLoop(
     config,

@@ -194,4 +194,18 @@ describe("redactSecrets", () => {
       nested: { password: "[REDACTED]", note: "Authorization: Bearer [REDACTED]" }
     });
   });
+
+  it("preserves ordinary truth fields that merely contain the letters pass", () => {
+    expect(redactSecrets({ passed: true, bypassed: false, tokenCount: 3, apiKey: "abc", apikey: "abc-2", accessToken: "def", clientsecret: "secret-2", privatekey: "secret-3", databasePassword: "ghi" })).toEqual({
+      passed: true,
+      bypassed: false,
+      tokenCount: 3,
+      apiKey: "[REDACTED]",
+      apikey: "[REDACTED]",
+      accessToken: "[REDACTED]",
+      clientsecret: "[REDACTED]",
+      privatekey: "[REDACTED]",
+      databasePassword: "[REDACTED]"
+    });
+  });
 });

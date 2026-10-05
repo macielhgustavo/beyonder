@@ -1,5 +1,6 @@
 import { request as httpRequest, type RequestOptions } from "node:http";
 import { request as httpsRequest } from "node:https";
+import { brotliDecompressSync, gunzipSync, inflateSync } from "node:zlib";
 import type { BrowserConnectionTarget } from "./policy.js";
 
 export interface BrowserNetworkRequest {
@@ -57,11 +58,17 @@ export class PinnedHttpTransport implements BrowserNetworkTransport {
           }
           chunks.push(chunk);
         });
-        response.once("end", () => resolve({
-          status: response.statusCode ?? 502,
-          headers: responseHeaders(response.rawHeaders),
-          body: Buffer.concat(chunks)
-        }));
+        response.once("end", () => {
+          try {
+            resolve(decodeBrowserResponse({
+              status: response.statusCode ?? 502,
+              headers: responseHeaders(response.rawHeaders),
+              body: Buffer.concat(chunks)
+            }, this.options.maxResponseBytes ?? 32 * 1024 * 1024));
+          } catch (error) {
+            reject(error);
+          }
+        });
       });
       request.setTimeout(this.options.timeoutMs ?? 20_000, () => request.destroy(new Error("Browser egress request timed out.")));
       request.once("error", reject);
@@ -90,12 +97,32 @@ export function pinnedRequestOptions(target: BrowserConnectionTarget): {
 function sanitizeRequestHeaders(headers: Record<string, string>, host: string, body?: Buffer | null): Record<string, string> {
   const result: Record<string, string> = {};
   for (const [key, value] of Object.entries(headers)) {
-    if (["connection", "proxy-connection", "transfer-encoding", "host"].includes(key.toLowerCase())) continue;
+    if (["connection", "proxy-connection", "transfer-encoding", "host", "accept-encoding"].includes(key.toLowerCase())) continue;
     if (!body && key.toLowerCase() === "content-length") continue;
     result[key] = value;
   }
   result.host = host;
+  result["accept-encoding"] = "identity";
   return result;
+}
+
+export function decodeBrowserResponse(response: BrowserNetworkResponse, maxResponseBytes: number): BrowserNetworkResponse {
+  const encodings = (response.headers["content-encoding"] ?? "").split(",").map((value) => value.trim().toLowerCase()).filter(Boolean);
+  let body = response.body;
+  for (const encoding of encodings.reverse()) {
+    if (encoding === "identity") continue;
+    if (encoding === "gzip" || encoding === "x-gzip") body = gunzipSync(body, { maxOutputLength: maxResponseBytes });
+    else if (encoding === "deflate") body = inflateSync(body, { maxOutputLength: maxResponseBytes });
+    else if (encoding === "br") body = brotliDecompressSync(body, { maxOutputLength: maxResponseBytes });
+    else throw new Error(`Unsupported browser response content encoding '${encoding}'.`);
+  }
+  if (body.length > maxResponseBytes) throw new Error("Browser response exceeded the egress size limit after decoding.");
+  const headers = { ...response.headers };
+  if (encodings.length) {
+    delete headers["content-encoding"];
+    delete headers["content-length"];
+  }
+  return { ...response, headers, body };
 }
 
 function responseHeaders(raw: string[]): Record<string, string> {

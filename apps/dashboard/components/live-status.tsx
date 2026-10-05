@@ -2,17 +2,18 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 export function LiveStatus() {
-  const [status, setStatus] = useState({ label: "Iniciando", detail: "Verificando runtime..." });
+  const [status, setStatus] = useState({ global: "STARTING", label: "Iniciando", detail: "Verificando runtime..." });
   const router = useRouter();
   useEffect(() => {
     let active = true;
     const refresh = async () => {
       try { const response = await fetch("/api/control/health", { cache: "no-store" }); const data = await response.json(); if (active) setStatus(data.status); }
-      catch { if (active) setStatus({ label: "Offline", detail: "Beyonder não está em execução." }); }
+      catch { if (active) setStatus({ global: "OFFLINE", label: "Offline", detail: "Beyonder não está em execução." }); }
     };
     void refresh();
     const timer = setInterval(() => { void refresh(); router.refresh(); }, 3000);
     return () => { active = false; clearInterval(timer); };
   }, [router]);
-  return <div className="global-status" role="status"><strong>{status.label}</strong><span>{status.detail}</span></div>;
+  const tone = status.global === "READY" ? "good" : status.global === "WORKING" ? "info" : status.global === "WAITING_FOR_YOU" || status.global === "PAUSED" ? "warn" : status.global === "ATTENTION_REQUIRED" || status.global === "OFFLINE" ? "bad" : "neutral";
+  return <div className="runtime-ribbon" role="status"><span className={`status status-${tone}`}>{status.label}</span><span>{status.detail}</span></div>;
 }

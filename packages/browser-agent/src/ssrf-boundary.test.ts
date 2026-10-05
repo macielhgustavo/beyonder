@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import { gzipSync } from "node:zlib";
 import { BrowserPolicyEngine, mergeBrowserPolicy, type AddressResolver } from "./policy.js";
 import { proxyBrowserRequest } from "./playwright-session.js";
-import { pinnedRequestOptions, type BrowserNetworkTransport } from "./pinned-transport.js";
+import { decodeBrowserResponse, pinnedRequestOptions, type BrowserNetworkTransport } from "./pinned-transport.js";
 
 class AlternatingResolver implements AddressResolver {
   readonly calls: string[] = [];
@@ -77,5 +78,15 @@ describe("socket-bound SSRF enforcement", () => {
     const options = pinnedRequestOptions(resolved.target);
     expect(options.hostname).toBe("secure.test");
     expect(options.servername).toBe("secure.test");
+  });
+
+  it("decodes compressed upstream bodies before fulfilling Chromium", () => {
+    const decoded = decodeBrowserResponse({ status: 200, headers: { "content-type": "text/html", "content-encoding": "gzip", "content-length": "99" }, body: gzipSync(Buffer.from("<h1>Python 3.14.8</h1>")) }, 1_024);
+    expect(decoded.body.toString()).toBe("<h1>Python 3.14.8</h1>");
+    expect(decoded.headers).toEqual({ "content-type": "text/html" });
+  });
+
+  it("fails closed for unsupported response encodings", () => {
+    expect(() => decodeBrowserResponse({ status: 200, headers: { "content-encoding": "zstd" }, body: Buffer.from("opaque") }, 1_024)).toThrow(/Unsupported/);
   });
 });

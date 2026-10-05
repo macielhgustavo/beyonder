@@ -4,14 +4,15 @@ import Link from "next/link";
 import type { ReactNode } from "react";
 
 const nav = [
-  ["/", "Inicio", "01"],
-  ["/tasks", "Trabalhos", "02"],
-  ["/opportunities", "Oportunidades", "03"],
-  ["/decisions", "Decisoes", "04"],
-  ["/resources", "Recursos", "05"],
-  ["/memory", "Memoria", "06"],
-  ["/audit", "Historico", "07"],
-  ["/settings", "Configuracoes", "08"]
+  ["/", "Início"],
+  ["/missions", "Missões"],
+  ["/opportunities", "Oportunidades"],
+  ["/tasks", "Work"],
+  ["/decisions", "Decisões"],
+  ["/resources", "Recursos"],
+  ["/memory", "Memória"],
+  ["/audit", "Histórico"],
+  ["/settings", "Configurações"]
 ] as const;
 
 export async function DashboardShell({ children, provenance }: { children: ReactNode; provenance?: "local" | "mock" | "empty" }) {
@@ -27,9 +28,8 @@ export async function DashboardShell({ children, provenance }: { children: React
           </div>
         </div>
         <nav className="nav" aria-label="Primary navigation">
-          {nav.map(([href, label, index]) => (
+          {nav.map(([href, label]) => (
             <Link key={href} href={href} className="nav-link">
-              <span className="nav-index">{index}</span>
               <span>{label}</span>
             </Link>
           ))}

@@ -98,6 +98,12 @@ export class ModelRouter {
     return this.completeForCandidate(messages, candidate);
   }
 
+  async completeForStructuredCandidate(messages: ModelMessage[], candidate: ModelCandidate, signal?: AbortSignal, schema?: Record<string, unknown>): Promise<ModelResponse> {
+    if (candidate.provider === "ollama" || this.config.provider === "ollama") return this.completeWithOllama(messages, candidate.model, signal, schema ?? "json");
+    if (this.config.provider === "auto") return this.completeAutoCandidate(messages, candidate, signal, true);
+    return this.completeForPlanningCandidate(messages, candidate, signal);
+  }
+
   async quotas() {
     return this.selector.quotas();
   }
@@ -221,12 +227,13 @@ export class ModelRouter {
     };
   }
 
-  private async completeWithOllama(messages: ModelMessage[], model = this.config.name, signal?: AbortSignal): Promise<ModelResponse> {
+  private async completeWithOllama(messages: ModelMessage[], model = this.config.name, signal?: AbortSignal, format?: "json" | Record<string, unknown>): Promise<ModelResponse> {
+    const deadline = signal ?? AbortSignal.timeout(30_000);
     const response = await fetch(`${this.config.ollamaBaseUrl}/api/chat`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      signal: AbortSignal.any([AbortSignal.timeout(30_000), ...(signal ? [signal] : [])]),
-      body: JSON.stringify({ model, messages, stream: false, think: false, options: { temperature: 0, num_predict: 1200 } })
+      signal: deadline,
+      body: JSON.stringify({ model, messages, stream: false, think: false, ...(format ? { format } : {}), options: { temperature: 0, num_predict: format ? 180 : 1200 } })
     });
     if (!response.ok) throw httpFailure(response.status, await response.text(), response.headers);
     const json = (await response.json()) as { message?: { content?: string; tool_calls?: unknown[] } };
@@ -248,7 +255,7 @@ export class ModelRouter {
     return { content: json.choices?.[0]?.message?.content ?? "", provider: "openai-compatible", model: this.config.name, estimatedCostUsd: 0, raw: json };
   }
 
-  private async completeAutoCandidate(messages: ModelMessage[], candidate: ModelCandidate, signal?: AbortSignal): Promise<ModelResponse> {
+  private async completeAutoCandidate(messages: ModelMessage[], candidate: ModelCandidate, signal?: AbortSignal, structured = false): Promise<ModelResponse> {
     if (candidate.provider === "ollama") return this.completeWithOllama(messages, candidate.model, signal);
     const provider = getProvider(candidate.provider);
     if (!provider?.openAiCompatibleEndpoint) throw new Error(`Provider ${candidate.provider} has no compatible completion endpoint.`);
@@ -267,7 +274,7 @@ export class ModelRouter {
           ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {})
         },
         signal: AbortSignal.any([controller.signal, ...(signal ? [signal] : [])]),
-        body: JSON.stringify({ model: candidate.model, messages, temperature: 0, max_tokens: 800, stream: false })
+        body: JSON.stringify({ model: candidate.model, messages, temperature: 0, max_tokens: structured ? 300 : 800, stream: false, ...(structured ? { response_format: { type: "json_object" } } : {}) })
       });
       if (!response.ok) throw httpFailure(response.status, (await response.text()).replaceAll(apiKey || "\u0000", "[REDACTED]"), response.headers);
       const json = await response.json() as { choices?: Array<{ message?: { content?: string; tool_calls?: unknown[]; function_call?: unknown } }>; usage?: { total_tokens?: number } };

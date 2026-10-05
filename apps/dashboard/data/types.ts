@@ -52,6 +52,7 @@ export interface HomeView {
   healthChecks: HealthCheckView[];
   needsYouCount: number;
   activeTask: TaskView | null;
+  recentMissions: TaskView[];
   today: {
     completedTasks: number;
     realMoneySpentUsd: number;
@@ -80,10 +81,16 @@ export interface TaskView {
   tool?: string;
   fixture?: boolean;
   id: string;
+  taskId?: string;
   title: string;
   humanStatus: string;
   status: TaskStatus;
   result: string | null;
+  resultVerified: boolean;
+  objectiveStatus?: string;
+  executionPhase?: string;
+  confidence: number | null;
+  evidenceSources: string[];
   provider: string | null;
   model: string | null;
   costUsd: number;
@@ -209,6 +216,7 @@ export interface DashboardDataSource {
   getWorkRuns(): Promise<WorkRunView[]>;
   getSourceHealth(): Promise<SourceReliability[]>;
   getTasks(query?: PageQuery): Promise<TaskView[]>;
+  getTask(taskId: string): Promise<TaskView | null>;
   getOpportunities(query?: PageQuery): Promise<OpportunityView[]>;
   getApprovals(query?: PageQuery): Promise<ApprovalView[]>;
   getProviders(query?: PageQuery): Promise<ProviderView[]>;

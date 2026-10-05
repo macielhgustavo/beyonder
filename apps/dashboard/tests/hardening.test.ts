@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createRuntime, DEFAULT_TASK_BUDGET, loadConfig, ModelRouter, LlmPlanner, normalizeOpportunity, ToolSideEffect, type TaskExecution } from "@beyonder/runtime";
-import { runControlCommand } from "../control/commands";
+import { queueControlObjective, runControlCommand } from "../control/commands";
 import { markInterruptedTasks } from "../control/heartbeat";
 import { LocalDashboardDataSource, safeExternalUrl } from "../data/local";
 import { validateCommand } from "../control/validation";
@@ -18,6 +18,16 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); rmSync(dir, { recursive: true, force: true }); });
 
 describe("real operation honesty", () => {
+  it("persists a mission identity before asynchronous execution and preserves it through completion", async () => {
+    vi.stubEnv("BEYONDER_CONTROL_FIXTURE", "1");
+    const queued = await queueControlObjective("Execute a persistent fixture mission");
+    expect(queued.response).toMatchObject({ ok: true, status: "PLANNING", taskId: expect.stringMatching(/^task_/) });
+    const source = new LocalDashboardDataSource(process.env.BEYONDER_DB_PATH);
+    expect(await source.getTask(queued.response.taskId)).toMatchObject({ status: "planning", taskId: queued.response.taskId, resultVerified: false });
+    const completed = await queued.run();
+    expect(completed).toMatchObject({ ok: true, status: "COMPLETED", taskId: queued.response.taskId });
+    expect(await source.getTask(queued.response.taskId)).toMatchObject({ status: "succeeded", taskId: queued.response.taskId, resultVerified: true, objectiveStatus: "SUCCEEDED" });
+  });
   it("delegates to LlmPlanner and real executor with mocked model responses", async () => {
     vi.stubEnv("BEYONDER_MODEL_PROVIDER", "ollama");
     const planner = vi.spyOn(LlmPlanner.prototype, "createPlan");

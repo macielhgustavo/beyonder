@@ -16,10 +16,16 @@ const iso = (minutesAgo: number) => new Date(now - minutesAgo * 60_000).toISOStr
 
 const tasks: TaskView[] = [{
   id: "demo-task",
+  taskId: "task_demo_01",
   title: "Procure oportunidades de programacao que valham a pena.",
   humanStatus: "Concluido. Encontrou uma oportunidade interessante.",
   status: "succeeded",
   result: "1 oportunidade parece valer analise humana.",
+  resultVerified: true,
+  objectiveStatus: "SUCCEEDED",
+  executionPhase: "OBJECTIVE_VERIFIED",
+  confidence: 0.91,
+  evidenceSources: ["https://github.com/example/bounty"],
   provider: "Groq",
   model: "Qwen",
   costUsd: 0,
@@ -125,6 +131,7 @@ export class MockDashboardDataSource implements DashboardDataSource {
       ],
       needsYouCount: 1,
       activeTask: null,
+      recentMissions: tasks,
       today: { completedTasks: 1, realMoneySpentUsd: 0, realRevenueUsd: 0, simulatedRevenueUsd: 3 },
       economy: await this.getEconomySummary(),
       firstRun: false,
@@ -134,6 +141,7 @@ export class MockDashboardDataSource implements DashboardDataSource {
   }
   async getRuntimeStatus() { return (await this.getHome()).status; }
   async getTasks(query?: PageQuery) { return paginate(tasks, query); }
+  async getTask(taskId: string) { return tasks.find((task) => task.taskId === taskId || task.technicalId === taskId || task.id === taskId) ?? null; }
   async getOpportunities(query?: PageQuery) { return paginate(opportunities, query); }
   async getApprovals(query?: PageQuery) { return paginate(approvals, query); }
   async getProviders(query?: PageQuery) { return paginate(providers, query); }

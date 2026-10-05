@@ -185,8 +185,9 @@ function isPlanShape(value: unknown): value is Plan {
 function isPlanStepShape(value: unknown): value is PlanStep {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const step = value as Record<string, unknown>;
-  return Object.keys(step).every((key) => ["id", "description", "status", "kind", "expectedOutcome", "allowedToolCapabilities", "dependencies", "action"].includes(key)) &&
+  return Object.keys(step).every((key) => ["id", "description", "status", "kind", "expectedOutcome", "allowedToolCapabilities", "dependencies", "action", "actionStrategy"].includes(key)) &&
     (step.kind === undefined || step.kind === "TOOL" || step.kind === "DIRECT_RESPONSE") &&
+    (step.actionStrategy === undefined || step.actionStrategy === "DISCOVERED_BROWSER_LINK") &&
     (step.action === undefined || validActionShape(step.action)) &&
     !(step.kind === "DIRECT_RESPONSE" && step.action) &&
     typeof step.id === "string" &&

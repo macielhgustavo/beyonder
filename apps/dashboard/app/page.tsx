@@ -3,6 +3,7 @@ import { CommandButton, ObjectiveBox } from "../components/actions";
 import { DashboardShell } from "../components/shell";
 import { EmptyState, Metric, Panel, ProvenanceNotice, StatusBadge, formatTime, formatUsd } from "../components/ui";
 import { getDashboardDataSource } from "../data";
+import { MissionCard } from "../components/mission-card";
 
 export const dynamic = "force-dynamic";
 
@@ -12,12 +13,11 @@ export default async function HomePage() {
 
   return (
     <DashboardShell provenance={source.provenance}>
-      <header className="home-hero">
+      <header className="home-hero home-hero-simple">
         <div>
           <div className="eyebrow">BEYONDER</div>
           <h1>Control Center</h1>
         </div>
-        <GlobalStatus status={home.status.global} label={home.status.label} detail={home.status.detail} />
       </header>
 
       <ProvenanceNotice provenance={source.provenance} />
@@ -42,36 +42,25 @@ export default async function HomePage() {
 
       <section className="quick-actions" aria-label="Acoes rapidas">
         <CommandButton payload={{ type: "discoverOpportunities" }}>Procurar oportunidades</CommandButton>
-        <Link className="secondary-link" href="/tasks">Continuar trabalhos</Link>
+        <Link className="secondary-link" href="/missions">Continuar missões</Link>
         <Link className="secondary-link" href="/decisions">Ver decisoes pendentes</Link>
         {home.status.global === "PAUSED"
           ? <CommandButton payload={{ type: "resumeRuntime" }}>Retomar Beyonder</CommandButton>
           : <CommandButton payload={{ type: "pauseRuntime" }} tone="danger">Pausar Beyonder</CommandButton>}
       </section>
 
-      <section className="metric-strip metric-strip-6">
-        <Metric label="Agora" value={home.activeTask ? "Trabalhando" : "Livre"} hint={home.activeTask?.title ?? "Nenhuma tarefa em execucao"} tone={home.activeTask ? "info" : "good"} />
+      <section className="metric-strip home-metrics">
         <Metric label="Precisa de voce" value={home.needsYouCount} hint={home.needsYouCount ? "decisoes aguardando" : "nada pendente"} tone={home.needsYouCount ? "warn" : "good"} />
-        <Metric label="Tarefas hoje" value={home.today.completedTasks} hint="concluidas" />
+        <Metric label="Missões hoje" value={home.today.completedTasks} hint="objetivos verificados" />
         <Metric label="Dinheiro gasto" value={formatUsd(home.today.realMoneySpentUsd)} hint="dinheiro real" />
         <Metric label="Receita real" value={formatUsd(home.today.realRevenueUsd)} />
-        <Metric label="Em trabalhos" value={formatUsd(home.economy.estimatedRevenueUsd ?? 0)} hint="estimada; ainda não recebida" />
-        <Metric label="Receita simulada" value={formatUsd(home.today.simulatedRevenueUsd)} hint="nao e caixa real" />
       </section>
 
-      <div className="grid-main">
-        <Panel title="Agora" meta={home.status.heartbeat}>
-          {home.activeTask ? (
-            <div className="live-card">
-              <strong>{home.activeTask.title}</strong>
-              <span>{home.activeTask.humanStatus}</span>
-              <div className="action-row"><Link className="secondary-link" href="/tasks">Ver trabalho</Link></div>
-            </div>
-          ) : (
-            <EmptyState title="Beyonder esta livre" detail="Nenhuma tarefa esta sendo executada agora. Voce pode digitar um objetivo ou procurar oportunidades." />
-          )}
-        </Panel>
+      {home.activeTask ? <section className="home-active"><div className="section-heading"><div><span className="eyebrow">AGORA</span><h2>Missão em andamento</h2></div><Link className="secondary-link" href="/missions">Todas as missões</Link></div><MissionCard mission={home.activeTask} featured /></section> : null}
 
+      {home.recentMissions.length ? <section className="home-recent"><div className="section-heading"><div><span className="eyebrow">CONTINUIDADE</span><h2>Missões recentes</h2></div><Link className="secondary-link" href="/missions">Ver histórico de missões</Link></div><div className="mission-list mission-list-compact">{home.recentMissions.slice(0, 3).map((mission) => <MissionCard key={mission.taskId ?? mission.technicalId ?? mission.id} mission={mission} />)}</div></section> : null}
+
+      <div className="grid-main home-lower-grid">
         <Panel title="Historico recente" meta="audit">
           {home.recentAudit.length ? (
             <div className="event-list">
@@ -82,15 +71,10 @@ export default async function HomePage() {
                 </div>
               ))}
             </div>
-          ) : <EmptyState title="Nada registrado ainda" detail="O historico aparecera conforme objetivos, oportunidades e decisoes forem processados." />}
+          ) : <EmptyState title="Nada registrado ainda" detail="O histórico aparecerá conforme missões, oportunidades e decisões forem processadas." />}
         </Panel>
+        <Panel title="Economia" meta="separação contábil"><div className="economy-lines"><div><span>Em trabalhos</span><strong>{formatUsd(home.economy.estimatedRevenueUsd ?? 0)}</strong><small>estimado, ainda não recebido</small></div><div><span>Receita simulada</span><strong>{formatUsd(home.today.simulatedRevenueUsd)}</strong><small>não é caixa real</small></div></div></Panel>
       </div>
     </DashboardShell>
   );
-}
-
-function GlobalStatus({ status, label, detail }: { status: string; label: string; detail: string }) {
-  const tone = status === "READY" ? "good" : status === "WORKING" ? "info" : status === "WAITING_FOR_YOU" || status === "PAUSED" ? "warn" : status === "ATTENTION_REQUIRED" ? "bad" : "neutral";
-  const icon = status === "READY" ? "●" : status === "WORKING" ? "●" : status === "WAITING_FOR_YOU" ? "●" : status === "PAUSED" ? "⏸" : status === "ATTENTION_REQUIRED" ? "●" : "●";
-  return <div className="global-status"><StatusBadge status={tone}>{icon} {label}</StatusBadge><span>{detail}</span></div>;
 }

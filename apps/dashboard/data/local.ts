@@ -59,6 +59,7 @@ export class LocalDashboardDataSource implements DashboardDataSource {
       healthChecks: await this.getHealthChecks(status),
       needsYouCount: approvals.filter((approval) => approval.status === "PENDING").length,
       activeTask,
+      recentMissions: tasks.slice(0, 5),
       today: {
         completedTasks: tasks.filter((task) => task.status === "succeeded" && task.completedAt?.startsWith(todayPrefix)).length,
         realMoneySpentUsd: economy.realMoneySpentUsd,
@@ -137,6 +138,11 @@ export class LocalDashboardDataSource implements DashboardDataSource {
     } finally {
       db.close();
     }
+  }
+
+  async getTask(taskId: string): Promise<TaskView | null> {
+    const tasks = await this.getTasks({ limit: 200 });
+    return tasks.find((task) => task.taskId === taskId || task.technicalId === taskId || task.resumeTaskId === taskId || task.id === taskId) ?? null;
   }
 
   async getOpportunities(query: PageQuery = {}) {
@@ -383,6 +389,7 @@ function emptyHome(): HomeView {
     healthChecks: emptyHealthChecks(),
     needsYouCount: 0,
     activeTask: null,
+    recentMissions: [],
     today: { completedTasks: 0, realMoneySpentUsd: 0, realRevenueUsd: 0, simulatedRevenueUsd: 0 },
     economy: { realMoneySpentUsd: 0, realRevenueUsd: 0, simulatedRevenueUsd: 0, shadowCostUsd: 0, computeConsumed: "0 tokens", monetaryCostTodayUsd: 0 },
     firstRun: true,
@@ -403,12 +410,17 @@ function taskView(execution: Record<string, unknown>, provenance: "local"): Task
   const steps = Array.isArray(plan.steps) ? plan.steps as Record<string, unknown>[] : [];
   const stepExecutions = Array.isArray(execution.steps) ? execution.steps as Record<string, unknown>[] : [];
   const latestStep = stepExecutions.at(-1);
+  const verification = objectField(execution, "objectiveVerification");
+  const objectiveStatus = stringField(execution, "objectiveStatus");
+  const evidenceSources = browserSources(stepExecutions);
   const latestTool = stepExecutions.map((step) => stringField(objectField(step, "toolCall"), "tool")).filter(Boolean).at(-1);
   const attempts = (Array.isArray(execution.attempts) ? execution.attempts : []) as NonNullable<TaskView["attempts"]>;
   const inferenceAttempts = attempts.filter((attempt) => attempt.phase !== "TOOL_EXECUTION");
-  const resultAttempt = inferenceAttempts.filter((attempt) => attempt.status === "SUCCEEDED").at(-1) ?? inferenceAttempts.at(-1);
+  const resultAttempt = inferenceAttempts.filter((attempt) => attempt.phase === "DIRECT_RESPONSE" && attempt.status === "SUCCEEDED").at(-1)
+    ?? inferenceAttempts.filter((attempt) => attempt.phase !== "OBJECTIVE_VERIFICATION" && attempt.status === "SUCCEEDED").at(-1)
+    ?? inferenceAttempts.filter((attempt) => attempt.phase !== "OBJECTIVE_VERIFICATION").at(-1);
   const failureAttempt = inferenceAttempts.filter((attempt) => attempt.status === "FAILED").at(-1);
-  const phaseLabels: Record<string, string> = { PLANNING: "criação do plano", REPLANNING: "revisão do plano", ACTION_PLANNING: "escolha da ferramenta", DIRECT_RESPONSE: "resposta ao objetivo", TOOL_EXECUTION: "execução da ferramenta" };
+  const phaseLabels: Record<string, string> = { PLANNING: "criação do plano", REPLANNING: "revisão do plano", ACTION_PLANNING: "escolha da ferramenta", DIRECT_RESPONSE: "resposta ao objetivo", OBJECTIVE_VERIFICATION: "verificação independente do objetivo", TOOL_EXECUTION: "execução da ferramenta" };
   const failureLabels: Record<string, string> = { BAD_REQUEST: "recusou a solicitação", AUTH_REQUIRED: "precisa de credenciais válidas", FORBIDDEN: "negou acesso", MODEL_UNAVAILABLE: "não disponibilizou o modelo", RATE_LIMITED: "atingiu o limite de uso", PROVIDER_UNAVAILABLE: "está indisponível", TIMEOUT: "não respondeu no prazo", NETWORK_ERROR: "não pôde ser acessado", INVALID_OUTPUT: "não produziu uma resposta válida", INVALID_ACTION: "não produziu uma ação válida" };
   return {
     canResume: state === "WAITING" && execution.interruptionReason === "PROCESS_RESTART",
@@ -416,10 +428,16 @@ function taskView(execution: Record<string, unknown>, provenance: "local"): Task
     failureSummary: state === "FAILED" ? failureAttempt?.failureClass ? `${failureAttempt.provider} ${failureLabels[failureAttempt.failureClass] ?? "falhou"} durante a ${phaseLabels[failureAttempt.phase] ?? "execução"}. As tentativas permitidas foram encerradas.` : "Não consegui concluir esta tarefa." : undefined,
     attempts: attempts.map((attempt) => ({ ...attempt, error: attempt.error ? redactText(attempt.error) : undefined })),
     id: humanTaskId(stringField(execution, "id")),
+    taskId: stringField(task, "id") || undefined,
     title: stringField(plan, "objective") || stringField(task, "objective") || stringField(task, "input") || "Objetivo sem titulo",
     humanStatus: execution.interruptionReason === "PROCESS_RESTART" ? "Execução interrompida; pronta para retomada segura." : execution.interruptionReason === "PROCESS_RESTART_NO_CHECKPOINT" ? "Execução interrompida antes de um checkpoint recuperável." : execution.interruptionReason ? stringField(execution, "error") || String(execution.interruptionReason) : humanTaskStatus(state, latestStep ? stringField(latestStep, "observationSummary") : undefined),
     status: normalizeTaskStatus(state),
     result: typeof execution.result === "string" ? humanTaskResult(redactText(execution.result)) : null,
+    resultVerified: state === "COMPLETED" && objectiveStatus === "SUCCEEDED",
+    objectiveStatus: objectiveStatus || undefined,
+    executionPhase: stringField(execution, "executionPhase") || undefined,
+    confidence: numberOrUndefined(verification, "confidence") ?? null,
+    evidenceSources,
     provider: resultAttempt?.provider ?? (latestStep ? stringField(objectField(latestStep, "route").selected as Record<string, unknown> | undefined, "provider") || null : null),
     model: resultAttempt?.model ?? (latestStep ? stringField(objectField(latestStep, "route").selected as Record<string, unknown> | undefined, "model") || null : null),
     fixture: execution.fixture === true,
@@ -617,7 +635,7 @@ function normalizeTaskStatus(state: string): TaskView["status"] {
   if (state === "PLANNING") return "planning";
   if (state === "WAITING") return "waiting";
   if (state === "BLOCKED") return "blocked";
-  if (["RUNNING", "READY", "RECOVERING", "REPLANNING"].includes(state)) return "running";
+  if (["RUNNING", "READY", "RECOVERING", "REPLANNING", "EXECUTION_FINISHED"].includes(state)) return "running";
   if (state === "COMPLETED") return "succeeded";
   if (["FAILED", "BLOCKED", "BUDGET_EXHAUSTED"].includes(state)) return "failed";
   if (state === "CANCELLED") return "cancelled";
@@ -632,8 +650,30 @@ function humanTaskStatus(state: string, observation?: string) {
   if (state === "COMPLETED") return "Concluído";
   if (state === "FAILED") return "Falhou. Consulte o resultado e o histórico.";
   if (state === "BLOCKED") return "Bloqueado por politica, verificacao ou entrada humana.";
+  if (state === "EXECUTION_FINISHED") return "Verificando se o objetivo foi realmente atendido.";
   if (state === "RUNNING") return observation ? `Agora: ${redactText(observation)}` : "Executando o plano.";
   return "Aguardando execucao.";
+}
+
+function browserSources(steps: Record<string, unknown>[]) {
+  const sources = new Set<string>();
+  for (const step of steps) {
+    const capabilities = Array.isArray(step.toolCapabilities) ? step.toolCapabilities.map(String) : [];
+    const result = objectField(step, "toolResult");
+    if (!capabilities.includes("browser") || result.success !== true) continue;
+    collectUrls(result.output, sources);
+  }
+  return [...sources].filter((url) => safeExternalUrl(url)).slice(0, 12);
+}
+
+function collectUrls(value: unknown, target: Set<string>, depth = 0): void {
+  if (depth > 7 || value === null || value === undefined) return;
+  if (typeof value === "string") {
+    if (/^https:\/\//i.test(value)) target.add(value);
+    return;
+  }
+  if (Array.isArray(value)) { for (const item of value) collectUrls(item, target, depth + 1); return; }
+  if (typeof value === "object") for (const item of Object.values(value as Record<string, unknown>)) collectUrls(item, target, depth + 1);
 }
 
 function stepState(status: string): TaskStepView["state"] {

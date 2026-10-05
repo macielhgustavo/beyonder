@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { createRuntime } from "../runtime.js";
 import { loadConfig } from "../config/env.js";
 import { DEFAULT_TASK_BUDGET } from "./contracts.js";
-import { httpFailure, parseStructuredObject, runCandidates } from "../models/inference.js";
+import { httpFailure, InferenceError, parseStructuredObject, runCandidates } from "../models/inference.js";
 import { discoverOllama } from "../models/ollama-discovery.js";
 import { TaskClassifier } from "../intelligence/task-classifier.js";
 import { ComplexityEstimator } from "../intelligence/complexity-estimator.js";
@@ -83,13 +83,15 @@ describe("bounded real executor inference pipeline", () => {
     const runtime = setup();
     try {
       const { task } = await runtime.intelligence.inspect("Responda apenas OK.");
-      vi.spyOn(runtime.modelRouter, "completeForPlanningCandidate").mockResolvedValue({ provider: "fixture", model: "first", estimatedCostUsd: 0, content: "OK" });
+      const complete = vi.spyOn(runtime.modelRouter, "completeForPlanningCandidate");
       const tool = vi.spyOn(runtime.toolExecutor, "execute");
       const plan = await runtime.planner.createPlan({ task, objective: task.input, memoryContext: [], availableTools: await runtime.getAvailableTools(), budget: DEFAULT_TASK_BUDGET, economicState: "normal" });
       const outcome = await runtime.taskExecutor.execute({ task, plan, economicState: "normal", completionCriteria: { expectedText: "OK" } });
       expect(outcome).toMatchObject({ status: "COMPLETED", result: "OK" });
       expect(tool).not.toHaveBeenCalled();
       expect(outcome.execution.attempts?.[0]?.phase).toBe("DIRECT_RESPONSE");
+      expect(outcome.execution.attempts?.[0]).toMatchObject({ provider: "deterministic", model: "literal-output-contract" });
+      expect(complete).not.toHaveBeenCalled();
     } finally { runtime.sqlite.close(); }
   });
 
@@ -147,6 +149,18 @@ describe("parsing, budgets and local discovery", () => {
       expect(fetch).toHaveBeenCalledWith("https://api.cloudflare.com/client/v4/accounts/fixture-account/ai/v1/chat/completions", expect.objectContaining({ headers: expect.objectContaining({ authorization: "Bearer fixture-token" }) }));
     } finally { runtime.sqlite.close(); }
   });
+  it("requests provider-native JSON mode for remote structured verification", async () => {
+    vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "fixture-account");
+    vi.stubEnv("CLOUDFLARE_API_TOKEN", "fixture-token");
+    const fetch = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({ choices: [{ message: { content: '{"satisfied":true}' } }] })));
+    vi.stubGlobal("fetch", fetch);
+    const runtime = createRuntime(loadConfig({ BEYONDER_DB_PATH: ":memory:", BEYONDER_MODEL_PROVIDER: "auto" }));
+    try {
+      await runtime.modelRouter.completeForStructuredCandidate([{ role: "user", content: "verify" }], { ...candidate("fixture-model"), provider: "cloudflare-workers-ai" });
+      const body = JSON.parse(String((fetch.mock.calls[0]?.[1] as RequestInit | undefined)?.body));
+      expect(body).toMatchObject({ model: "fixture-model", response_format: { type: "json_object" }, max_tokens: 300, stream: false });
+    } finally { runtime.sqlite.close(); }
+  });
   it.each([400, 401, 403, 404, 429, 500])("classifies HTTP %s without exposing credentials", (status) => {
     const error = httpFailure(status, '{"apiKey":"SENSITIVE","message":"Bearer SENSITIVE"}');
     expect(error.httpStatus).toBe(status);
@@ -163,6 +177,13 @@ describe("parsing, budgets and local discovery", () => {
     const record = vi.fn();
     await expect(runCandidates({ taskId: "t", phase: "ACTION_PLANNING", candidates: [candidate("slow")], messages: [], maxMonetaryCostUsd: 0, maxShadowCostUsd: 0.01, maxDurationMs: 20, complete: () => new Promise(() => {}), validate: (v) => v, record })).rejects.toMatchObject({ failureClass: "TIMEOUT" });
     expect(record.mock.calls.at(-1)?.[0]).toMatchObject({ model: "slow", status: "FAILED", failureClass: "TIMEOUT" });
+  });
+  it("persists bounded invalid model output for diagnosis without executing it", async () => {
+    const record = vi.fn();
+    const content = JSON.stringify({ unexpected: "diagnostic", apiKey: "SECRET" });
+    await expect(runCandidates({ taskId: "t", phase: "OBJECTIVE_VERIFICATION", candidates: [candidate("invalid")], messages: [], maxMonetaryCostUsd: 0, maxShadowCostUsd: 0.01, maxDurationMs: 500, complete: async () => ({ provider: "fixture", model: "invalid", estimatedCostUsd: 0, content }), validate: () => { throw new InferenceError("invalid verdict", "INVALID_OUTPUT"); }, record })).rejects.toMatchObject({ failureClass: "INVALID_OUTPUT" });
+    expect(record.mock.calls.at(-1)?.[0]).toMatchObject({ status: "FAILED", responseBody: expect.stringContaining("diagnostic") });
+    expect(record.mock.calls.at(-1)?.[0].responseBody).not.toContain("SECRET");
   });
   it("keeps persisted pre-tool attribution after runtime restart", async () => {
     const dbPath = join(await mkdtemp(join(tmpdir(), "beyonder-trace-")), "runtime.sqlite");
@@ -181,6 +202,17 @@ describe("parsing, budgets and local discovery", () => {
     expect(entries.flatMap((e) => e.models)).toEqual(["qwen3:4b", "qwen2.5-coder:3b"]);
     expect(entries.every((e) => e.modelMetadata[0]?.costClass === "FREE_CONFIRMED")).toBe(true);
     expect(fetch.mock.calls.every(([url]) => /\/api\/(tags|show)$/.test(url))).toBe(true);
+  });
+  it("passes an explicit JSON schema to local structured verification", async () => {
+    const fetch = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({ message: { content: '{"satisfied":true}' } })));
+    vi.stubGlobal("fetch", fetch);
+    const runtime = createRuntime(loadConfig({ BEYONDER_DB_PATH: ":memory:", BEYONDER_MODEL_PROVIDER: "ollama", BEYONDER_MODEL_NAME: "fixture-local" }));
+    try {
+      const schema = { type: "object", required: ["satisfied"], properties: { satisfied: { type: "boolean" } } };
+      await runtime.modelRouter.completeForStructuredCandidate([{ role: "user", content: "verify" }], { ...candidate("fixture-local"), provider: "ollama", local: true }, undefined, schema);
+      const body = JSON.parse(String((fetch.mock.calls[0]?.[1] as RequestInit | undefined)?.body));
+      expect(body).toMatchObject({ model: "fixture-local", stream: false, think: false, format: schema });
+    } finally { runtime.sqlite.close(); }
   });
   it("tolerates offline Ollama", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("fetch failed")));

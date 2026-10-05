@@ -1,7 +1,9 @@
 "use client";
 
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
+import type { TaskView } from "../data/types";
+import { MissionCard } from "./mission-card";
 
 type Command = Record<string, unknown> & { type: string };
 
@@ -10,17 +12,44 @@ export function ObjectiveBox() {
   const [objective, setObjective] = useState("");
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [taskId, setTaskId] = useState<string | null>(null);
+  const [mission, setMission] = useState<TaskView | null>(null);
+  const [submittedObjective, setSubmittedObjective] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!taskId) return;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const response = await fetch(`/api/control/missions/${encodeURIComponent(taskId)}`, { cache: "no-store" });
+        const payload = await response.json() as { ok?: boolean; mission?: TaskView };
+        if (cancelled || !payload.ok || !payload.mission) return;
+        setMission(payload.mission);
+        if (["succeeded", "failed", "blocked", "cancelled"].includes(payload.mission.status)) {
+          setTaskId(null);
+          setPending(false);
+          router.refresh();
+        }
+      } catch { /* The next poll may recover after a local restart. */ }
+    };
+    void poll();
+    const timer = window.setInterval(() => void poll(), 900);
+    return () => { cancelled = true; window.clearInterval(timer); };
+  }, [taskId, router]);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     setPending(true);
-    setMessage("Executando objetivo...");
+    setMessage("Criando missão...");
     const result = await command({ type: "submitObjective", objective });
-    setPending(false);
-    setMessage(result.ok ? "Objetivo concluído. Resultado registrado em Trabalhos." : String(result.error ?? "Falha ao executar."));
-    if (result.ok) {
+    if (result.ok && typeof result.taskId === "string") {
+      setSubmittedObjective(objective.trim());
+      setTaskId(result.taskId);
+      setMessage("Missão criada. O Beyonder está entendendo o objetivo.");
       setObjective("");
-      router.refresh();
+    } else {
+      setPending(false);
+      setMessage(String(result.error ?? "Não foi possível criar a missão."));
     }
   }
 
@@ -34,10 +63,11 @@ export function ObjectiveBox() {
         placeholder="Ex: procure oportunidades de programacao que valham a pena hoje"
         rows={4}
       />
-      <div className="action-row">
-        <button className="primary-button" type="submit" disabled={pending || objective.trim().length < 3}>{pending ? "Executando..." : "Executar"}</button>
-        {message ? <span className="inline-message">{message}</span> : null}
+      <div className="action-row objective-actions">
+        <button className="primary-button" type="submit" disabled={pending || objective.trim().length < 3}>{pending ? "Missão em andamento" : "Iniciar missão"}</button>
+        {message ? <span className="inline-message" role="status" aria-live="polite">{message}</span> : null}
       </div>
+      {mission ? <MissionCard mission={mission} featured /> : pending && submittedObjective ? <div className="mission-launching" aria-live="polite"><span className="mission-pulse" /><div><strong>{submittedObjective}</strong><span>Preparando a primeira leitura persistida da missão…</span></div></div> : null}
     </form>
   );
 }

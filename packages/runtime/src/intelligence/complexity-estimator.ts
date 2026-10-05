@@ -1,6 +1,7 @@
-import type { IntelligenceRequirements, IntelligenceTaskType } from "./contracts.js";
+import type { GoalContract, IntelligenceRequirements, IntelligenceTaskType } from "./contracts.js";
 import { browserIntent } from "./browser-intent.js";
 import { calculatorIntent } from "./calculator-intent.js";
+import { analyzeGoalContract } from "./goal-contract.js";
 
 export interface ComplexityEstimate {
   complexity: number;
@@ -24,7 +25,7 @@ const TYPE_BASELINE: Record<IntelligenceTaskType, number> = {
 };
 
 export class ComplexityEstimator {
-  estimate(input: string, type: IntelligenceTaskType): ComplexityEstimate {
+  estimate(input: string, type: IntelligenceTaskType, contract: GoalContract = analyzeGoalContract(input, type)): ComplexityEstimate {
     const words = input.trim().split(/\s+/).filter(Boolean).length;
     const lengthScore = Math.min(0.2, words / 1200);
     const structureScore = Math.min(0.14, countMatches(input, /(?:^|\n)\s*(?:[-*]|\d+[.)])\s+/gm) * 0.018);
@@ -49,14 +50,15 @@ export class ComplexityEstimator {
 
     if (type === "browser") requirements.tools = ["browser"];
     if (type === "tool-use") requirements.tools = ["restricted-tool"];
-    requirements.calculator = calculatorIntent(input).required;
-    requirements.browser = browserIntent(input).required || type === "browser" || (type === "research" && /\b(web|online|internet|site|sources|fontes)\b/i.test(input));
+    requirements.calculator = calculatorIntent(input).required || contract.requiredCapabilities.includes("calculator");
+    requirements.browser = browserIntent(input).required || type === "browser" || contract.requiredCapabilities.includes("browser-read");
     if (requirements.calculator) requirements.tools = ["calculation"];
     if (requirements.browser) requirements.tools = [...new Set([...(requirements.tools ?? []), "browser"])];
     requirements.toolUse = Boolean(requirements.tools?.length);
     requirements.directResponse = !requirements.toolUse;
-    requirements.planning = type === "planning" || requirements.toolUse;
-    requirements.coding = type === "coding";
+    requirements.planning = type === "planning" || requirements.toolUse || contract.requiredCapabilities.includes("planning");
+    requirements.coding = type === "coding" || contract.requiredCapabilities.includes("coding");
+    requirements.reasoning = requirements.reasoning || contract.requiredCapabilities.includes("reasoning") || contract.requiredCapabilities.includes("comparison");
 
     return { complexity, risk, estimatedTokens, requirements };
   }

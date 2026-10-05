@@ -155,6 +155,7 @@ intelligence
           risk: inspection.task.risk,
           estimatedTokens: inspection.task.estimatedTokens,
           requirements: inspection.task.requirements,
+          goalContract: inspection.task.goalContract,
           relevantMemories: inspection.relevantMemories.length
         },
         null,

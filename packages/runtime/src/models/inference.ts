@@ -3,7 +3,7 @@ import { redactSecrets, redactString } from "@beyonder/tools";
 import type { ModelCandidate } from "./adaptive-types.js";
 import type { ModelMessage, ModelResponse } from "../types.js";
 
-export type InferencePhase = "PLANNING" | "ACTION_PLANNING" | "DIRECT_RESPONSE" | "TOOL_EXECUTION" | "REPLANNING";
+export type InferencePhase = "PLANNING" | "ACTION_PLANNING" | "DIRECT_RESPONSE" | "TOOL_EXECUTION" | "REPLANNING" | "OBJECTIVE_VERIFICATION";
 export type FailureClass = "BAD_REQUEST" | "AUTH_REQUIRED" | "FORBIDDEN" | "MODEL_UNAVAILABLE" | "RATE_LIMITED" | "PROVIDER_UNAVAILABLE" | "TIMEOUT" | "NETWORK_ERROR" | "INVALID_OUTPUT" | "INVALID_ACTION" | "NO_CANDIDATES" | "BUDGET_EXHAUSTED" | "TOOL_ERROR" | "TOOL_UNAVAILABLE";
 export interface InferenceAttempt {
   id: string; taskId: string; stepId?: string; phase: InferencePhase; attempt: number;
@@ -24,11 +24,18 @@ export function classifyFailure(error: unknown): InferenceError {
   if (/abort|timeout|timed out/i.test(message) || (error instanceof Error && /Abort|Timeout/.test(error.name))) return new InferenceError(message, "TIMEOUT");
   return new InferenceError(message, "NETWORK_ERROR");
 }
+function safeDiagnosticBody(body: string): string {
+  try { return JSON.stringify(redactSecrets(JSON.parse(body))); }
+  catch {
+    return redactString(body).replace(
+      /((?:["']?)(?:api[_-]?key|token|secret|password|authorization|cookie|credential|private[_-]?key)(?:["']?)\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;}]+)/gi,
+      "$1[REDACTED]",
+    );
+  }
+}
 export function httpFailure(status: number, body: string, headers?: Headers): InferenceError {
   const failureClass: FailureClass = status === 400 || status === 422 ? "BAD_REQUEST" : status === 401 ? "AUTH_REQUIRED" : status === 403 ? "FORBIDDEN" : status === 404 ? "MODEL_UNAVAILABLE" : status === 429 || status === 402 ? "RATE_LIMITED" : "PROVIDER_UNAVAILABLE";
-  let safeBody: string;
-  try { safeBody = JSON.stringify(redactSecrets(JSON.parse(body))); }
-  catch { safeBody = redactString(body).replace(/\b(authorization|cookie|credential)\s*[:=]\s*[^\s,;]+/gi, "$1=[REDACTED]"); }
+  const safeBody = safeDiagnosticBody(body);
   const detail = /tool_use_failed|Tool choice is none, but model called a tool/i.test(body) ? " Model attempted a tool call in an inference phase where tools are disabled; it was not executed." : "";
   return new InferenceError(`Provider returned HTTP ${status}.${detail}`, failureClass, status, safeBody.slice(0, 1500), parseRetryAfter(headers?.get("retry-after")));
 }
@@ -71,6 +78,7 @@ export async function runCandidates<T>(input: {
   messages: ModelMessage[]; maxCandidates?: number; maxMonetaryCostUsd: number; maxShadowCostUsd: number; maxDurationMs: number;
   remoteAttemptBudget?: number;
   localFallbackBudget?: number;
+  localFallbackFailureClasses?: FailureClass[];
   complete: (messages: ModelMessage[], candidate: ModelCandidate, signal?: AbortSignal) => Promise<ModelResponse>;
   validate: (response: ModelResponse) => T;
   record?: (attempt: InferenceAttempt) => Promise<void>;
@@ -101,7 +109,7 @@ export async function runCandidates<T>(input: {
     if (survivalFallback && !candidate.local && attempts.filter((a) => a.provider !== "ollama").length >= (input.remoteAttemptBudget ?? 0)) continue;
     if (!survivalFallback && attempts.length >= limit) break;
     if (input.canAttempt && !await input.canAttempt(candidate)) continue;
-    if (survivalFallback && candidate.local && attempts.length && !["BAD_REQUEST", "AUTH_REQUIRED", "FORBIDDEN", "MODEL_UNAVAILABLE", "RATE_LIMITED", "PROVIDER_UNAVAILABLE", "TIMEOUT", "NETWORK_ERROR"].includes(last.failureClass)) break;
+    if (survivalFallback && candidate.local && attempts.length && !(input.localFallbackFailureClasses ?? ["BAD_REQUEST", "AUTH_REQUIRED", "FORBIDDEN", "MODEL_UNAVAILABLE", "RATE_LIMITED", "PROVIDER_UNAVAILABLE", "TIMEOUT", "NETWORK_ERROR"]).includes(last.failureClass)) break;
     if (Date.now() - start >= input.maxDurationMs || monetaryCostUsd + candidate.monetaryCostUsd > input.maxMonetaryCostUsd || shadowCostUsd + candidate.shadowCostUsd > input.maxShadowCostUsd) {
       last = new InferenceError("Inference budget exhausted.", "BUDGET_EXHAUSTED"); break;
     }
@@ -111,8 +119,9 @@ export async function runCandidates<T>(input: {
     shadowCostUsd += candidate.shadowCostUsd;
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let response: ModelResponse | undefined;
     try {
-      const response = await Promise.race([input.complete(input.messages, candidate, controller.signal), new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new InferenceError("Inference deadline exceeded.", "TIMEOUT")); }, Math.max(1, input.maxDurationMs - (Date.now() - start))); })]);
+      response = await Promise.race([input.complete(input.messages, candidate, controller.signal), new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new InferenceError("Inference deadline exceeded.", "TIMEOUT")); }, Math.max(1, input.maxDurationMs - (Date.now() - start))); })]);
       attempt.monetaryCostUsd = response.estimatedCostUsd;
       monetaryCostUsd += response.estimatedCostUsd;
       const value = input.validate(response);
@@ -120,6 +129,7 @@ export async function runCandidates<T>(input: {
       return { value, response, candidate, attempts, monetaryCostUsd, shadowCostUsd };
     } catch (error) {
       last = classifyFailure(error);
+      if (last.failureClass === "INVALID_OUTPUT" && response?.content) last = new InferenceError(last.message, last.failureClass, last.httpStatus, safeDiagnosticBody(response.content).slice(0, 1_500), last.retryAfterAt);
       Object.assign(attempt, { status: "FAILED", failureClass: last.failureClass, httpStatus: last.httpStatus, error: last.message, responseBody: last.responseBody, retryAfterAt: last.retryAfterAt });
     } finally {
       if (timer) clearTimeout(timer);

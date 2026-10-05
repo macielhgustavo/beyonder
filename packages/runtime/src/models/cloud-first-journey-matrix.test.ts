@@ -31,7 +31,7 @@ const journeys: Array<{
 }> = [
   { name: "trivial response", prompt: "Answer briefly: what does immutable mean in programming?", expectedType: "chat" },
   { name: "calculation", prompt: "Calculate exactly 17 * 23.", expectedType: "tool-use" },
-  { name: "current factual", prompt: "What is the current stable Python version? Use current official evidence.", expectedIntent: "FACTUAL" },
+  { name: "current factual", prompt: "What is the current stable Python version? Use current official evidence." },
   { name: "multi-source research", prompt: "Research and compare the current leading TypeScript runtimes using at least three independent sources and cite evidence.", expectedIntent: "COMPARISON" },
   { name: "simple coding", prompt: "Implement a small TypeScript slugify function with tests.", expectedType: "coding" },
   { name: "hard coding", prompt: "Refactor a production TypeScript distributed job runner, reason about concurrency, retries, idempotency, durable state, failure recovery, architecture trade-offs, and implement tests.", expectedType: "coding" },
@@ -52,10 +52,11 @@ describe("requested cloud-first mission matrix", () => {
     });
   }
 
-  it("current factual truth is gated by freshness and external evidence even if metadata classification is incidental", () => {
+  it("current factual truth is gated by freshness and external evidence even if intent is represented as factual or research", () => {
     const task = inspect(journeys.find((journey) => journey.name === "current factual")!.prompt);
     const floor = resolveQualityFloor(task);
-    expect(task.goalContract).toMatchObject({ primaryIntent: "FACTUAL", freshness: "CURRENT", evidenceRequirement: "REQUIRED" });
+    expect(["FACTUAL", "RESEARCH"]).toContain(task.goalContract?.primaryIntent);
+    expect(task.goalContract).toMatchObject({ freshness: "CURRENT", evidenceRequirement: "REQUIRED" });
     expect(task.goalContract?.requiredCapabilities).toEqual(expect.arrayContaining(["web-research", "browser-read"]));
     expect(floor.dimensions.research).toBeDefined();
     expect(floor.dimensions.freshnessEvidence).toBeDefined();

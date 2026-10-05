@@ -17,7 +17,7 @@ import type {
 import type { WorkRunView } from "./types";
 import type { SourceReliability } from "@beyonder/runtime";
 
-const NEEDS_CAPABILITY_MESSAGE = "Modelos adequados para esta missão estão indisponíveis. O compute local disponível está abaixo da qualidade mínima exigida.";
+const NEEDS_CAPABILITY_MESSAGE = "Nenhum modelo disponível atende aos requisitos desta missão. Confira capacidade, qualidade mínima e disponibilidade em Resources; os motivos observados estão no histórico técnico.";
 const CAPACITY_REDUCED_MESSAGE = "Capacidade reduzida: clouds adequados estão indisponíveis. Beyonder está usando compute local de emergência somente porque ele atende ao quality floor desta missão.";
 
 export class CapacityAwareDashboardDataSource implements DashboardDataSource {
@@ -104,10 +104,10 @@ export class CapacityAwareDashboardDataSource implements DashboardDataSource {
 
 export function decorateTaskCapacity(task: TaskView, audit: AuditEventView[]): TaskView {
   const taskEvents = eventsForTask(task, audit);
-  const needsCapability = task.objectiveStatus === "NEEDS_CAPABILITY"
-    || task.attempts?.some((attempt) => attempt.failureClass === "NEEDS_CAPABILITY")
-    || taskEvents.some((event) => event.event === "router.needs_capability");
-  if (needsCapability) {
+  const needsCapability = task.objectiveStatus === "NEEDS_CAPABILITY";
+  // A route can be rejected during an intermediate phase and later recover.
+  // Audit history must never override a verified terminal result or a live lease.
+  if (needsCapability && !(task.status === "succeeded" && task.resultVerified)) {
     return {
       ...task,
       status: "blocked",
@@ -154,6 +154,7 @@ export function decorateModelDecisionCapacity(decision: ModelDecisionView, audit
 }
 
 function capacityStatus(base: RuntimeStatusView, mode: "NEEDS_CAPABILITY" | "CAPACITY_REDUCED"): RuntimeStatusView {
+  if (base.global === "PAUSED" || base.heartbeat !== "ONLINE") return base;
   return {
     ...base,
     global: "DEGRADED",

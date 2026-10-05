@@ -7,14 +7,14 @@ import { MissionCard } from "./mission-card";
 
 type Command = Record<string, unknown> & { type: string };
 
-export function ObjectiveBox() {
+export function ObjectiveBox({ initialMission = null }: { initialMission?: TaskView | null }) {
   const router = useRouter();
   const [objective, setObjective] = useState("");
-  const [pending, setPending] = useState(false);
+  const [pending, setPending] = useState(Boolean(initialMission));
   const [message, setMessage] = useState<string | null>(null);
-  const [taskId, setTaskId] = useState<string | null>(null);
-  const [mission, setMission] = useState<TaskView | null>(null);
-  const [submittedObjective, setSubmittedObjective] = useState<string | null>(null);
+  const [taskId, setTaskId] = useState<string | null>(initialMission?.taskId ?? null);
+  const [mission, setMission] = useState<TaskView | null>(initialMission);
+  const [submittedObjective, setSubmittedObjective] = useState<string | null>(initialMission?.title ?? null);
 
   useEffect(() => {
     if (!taskId) return;
@@ -25,7 +25,8 @@ export function ObjectiveBox() {
         const payload = await response.json() as { ok?: boolean; mission?: TaskView };
         if (cancelled || !payload.ok || !payload.mission) return;
         setMission(payload.mission);
-        if (["succeeded", "failed", "blocked", "cancelled"].includes(payload.mission.status)) {
+        if (["succeeded", "failed", "blocked", "cancelled"].includes(payload.mission.status)
+          && payload.mission.objectiveStatus && payload.mission.completedAt && payload.mission.executionPhase !== "EXECUTING") {
           setTaskId(null);
           setPending(false);
           setMessage(null);

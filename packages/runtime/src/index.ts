@@ -116,5 +116,7 @@ export type {
 
 export { ModelRouter } from "./models/model-router.js";
 export { classifyFailure } from "./models/inference.js";
+export { discoverOllama } from "./models/ollama-discovery.js";
+export { browserEvidence } from "./tasks/browser-evidence.js";
 export type { InferenceAttempt } from "./models/inference.js";
 export { inspectTaskTrace } from "./tasks/trace.js";

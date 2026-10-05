@@ -1,5 +1,6 @@
 import type { IntelligenceTask } from "../intelligence/contracts.js";
 import { analyzeGoalContract } from "../intelligence/goal-contract.js";
+import { parseCalculatorExpression } from "../intelligence/calculator-expression.js";
 import { classifyFailure, InferenceError, parseStructuredObject, runCandidates } from "../models/inference.js";
 import type { ModelRouter } from "../models/model-router.js";
 import { getEconomicRoutingPolicy, inferenceAttemptPolicy } from "../models/router-config.js";
@@ -123,9 +124,11 @@ const VERIFIER_SCHEMA: Record<string, unknown> = {
 function requiresSemanticVerification(execution: TaskExecution, criteria: CompletionCriteria): boolean {
   if (criteria.expectedText !== undefined || criteria.expectedJsonField) return false;
   const contract = execution.task.goalContract ?? analyzeGoalContract(execution.task.input, execution.task.type);
-  if (contract.expectedResultKind === "CALCULATION" || contract.expectedResultKind === "SHORT_ANSWER" && contract.qualityTarget === "MINIMAL") return false;
+  const producer = execution.attempts?.filter((attempt) => attempt.phase === "DIRECT_RESPONSE" && attempt.status === "SUCCEEDED").at(-1);
+  if (contract.expectedResultKind === "CALCULATION" && parseCalculatorExpression(contract.normalizedObjective)) return false;
+  if (contract.expectedResultKind === "SHORT_ANSWER" && contract.qualityTarget === "MINIMAL" && producer?.provider === "deterministic" && producer.model === "literal-output-contract") return false;
   if (contract.evidenceRequirement === "REQUIRED") return true;
-  return ["COMPARISON", "RESEARCH", "REASONING", "CODING", "PLANNING"].includes(contract.primaryIntent);
+  return true;
 }
 
 function semanticVerdict(value: Record<string, unknown>): SemanticVerdict {

@@ -40,6 +40,8 @@ export function analyzeGoalContract(input: string, type: IntelligenceTaskType): 
   const primaryIntent = detectIntent(searchable, type, comparison, researchIntent);
   const evidenceRequirement = currentEvidence || researchIntent || explicitWeb ? "REQUIRED" : primaryIntent === "FACTUAL" || primaryIntent === "COMPARISON" ? "PREFERRED" : "NONE";
   const requiredCapabilities = capabilitiesFor({ searchable, type, primaryIntent, comparison, evidenceRequirement });
+  const jsonOutput = /\b(?:somente|apenas|only|just)\s+(?:valid\s+)?json\b|\b(?:retorne|return|responda|respond|forneca|provide)\s+(?:(?:somente|apenas|only|just|em|in|valid)\s+)*json\b/.test(searchable);
+  if (jsonOutput && !requiredCapabilities.includes("structured-output")) requiredCapabilities.push("structured-output");
   const domain = detectDomain(searchable);
   const ambiguityLevel = detectAmbiguity(searchable, primaryIntent, domain);
   const clarificationRequired = ambiguityLevel === "HIGH" && !canExplainAmbiguity(primaryIntent, domain, searchable);
@@ -49,6 +51,7 @@ export function analyzeGoalContract(input: string, type: IntelligenceTaskType): 
   return {
     version: 1,
     normalizedObjective,
+    ...(jsonOutput ? { outputFormat: "JSON" as const } : {}),
     primaryIntent,
     domain,
     freshness,

@@ -22,6 +22,7 @@ const routes = [
 
 const profiles = [
   { name: "desktop", viewport: { width: 1440, height: 1000 }, isMobile: false },
+  { name: "notebook", viewport: { width: 1366, height: 768 }, isMobile: false },
   { name: "mobile", viewport: { width: 390, height: 844 }, isMobile: true }
 ];
 

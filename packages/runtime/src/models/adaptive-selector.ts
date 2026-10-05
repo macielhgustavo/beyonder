@@ -141,7 +141,7 @@ export class AdaptiveModelSelector {
         ? pair.entry.status === "healthy" ? 0.08 : 0.12
         : performance.failures / performance.samples;
       const reliability = clamp((1 - failureRisk) - (pair.entry.toolCalling === "unknown" && task.requirements.tools?.length ? 0.05 : 0));
-      const latencyMs = health?.latencyMs ?? (performance.avgLatencyMs > 0 ? performance.avgLatencyMs : pair.entry.latencyMs ?? 0);
+      const latencyMs = health?.samples ? health.latencyMs : (performance.avgLatencyMs > 0 ? performance.avgLatencyMs : pair.entry.latencyMs ?? 0);
       const latencyPenalty = clamp(latencyMs / ROUTER_CONFIG.costNormalization.latencyReferenceMs);
       const monetaryCostUsd = 0;
       const effectiveResourceCost = calculateEffectiveResourceCost({
@@ -212,7 +212,7 @@ export class AdaptiveModelSelector {
 
       const capabilityFit = assessCapability(candidate, task, qualityFloor);
       const tier = computeTier(candidate, capabilityFit, qualityFloor);
-      const score = routingScore(candidate, capabilityFit, tier);
+      const score = routingScore(candidate, capabilityFit, tier, qualityFloor);
       const rejectionReasons: string[] = [];
       if (!capabilityFit.passes) rejectionReasons.push(...capabilityFit.gaps.map((gap) => `quality-floor:${gap}`));
       if (tier === "PAID_DISABLED" && !paidCandidateAllowed()) rejectionReasons.push("paid escalation is architecturally represented but disabled in v0.5");

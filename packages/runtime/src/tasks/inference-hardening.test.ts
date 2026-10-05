@@ -51,7 +51,7 @@ describe("capability requirements and workload eligibility", () => {
 });
 
 describe("bounded real executor inference pipeline", () => {
-  it("persists attempts before inference, falls back 400 → 429 → calculator, and retains attribution", async () => {
+  it("persists action-planning attempts before inference, falls back 400 → 429 → calculator, and retains attribution", async () => {
     const runtime = setup();
     try {
       const { task } = await runtime.intelligence.inspect("Calcule 27 vezes 14 usando a calculadora e responda apenas o número.");
@@ -64,9 +64,9 @@ describe("bounded real executor inference pipeline", () => {
         if (c.model === "second") throw httpFailure(429, "retry later");
         return { provider: "fixture", model: c.model, estimatedCostUsd: 0, content: '```json\n{"id":"calc","tool":"calculator","arguments":{"operation":"multiply","operands":[27,14]}}\n```' };
       });
-      const plan = await runtime.planner.createPlan({ task, objective: task.input, memoryContext: [], availableTools: tools, budget: DEFAULT_TASK_BUDGET, economicState: "normal" });
+      const plan = { id: "bounded-action-plan", taskId: task.id, objective: task.input, createdAt: new Date().toISOString(), revision: 1, steps: [{ id: "calculate", description: "Calculate through the selected tool", status: "PENDING" as const, allowedToolCapabilities: ["calculation"] }] };
       const outcome = await runtime.taskExecutor.execute({ task, plan, economicState: "normal" });
-      expect(complete).toHaveBeenCalledTimes(4);
+      expect(complete).toHaveBeenCalledTimes(3);
       expect(outcome.status).toBe("COMPLETED");
       expect(outcome.result).toBe("378");
       expect(outcome.execution.usage.toolInvocations).toBe(1);

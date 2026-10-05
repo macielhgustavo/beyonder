@@ -1,0 +1,59 @@
+name: validate-v05-final-integration
+on:
+  push:
+    branches: [feat/v05-final-integration]
+    paths: ['apps/dashboard/**', 'packages/**', 'docs/**', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'tsconfig*.json', '.github/workflows/validate-v05-final-integration.yml']
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    env:
+      BEYONDER_MODEL_PROVIDER: none
+      BEYONDER_CONTROL_FIXTURE: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm control-center:typecheck
+      - run: pnpm control-center:test
+      - run: pnpm control-center:build
+      - run: pnpm control-center:smoke
+      - run: pnpm control-center:security-smoke
+      - run: pnpm --filter @beyonder/browser-agent exec playwright install --with-deps chromium
+      - run: pnpm control-center:supervisor-smoke
+      - name: Controlled product acceptance through the real Control Center
+        run: pnpm --filter @beyonder/browser-agent exec node scripts/control-center-controlled-acceptance.mjs
+        env:
+          CONTROLLED_ACCEPTANCE_DIR: ${{ github.workspace }}/artifacts/v05-controlled-acceptance
+      - run: pnpm browser:smoke
+      - run: pnpm web:evals:smoke
+      - run: pnpm autonomy:smoke
+      - run: pnpm hardening:smoke
+      - run: pnpm opportunities:smoke
+      - run: pnpm approvals:smoke
+      - run: pnpm work-loop:smoke
+      - run: pnpm marketplace:real-smoke
+      - name: Upload controlled product acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integrated-controlled-acceptance-${{ github.sha }}
+          path: artifacts/v05-controlled-acceptance
+          if-no-files-found: ignore
+      - name: Upload integrated supervisor failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integrated-supervisor-failure-${{ github.sha }}
+          path: artifacts/supervisor-smoke
+          if-no-files-found: ignore

@@ -118,6 +118,21 @@ async function providerStatePath() {
 }
 
 describe("AdaptiveModelSelector", () => {
+  it("uses observed historical latency when operational health has no samples", async () => {
+    const path = await providerStatePathFor({ groq: ["llama-3.3-70b-versatile"], gemini: ["gemini-2.5-flash"] });
+    const selector = new AdaptiveModelSelector(path, {
+      quotaSource: new FixedQuotaSource(),
+      operationalHealth: async () => ({ samples: 0, failures: 0, latencyMs: 0 }),
+      canAttempt: async (candidate) => ["groq", "gemini"].includes(candidate.provider),
+      performanceRepository: new FixedPerformanceRepository({
+        "groq/llama-3.3-70b-versatile/chat": { ...performance("groq", "llama-3.3-70b-versatile", "chat", 25, 0.99, 1), avgLatencyMs: 10000 },
+        "gemini/gemini-2.5-flash/chat": { ...performance("gemini", "gemini-2.5-flash", "chat", 25, 0.86, 1), avgLatencyMs: 1 }
+      })
+    });
+    const route = await selector.route(task({ type: "chat", complexity: 0.1, requirements: { directResponse: true } }), "normal");
+    expect(route.selected?.provider).toBe("gemini");
+    expect(route.candidates.find((candidate) => candidate.provider === "groq")?.latencyPenalty).toBeGreaterThan(0);
+  });
   it("generates and ranks multiple compatible zero-money candidates", async () => {
     const path = await providerStatePath();
     const selector = new AdaptiveModelSelector(path, { quotaSource: new FixedQuotaSource(), random: new SequenceRandom([0.99]) });

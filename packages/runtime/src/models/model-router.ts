@@ -1,13 +1,10 @@
 import type { AppConfig } from "../config/env.js";
 import type { IntelligenceTask, TaskOutcome } from "../intelligence/contracts.js";
 import type { EconomicState, ModelMessage, ModelResponse } from "../types.js";
-import { getProvider, inferRole, isModelMetadataEligibleForWorkload } from "@beyonder/compute";
-import { AdaptiveModelSelector, workloadForTask, type AdaptiveSelectorOptions } from "./adaptive-selector.js";
-import type { ModelCandidate, QuotaSnapshot, RouteDecision, RouterTelemetry } from "./adaptive-types.js";
+import { getProvider } from "@beyonder/compute";
+import { AdaptiveModelSelector, type AdaptiveSelectorOptions } from "./adaptive-selector.js";
+import type { ModelCandidate, RouteDecision, RouterTelemetry } from "./adaptive-types.js";
 import { EmptyPerformanceRepository, type PerformanceRepository } from "./performance-repository.js";
-import { ROUTER_CONFIG } from "./router-config.js";
-import { ShadowCostCalculator } from "./shadow-cost.js";
-import { calculateEffectiveResourceCost, calculateUtility } from "./utility.js";
 import { httpFailure, InferenceError, type InferenceAttempt } from "./inference.js";
 import type { StateStore } from "../memory/state-store.js";
 import { OperationalHealthStore } from "./operational-health.js";
@@ -39,6 +36,9 @@ export class ModelRouter {
       return [...previous.filter((item) => item.id !== attempt.id), attempt];
     });
     if (duplicate) return;
+    if (attempt.status === "STARTED" && attempt.provider === "ollama") {
+      await this.options.telemetry?.record("warn", "router.capacity_reduced", { taskId: attempt.taskId, phase: attempt.phase, attemptId: attempt.id, computeTier: "LOCAL_EMERGENCY", selected: `ollama/${attempt.model}`, reason: "Qualified local emergency attempt after cloud capacity could not serve this phase." });
+    }
     await this.options.telemetry?.record(attempt.status === "FAILED" ? "warn" : "info", `inference.${attempt.status.toLowerCase()}`, { ...attempt });
     await this.operationalHealth.record(attempt);
   }
@@ -54,7 +54,9 @@ export class ModelRouter {
   }
 
   async route(task: IntelligenceTask, economicState: EconomicState): Promise<RouteDecision> {
-    if (this.config.provider === "auto") return this.selector.route(task, economicState);
+    // Explicit local configuration describes discovery, not permission to bypass
+    // the mission floor or displace suitable free cloud capacity.
+    if (this.config.provider === "auto" || this.config.provider === "ollama") return this.selector.route(task, economicState);
     if (this.config.provider === "none" || economicState === "halted") {
       return {
         task,
@@ -85,22 +87,20 @@ export class ModelRouter {
   }
 
   async completeForCandidate(messages: ModelMessage[], candidate: ModelCandidate): Promise<ModelResponse> {
-    if (this.config.provider === "auto") return this.completeAutoCandidate(messages, candidate);
-    if (this.config.provider === "ollama") return this.completeWithOllama(messages, candidate.model);
+    if (this.config.provider === "auto" || this.config.provider === "ollama") return this.completeAutoCandidate(messages, candidate);
     if (this.config.provider === "openai-compatible") return this.completeWithOpenAiCompatible(messages);
     if (this.config.provider === "none") return this.complete(messages);
     throw new InferenceError("No compatible inference provider configured.", "NO_CANDIDATES");
   }
 
   async completeForPlanningCandidate(messages: ModelMessage[], candidate: ModelCandidate, signal?: AbortSignal): Promise<ModelResponse> {
-    if (this.config.provider === "ollama") return this.completeWithOllama(messages, candidate.model, signal);
-    if (this.config.provider === "auto") return this.completeAutoCandidate(messages, candidate, signal);
+    if (this.config.provider === "auto" || this.config.provider === "ollama") return this.completeAutoCandidate(messages, candidate, signal);
     return this.completeForCandidate(messages, candidate);
   }
 
   async completeForStructuredCandidate(messages: ModelMessage[], candidate: ModelCandidate, signal?: AbortSignal, schema?: Record<string, unknown>): Promise<ModelResponse> {
-    if (candidate.provider === "ollama" || this.config.provider === "ollama") return this.completeWithOllama(messages, candidate.model, signal, schema ?? "json");
-    if (this.config.provider === "auto") return this.completeAutoCandidate(messages, candidate, signal, true);
+    if (candidate.provider === "ollama") return this.completeWithOllama(messages, candidate.model, signal, schema ?? "json");
+    if (this.config.provider === "auto" || this.config.provider === "ollama") return this.completeAutoCandidate(messages, candidate, signal, true);
     return this.completeForPlanningCandidate(messages, candidate, signal);
   }
 
@@ -128,103 +128,7 @@ export class ModelRouter {
   }
 
   private async directRoute(task: IntelligenceTask, economicState: EconomicState): Promise<RouteDecision> {
-    if (this.config.provider !== "ollama") return { task, economicState, candidates: [], explored: false, reason: "Explicit endpoint has UNKNOWN_COST; no zero-cost evidence." };
-    if (!isModelMetadataEligibleForWorkload({ id: this.config.name, role: inferRole(this.config.name), capabilities: ["CHAT"] }, workloadForTask(task.type)) || /:cloud$|-cloud$/.test(this.config.name)) return { task, economicState, candidates: [], explored: false, reason: "Configured model is incompatible with this workload or lacks local cost evidence." };
-    if (!await this.canAttempt({ provider: this.config.provider, model: this.config.name })) return { task, economicState, candidates: [], explored: false, reason: "Configured model is in operational cooldown." };
-    const performance = await this.performance.get(this.config.provider, this.config.name, task.type);
-    const quota: QuotaSnapshot = {
-      provider: this.config.provider,
-      model: this.config.name,
-      requestsPerMinute: "unknown",
-      requestsPerDay: "unknown",
-      tokensPerMinute: "unknown",
-      tokensPerDay: "unknown",
-      requestQuotaTotal: "unknown",
-      requestQuotaRemaining: "unknown",
-      tokenQuotaTotal: "unknown",
-      tokenQuotaRemaining: "unknown",
-      resetAt: "unknown",
-      health: "healthy",
-      lastUpdatedAt: "unknown"
-    };
-    const predictedQuality = performance.samples > 0 ? performance.avgEvaluationScore : ROUTER_CONFIG.qualityClassDefaults.unknown;
-    const realScore = performance.samples > 0 ? Math.min(1, Math.max(0, (performance.avgEvaluationScore + performance.successRate) / 2)) : null;
-    const failureRisk = performance.samples > 0 ? performance.failures / performance.samples : 0.08;
-    const reliability = 1 - failureRisk;
-    const latencyPenalty = performance.avgLatencyMs > 0
-      ? Math.min(1, performance.avgLatencyMs / ROUTER_CONFIG.costNormalization.latencyReferenceMs)
-      : 0;
-    const shadowCostUsd = this.config.provider === "ollama"
-      ? 0
-      : new ShadowCostCalculator().calculate({ quota, economicState, alternativesAvailable: 0 }).shadowCostUsd;
-    const effectiveResourceCost = calculateEffectiveResourceCost({
-      monetaryCostUsd: 0,
-      shadowCostUsd,
-      latencyPenalty
-    });
-    const utility = calculateUtility({
-      predictedQuality,
-      historicalSuccess: performance.successRate,
-      reliability,
-      monetaryCostUsd: 0,
-      shadowCostUsd,
-      latencyPenalty,
-      failureRisk
-    }, economicState);
-    const candidate: ModelCandidate = {
-      local: true,
-      externalQuotaConsumption: false,
-      costClass: "FREE_CONFIRMED",
-      provider: this.config.provider,
-      model: this.config.name,
-      capabilities: ["text"],
-      contextWindow: "unknown",
-      toolCalling: "unknown",
-      predictedQuality,
-      historicalSuccess: performance.successRate,
-      reliability,
-      monetaryCostUsd: 0,
-      shadowCostUsd,
-      latencyPenalty,
-      failureRisk,
-      effectiveResourceCost,
-      utility,
-      quota,
-      performance,
-      benchmarkCapability: null,
-      capabilityEvidence: {
-        bibScore: null,
-        bibSamples: 0,
-        realScore,
-        realSamples: performance.samples,
-        predictedScore: predictedQuality,
-        source: performance.samples > 0 ? "outcomes" : "metadata"
-      },
-      explanation: {
-        positives: [
-          { signal: `${task.type} capability`, value: predictedQuality },
-          { signal: "historical success", value: performance.successRate },
-          { signal: "explicit provider configuration", value: this.config.provider }
-        ],
-        penalties: [{ signal: "shadow cost", value: shadowCostUsd }],
-        constraints: [`economic-state=${economicState}`]
-      }
-    };
-    await this.options.telemetry?.record("info", "router.selected", {
-      taskId: task.id,
-      provider: candidate.provider,
-      model: candidate.model,
-      utility: candidate.utility,
-      explicitProvider: true
-    });
-    return {
-      task,
-      economicState,
-      candidates: [candidate],
-      selected: candidate,
-      explored: false,
-      reason: "explicit provider configuration preserved"
-    };
+    return { task, economicState, candidates: [], explored: false, capacityStatus: "NEEDS_CAPABILITY", reason: "Explicit endpoint has UNKNOWN_COST; no zero-cost evidence." };
   }
 
   private async completeWithOllama(messages: ModelMessage[], model = this.config.name, signal?: AbortSignal, format?: "json" | Record<string, unknown>): Promise<ModelResponse> {

@@ -9,6 +9,7 @@ import { DeterministicPlanner, validatePlan } from "./planner.js";
 import { classifyFailure, InferenceError, parseStructuredObject, runCandidates } from "../models/inference.js";
 import { getEconomicRoutingPolicy, inferenceAttemptPolicy } from "../models/router-config.js";
 import { isReadOnlyBrowserTool } from "./browser-evidence.js";
+import { parseCalculatorExpression } from "../intelligence/calculator-expression.js";
 
 export interface LlmPlannerOptions {
   modelRouter: ModelRouter;
@@ -72,6 +73,13 @@ export class LlmPlanner implements Planner {
 
   private async planWithCandidates(request: PlanRequest): Promise<LlmPlannerResult> {
     this.lastResult = undefined;
+    const expression = parseCalculatorExpression(request.objective);
+    if (expression && request.availableTools.some((tool) => tool.id === "calculator")) {
+      return { plan: { id: `plan_${request.task.id}`, taskId: request.task.id, objective: request.objective, revision: 1, createdAt: new Date().toISOString(), steps: [
+        { id: "calculate", description: "Evaluate the complete arithmetic expression with the deterministic calculator.", status: "PENDING", action: { id: `calc_${request.task.id}`, tool: "calculator", arguments: expression } },
+        { id: "respond", kind: "DIRECT_RESPONSE", description: "Present the observed calculator result.", status: "PENDING" }
+      ] }, provider: "deterministic", model: "calculator-expression-plan", usedFallback: false };
+    }
     const browserRequired = request.task.requirements.browser || request.task.requirements.tools?.includes("browser");
     const browserTools = request.availableTools.filter(isReadOnlyBrowserTool);
     if (browserRequired && !browserTools.length) throw new InferenceError("Browser reading is required but no compatible read-only browser tool is available.", "TOOL_UNAVAILABLE");

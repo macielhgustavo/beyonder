@@ -1,4 +1,5 @@
 import { nanoid } from "nanoid";
+import { parseCalculatorExpression } from "../intelligence/calculator-expression.js";
 import type { ToolCall, ToolExecutor } from "@beyonder/tools";
 import type { IntelligenceTask, TaskOutcome } from "../intelligence/contracts.js";
 import type { MemoryEngine, RetrievedMemory } from "../memory/memory-engine.js";
@@ -210,6 +211,8 @@ export class AutonomousTaskExecutor {
     }
 
     if (!execution.completedAt) await this.finish(execution, execution.state, execution.error ?? execution.steps.at(-1)?.toolResult?.error?.message);
+    // The verifier must see the actual latest producer before excluding it.
+    await this.syncInferenceUsage(execution);
     let evaluation = await this.completionEvaluator.evaluate(execution, request.completionCriteria);
     let recoveryAttempted = false;
     if (!evaluation.taskCompleted) {
@@ -246,7 +249,7 @@ export class AutonomousTaskExecutor {
 
     const startedAt = this.now();
     if (step.kind === "DIRECT_RESPONSE") { await this.directResponse(execution, step, request); return; }
-    const route = await this.options.modelRouter?.route(workloadTask(execution.task, step), request.economicState);
+    const route = step.action ? undefined : await this.options.modelRouter?.route(workloadTask(execution.task, step), request.economicState);
     const memory = await this.retrieveMemory(execution.task, step);
     const availableTools = (await this.availableTools(execution, request.economicState)).filter((tool) => !step.allowedToolCapabilities?.length || step.allowedToolCapabilities.some((capability) => tool.capabilities.includes(capability)));
 
@@ -462,7 +465,7 @@ export class AutonomousTaskExecutor {
     }
     const calculator = observations.filter((entry) => entry.toolCall?.tool === "calculator").at(-1);
     const number = (calculator?.toolResult?.output as { value?: unknown } | undefined)?.value;
-    if (typeof number === "number" && /(?:apenas|somente|only|just).*(?:número|numero|number)/i.test(execution.task.input)) {
+    if (typeof number === "number" && (parseCalculatorExpression(execution.task.input) || /(?:apenas|somente|only|just).*(?:número|numero|number)/i.test(execution.task.input))) {
       const attempt = { id: `response_${this.id()}`, taskId: execution.task.id, stepId: step.id, phase: "DIRECT_RESPONSE" as const, attempt: 1, provider: "deterministic", model: "tool-result-format", startedAt: new Date().toISOString(), status: "STARTED" as const, monetaryCostUsd: 0, shadowCostUsd: 0 };
       await this.options.modelRouter?.recordAttempt?.(attempt);
       entry.status = "COMPLETED"; entry.completedAt = new Date().toISOString(); entry.observationSummary = String(number); step.status = "COMPLETED";
@@ -474,7 +477,7 @@ export class AutonomousTaskExecutor {
     if (!router) throw new InferenceError("No model router configured.", "NO_CANDIDATES");
     const route = await router.route({ ...execution.task, type: execution.task.requirements.toolUse ? "chat" : execution.task.type, requirements: { ...execution.task.requirements, tools: [], toolUse: false, directResponse: true } }, request.economicState);
     const candidates = recovery?.exclude ? route.candidates.filter((candidate) => candidate.provider !== recovery.exclude?.provider || candidate.model !== recovery.exclude?.model) : route.candidates;
-    if (!candidates.length) throw new InferenceError("No alternate zero-money model is available for objective recovery.", "NO_CANDIDATES");
+    if (!candidates.length) throw new InferenceError("No quality-qualified zero-money model is available for this objective phase.", "NEEDS_CAPABILITY");
     entry.route = { reason: recovery ? `${route.reason}; objective recovery excludes the insufficient producer` : route.reason, explored: route.explored, candidates: candidates.length, selected: candidates[0] };
     await this.options.checkpointStore?.save(execution);
     const budget = remainingBudget(execution);
@@ -756,7 +759,10 @@ function requestedLiteralResponse(input: string): string | undefined {
   const match = normalized.match(/^(?:responda|reply|answer)\s+(?:apenas|somente|only|just)(?:\s+(?:com|with))?\s+(?:a\s+palavra\s+|the\s+word\s+)?["“”']?(.+?)["“”']?[.!?]?$/i);
   const literal = match?.[1]?.trim();
   if (!literal || literal.length > 120 || /\b(?:explique|explain|porque|because)\b/i.test(literal)) return undefined;
-  return literal.replace(/[.!?]+$/, "").trim();
+  const literalValue = literal.replace(/[.!?]+$/, "").trim();
+  const quoted = literalValue.match(/^(["'])([\s\S]*)\1$/);
+  if (quoted) return quoted[2];
+  return /^\S+$/.test(literalValue) ? literalValue : undefined;
 }
 
 function discoveredBrowserLinkCall(context: StepContext, execution: TaskExecution): ToolCall | undefined {

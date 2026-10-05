@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { decorateModelDecisionCapacity, decorateTaskCapacity, NEEDS_CAPABILITY_MESSAGE } from "../data/capacity-aware";
-import type { AuditEventView, ModelDecisionView, TaskView } from "../data/types";
+import { CapacityAwareDashboardDataSource, decorateModelDecisionCapacity, decorateTaskCapacity, NEEDS_CAPABILITY_MESSAGE } from "../data/capacity-aware";
+import { MockDashboardDataSource } from "../data/mock";
+import type { AuditEventView, DashboardDataSource, ModelDecisionView, TaskView } from "../data/types";
 
 function task(overrides: Partial<TaskView> = {}): TaskView {
   return {
@@ -57,6 +58,25 @@ function decision(): ModelDecisionView {
 }
 
 describe("capacity-aware Control Center", () => {
+  it.each(["PAUSED", "OFFLINE", "DEGRADED"] as const)("preserves runtime %s even when a past mission needs capability", async (mode) => {
+    const inner: DashboardDataSource = new MockDashboardDataSource();
+    const home = await inner.getHome();
+    const status = { ...home.status, global: mode, heartbeat: mode };
+    inner.getHome = async () => ({ ...home, status, recentMissions: [task()] });
+    inner.getRuntimeStatus = async () => status;
+    inner.getTasks = async () => [task()];
+    inner.getAuditEvents = async () => [];
+    const source = new CapacityAwareDashboardDataSource(inner);
+    expect((await source.getHome()).status).toEqual(status);
+    expect(await source.getRuntimeStatus()).toEqual(status);
+  });
+  it("does not turn an in-flight route rejection into a terminal mission or hide a recovered verified result", () => {
+    const events = [audit("router.needs_capability", { taskId: "task-1" })];
+    const running = task({ status: "running", objectiveStatus: undefined, executionPhase: "EXECUTING" });
+    expect(decorateTaskCapacity(running, events).status).toBe("running");
+    const recovered = task({ status: "succeeded", objectiveStatus: "SUCCEEDED", resultVerified: true });
+    expect(decorateTaskCapacity(recovered, events)).toEqual(recovered);
+  });
   it("shows NEEDS_CAPABILITY as an explicit blocked capacity state instead of generic failure", () => {
     const view = decorateTaskCapacity(task(), [
       audit("router.needs_capability", { taskId: "task-1", qualityFloor: { level: "HIGH", minimumOverall: 0.77 } })
@@ -64,7 +84,8 @@ describe("capacity-aware Control Center", () => {
     expect(view.status).toBe("blocked");
     expect(view.humanStatus).toBe(NEEDS_CAPABILITY_MESSAGE);
     expect(view.failureSummary).toBe(NEEDS_CAPABILITY_MESSAGE);
-    expect(view.humanStatus).toContain("compute local disponível está abaixo da qualidade mínima exigida");
+    expect(view.humanStatus).toContain("Nenhum modelo disponível atende aos requisitos");
+    expect(view.humanStatus).not.toContain("compute local disponível está abaixo");
   });
 
   it("marks qualified local airbag usage as capacity reduced without downgrading a verified success", () => {

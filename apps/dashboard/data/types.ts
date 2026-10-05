@@ -144,6 +144,7 @@ export interface ApprovalView {
 }
 
 export interface ProviderView {
+  placement?: "CLOUD" | "LOCAL";
   id: string;
   name: string;
   status: ProviderStatus;

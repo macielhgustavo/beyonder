@@ -140,16 +140,21 @@ export function computeTier(candidate: ModelCandidate, fit: CandidateCapabilityF
     : "OTHER_FREE_CLOUD";
 }
 
-export function routingScore(candidate: ModelCandidate, fit: CandidateCapabilityFit, tier: ComputeTier): number {
+export function routingScore(candidate: ModelCandidate, fit: CandidateCapabilityFit, tier: ComputeTier, floor?: QualityFloor): number {
   const tierBias = tier === "STRONG_FREE_CLOUD" ? 0.12 : tier === "OTHER_FREE_CLOUD" ? 0.04 : tier === "LOCAL_EMERGENCY" ? -0.18 : -1;
+  // Eligibility has already established every required dimension. For minimal
+  // objectives, surplus quality beyond generous headroom should not dominate
+  // useful latency/resource savings within the same cloud tier.
+  const minimal = floor?.level === "MINIMAL";
+  const ceiling = minimal ? Math.min(1, floor.minimumOverall + 0.15) : 1;
   return Number((
-    fit.overall * 0.46
-    + candidate.predictedQuality * 0.2
+    Math.min(fit.overall, ceiling) * 0.46
+    + Math.min(candidate.predictedQuality, ceiling) * 0.2
     + candidate.reliability * 0.12
     + candidate.historicalSuccess * 0.08
     + candidate.utility * 0.08
-    - candidate.latencyPenalty * 0.025
-    - Math.min(1, candidate.shadowCostUsd / 0.01) * 0.025
+    - candidate.latencyPenalty * (minimal ? 0.12 : 0.025)
+    - Math.min(1, candidate.shadowCostUsd / 0.01) * (minimal ? 0.1 : 0.025)
     + tierBias
   ).toFixed(6));
 }

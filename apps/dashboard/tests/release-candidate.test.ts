@@ -16,6 +16,18 @@ async function setup() {
   return { runtime, source: new LocalDashboardDataSource(dbPath, providerPath) };
 }
 describe("release candidate provider truth", () => {
+  it.each(["navigation", "advertising", "redirect"])("shows observed sources without promoting %s links to evidence", async (kind) => {
+    const { runtime, source } = await setup();
+    try {
+      const now = new Date().toISOString();
+      const observed = ["https://example.com/source-one", "https://example.org/source-two"];
+      const steps = observed.map((url, index) => ({ stepId: `read-${index}`, status: "COMPLETED", toolCapabilities: ["browser"], toolCall: { tool: "browser.open" }, toolResult: { success: true, sideEffects: ["READ"], output: { result: { status: "ok", observation: { url, visibleText: "Observed source content", links: Array.from({ length: 20 }, (_, n) => ({ href: `https://example.net/${kind}/${n}` })) } } } } }));
+      steps.push({ ...steps[0], stepId: "failed-read", status: "FAILED" });
+      await runtime.state.set("control-center:tasks:index", ["evidence-task"]);
+      await runtime.state.set("control-center:task:evidence-task", { id: "evidence-task", task: { id: "evidence-task" }, state: "COMPLETED", objectiveStatus: "SUCCEEDED", plan: { objective: "Compare observed sources", steps: [] }, usage: {}, startedAt: now, completedAt: now, steps });
+      expect((await source.getTask("evidence-task"))?.evidenceSources).toEqual(observed);
+    } finally { runtime.sqlite.close(); }
+  });
   it("attributes a completed task to its last successful result producer, including deterministic fallback", async () => {
     const { runtime, source } = await setup();
     try {

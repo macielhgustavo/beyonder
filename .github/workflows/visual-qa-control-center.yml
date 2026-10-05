@@ -2,7 +2,7 @@ name: visual-qa-control-center
 
 on:
   push:
-    branches: [feat/v05-premium-ui]
+    branches: [feat/v05-premium-ui, feat/v05-final-integration]
     paths:
       - 'apps/dashboard/**'
       - 'packages/browser-agent/scripts/**'

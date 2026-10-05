@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { AutopilotStateStore } from "@beyonder/compute";
 import type { IntelligenceTask } from "../intelligence/contracts.js";
 import { AdaptiveModelSelector } from "./adaptive-selector.js";
+import { ModelRouter } from "./model-router.js";
+import { loadConfig } from "../config/env.js";
 import type { ModelCapabilityRequest, ModelCapabilitySource } from "./capability-source.js";
 import type { QuotaSource } from "./quota.js";
 import type { QuotaSnapshot } from "./adaptive-types.js";
@@ -125,6 +127,17 @@ async function ollamaServer() {
 }
 
 describe("cloud-first product routing journeys", () => {
+  it("explicit local configuration cannot displace adequate free cloud or bypass the mission floor", async () => {
+    const config = loadConfig({ BEYONDER_MODEL_PROVIDER: "ollama", BEYONDER_MODEL_NAME: "qwen3:4b", BEYONDER_PROVIDER_STATE_PATH: await providerStatePath(), OLLAMA_BASE_URL: await ollamaServer() });
+    const router = new ModelRouter(config.model, { capabilitySource: new JourneyCapabilitySource(0.48), quotaSource: new JourneyQuotaSource() });
+    const routed = await router.route(simpleTask(), "normal");
+    expect(routed.selected?.provider).not.toBe("ollama");
+    expect(routed.selected?.computeTier).toMatch(/^(STRONG|OTHER)_FREE_CLOUD$/);
+    expect(routed.selected?.monetaryCostUsd).toBe(0);
+    const complex = await router.route(complexTask(), "normal");
+    expect(complex.candidates.some((candidate) => candidate.provider === "ollama")).toBe(false);
+    expect(complex.rejectedCandidates?.some((candidate) => candidate.provider === "ollama" && candidate.reasons.some((reason) => reason.startsWith("quality-floor")))).toBe(true);
+  });
   it("keeps an acceptable local model behind all acceptable free-cloud candidates", async () => {
     const selector = new AdaptiveModelSelector(await providerStatePath(), {
       ollamaBaseUrl: await ollamaServer(),

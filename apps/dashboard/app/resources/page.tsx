@@ -7,14 +7,16 @@ export const dynamic = "force-dynamic";
 
 export default async function ResourcesPage() {
   const source = getDashboardDataSource();
-  const [providers, decisions, economy] = await Promise.all([
+  const [providers, decisions, economy, audit] = await Promise.all([
     source.getProviders({ limit: 100 }),
     source.getModelDecisions({ limit: 20 }),
-    source.getEconomySummary()
+    source.getEconomySummary(),
+    source.getAuditEvents({ limit: 200 })
   ]);
 
   const ready = providers.filter((provider) => (provider.status === "READY" || provider.status === "KEYLESS") && provider.verified).length;
   const unavailable = providers.filter((provider) => ["UNHEALTHY", "RATE_LIMITED", "DISABLED"].includes(provider.status)).length;
+  const routingEvents = audit.filter((event) => ["router.needs_capability", "router.capacity_reduced", "router.quality_floor_resolved", "router.candidate_rejected"].includes(event.event)).slice(0, 12);
 
   return (
     <DashboardShell provenance={source.provenance}>
@@ -40,7 +42,7 @@ export default async function ResourcesPage() {
               <div data-label="Health"><strong>{provider.health == null ? "UNKNOWN" : formatPercent(provider.health)}</strong><span>{provider.verified ? "verified" : "not verified"}</span></div>
               <div data-label="Runway / quota"><strong className={provider.runway.state === "UNKNOWN" ? "unknown-value" : ""}>{provider.runway.state}</strong><span>{provider.runway.label}</span></div>
               <div data-label="Latency"><strong className={provider.latencyMs == null ? "unknown-value" : ""}>{provider.latencyMs == null ? "UNKNOWN" : formatDuration(provider.latencyMs)}</strong><span>{provider.lastCheckAt ? "observed" : "not observed"}</span></div>
-              <div data-label="Placement"><strong className="unknown-value">UNKNOWN</strong><span>cloud/local not exposed</span></div>
+              <div data-label="Placement"><strong className={!provider.placement ? "unknown-value" : ""}>{provider.placement ?? "UNKNOWN"}</strong><span>{provider.placement === "LOCAL" ? "Emergency only · quality gated" : provider.placement === "CLOUD" ? "Free cloud first · paid disabled" : "Not observed"}</span></div>
               {!provider.configured && provider.setupEnvVar ? (
                 <div className="resource-setup">
                   <details className="resource-setup-disclosure">
@@ -68,7 +70,9 @@ export default async function ResourcesPage() {
 
         <div className="resource-routing">
           <div className="section-heading compact-heading"><div><span className="eyebrow">ROUTING</span><h2>Recent model decisions</h2></div></div>
-          {decisions.length ? <div className="routing-list">{decisions.slice(0, 8).map((decision) => <details className="routing-row" key={decision.id}><summary><strong>{decision.selectedLabel}</strong><span>{decision.utility == null ? "utility UNKNOWN" : `utility ${formatPercent(decision.utility)}`}</span></summary><ul>{decision.humanWhy.map((why) => <li key={why}>{why}</li>)}</ul></details>)}</div> : <EmptyState title="Nenhuma decisão de modelo" detail="As seleções aparecerão quando o Adaptive Router registrar decisões." />}
+          <p>STRONG_FREE_CLOUD → OTHER_FREE_CLOUD → PAID_DISABLED → LOCAL_EMERGENCY</p>
+          {decisions.length ? <div className="routing-list">{decisions.slice(0, 8).map((decision) => <details className="routing-row" key={decision.id}><summary><strong>{decision.selectedLabel}</strong><span>{decision.utility == null ? "utility UNKNOWN" : `utility ${formatPercent(decision.utility)}`}</span></summary><ul>{decision.humanWhy.map((why) => <li key={why}>{why}</li>)}</ul><dl>{[...decision.reasons, ...decision.penalties].map((reason) => <div key={reason.label}><dt>{reason.label}</dt><dd>{String(reason.value)}</dd></div>)}</dl></details>)}</div> : <EmptyState title="Nenhuma decisão de modelo" detail="As seleções aparecerão quando o Adaptive Router registrar decisões." />}
+          {routingEvents.length ? <details className="routing-row"><summary><strong>Capacity / quality audit</strong><span>Observações por missão</span></summary>{routingEvents.map((event) => <article key={event.id}><strong>{event.event.replace("router.", "").toUpperCase()}</strong><p>{event.createdAt} · {String(event.details.taskId ?? "UNKNOWN")}</p><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{JSON.stringify(event.details, null, 2)}</pre></article>)}</details> : null}
         </div>
       </section>
     </DashboardShell>

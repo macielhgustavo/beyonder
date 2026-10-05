@@ -1,4 +1,5 @@
-import type { WorkRun, SourceReliability } from "@beyonder/runtime";
+import type { WorkRun, SourceReliability, StepExecution } from "@beyonder/runtime";
+import { browserEvidence, discoverOllama } from "@beyonder/runtime";
 import type { WorkRunView } from "./types";
 import Database from "better-sqlite3";
 import { AutopilotStateStore, buildComputeInventory, providers as catalogProviders } from "@beyonder/compute";
@@ -181,9 +182,9 @@ export class LocalDashboardDataSource implements DashboardDataSource {
     const inventory = buildComputeInventory(state);
     const byId = new Map(inventory.map((item) => [item.providerId, item]));
     const db = this.isAvailable() ? this.open() : undefined;
-    const healthById = new Map(catalogProviders.map((provider) => [provider.id, db ? readState<{ samples?: number; failures?: number; latencyMs?: number; lastSuccessAt?: string; lastFailureAt?: string; cooldown?: { reason: string; until: string } }>(db, `provider-health:${provider.id}`, {}) : {}]));
+    const healthById = new Map([...catalogProviders, { id: "ollama" }].map((provider) => [provider.id, db ? readState<{ samples?: number; failures?: number; latencyMs?: number; lastSuccessAt?: string; lastFailureAt?: string; cooldown?: { reason: string; until: string } }>(db, `provider-health:${provider.id}`, {}) : {}]));
     db?.close();
-    const views = catalogProviders.map((provider) => {
+    const views: ProviderView[] = catalogProviders.map((provider) => {
       const item = byId.get(provider.id);
       const observed = healthById.get(provider.id)!;
       const cooldown = observed.cooldown && Date.parse(observed.cooldown.until) > Date.now() ? observed.cooldown : undefined;
@@ -194,6 +195,7 @@ export class LocalDashboardDataSource implements DashboardDataSource {
       return {
         id: provider.id,
         name: provider.name,
+        placement: provider.id === "ollama" ? "LOCAL" as const : "CLOUD" as const,
         status,
         runway: { state: "UNKNOWN" as const, label: "Quota atual não conhecida" },
         latencyMs: typeof observed.latencyMs === "number" ? observed.latencyMs : null,
@@ -206,6 +208,13 @@ export class LocalDashboardDataSource implements DashboardDataSource {
         provenance: this.provenance
       };
     });
+    const local = await discoverOllama(process.env.OLLAMA_BASE_URL ?? "http://localhost:11434");
+    if (local.length) {
+      const observed = healthById.get("ollama")!;
+      const verified = Boolean(observed.samples && (observed.failures ?? 0) < observed.samples);
+      const cooldown = observed.cooldown && Date.parse(observed.cooldown.until) > Date.now();
+      views.push({ id: "ollama", name: "Ollama (local)", placement: "LOCAL", status: cooldown ? "UNHEALTHY" : verified ? "READY" : "UNKNOWN", runway: { state: "UNKNOWN", label: "Não consome quota cloud; recursos locais não medidos" }, latencyMs: observed.latencyMs ?? null, health: observed.samples ? Math.max(0, 1 - (observed.failures ?? 0) / observed.samples) : null, configured: true, verified, lastCheckAt: observed.lastFailureAt && (!observed.lastSuccessAt || observed.lastFailureAt > observed.lastSuccessAt) ? observed.lastFailureAt : observed.lastSuccessAt ?? new Date().toISOString(), note: `LOCAL_EMERGENCY · ${local.reduce((sum, item) => sum + item.models.length, 0)} modelo(s) observado(s). A disponibilidade não comprova adequação ao quality floor.`, provenance: this.provenance });
+    }
     return page(views, query);
   }
 
@@ -412,6 +421,8 @@ function taskView(execution: Record<string, unknown>, provenance: "local"): Task
   const latestStep = stepExecutions.at(-1);
   const verification = objectField(execution, "objectiveVerification");
   const objectiveStatus = stringField(execution, "objectiveStatus");
+  const verifying = Boolean(execution.executionPhase) && !objectiveStatus && !execution.interruptionReason
+    && ["FAILED", "BLOCKED", "CANCELLED", "EXECUTION_FINISHED"].includes(state);
   const evidenceSources = browserSources(stepExecutions);
   const latestTool = stepExecutions.map((step) => stringField(objectField(step, "toolCall"), "tool")).filter(Boolean).at(-1);
   const attempts = (Array.isArray(execution.attempts) ? execution.attempts : []) as NonNullable<TaskView["attempts"]>;
@@ -430,8 +441,8 @@ function taskView(execution: Record<string, unknown>, provenance: "local"): Task
     id: humanTaskId(stringField(execution, "id")),
     taskId: stringField(task, "id") || undefined,
     title: stringField(plan, "objective") || stringField(task, "objective") || stringField(task, "input") || "Objetivo sem titulo",
-    humanStatus: execution.interruptionReason === "PROCESS_RESTART" ? "Execução interrompida; pronta para retomada segura." : execution.interruptionReason === "PROCESS_RESTART_NO_CHECKPOINT" ? "Execução interrompida antes de um checkpoint recuperável." : execution.interruptionReason ? stringField(execution, "error") || String(execution.interruptionReason) : humanTaskStatus(state, latestStep ? stringField(latestStep, "observationSummary") : undefined),
-    status: normalizeTaskStatus(state),
+    humanStatus: verifying ? "Verificando o resultado antes de encerrar a missão." : execution.interruptionReason === "PROCESS_RESTART" ? "Execução interrompida; pronta para retomada segura." : execution.interruptionReason === "PROCESS_RESTART_NO_CHECKPOINT" ? "Execução interrompida antes de um checkpoint recuperável." : execution.interruptionReason ? stringField(execution, "error") || String(execution.interruptionReason) : humanTaskStatus(state, latestStep ? stringField(latestStep, "observationSummary") : undefined),
+    status: verifying ? "running" : normalizeTaskStatus(state),
     result: typeof execution.result === "string" ? humanTaskResult(redactText(execution.result)) : null,
     resultVerified: state === "COMPLETED" && objectiveStatus === "SUCCEEDED",
     objectiveStatus: objectiveStatus || undefined,
@@ -656,24 +667,7 @@ function humanTaskStatus(state: string, observation?: string) {
 }
 
 function browserSources(steps: Record<string, unknown>[]) {
-  const sources = new Set<string>();
-  for (const step of steps) {
-    const capabilities = Array.isArray(step.toolCapabilities) ? step.toolCapabilities.map(String) : [];
-    const result = objectField(step, "toolResult");
-    if (!capabilities.includes("browser") || result.success !== true) continue;
-    collectUrls(result.output, sources);
-  }
-  return [...sources].filter((url) => safeExternalUrl(url)).slice(0, 12);
-}
-
-function collectUrls(value: unknown, target: Set<string>, depth = 0): void {
-  if (depth > 7 || value === null || value === undefined) return;
-  if (typeof value === "string") {
-    if (/^https:\/\//i.test(value)) target.add(value);
-    return;
-  }
-  if (Array.isArray(value)) { for (const item of value) collectUrls(item, target, depth + 1); return; }
-  if (typeof value === "object") for (const item of Object.values(value as Record<string, unknown>)) collectUrls(item, target, depth + 1);
+  return browserEvidence(steps as unknown as StepExecution[]).sources.filter((url) => safeExternalUrl(url)).slice(0, 12);
 }
 
 function stepState(status: string): TaskStepView["state"] {

@@ -1,5 +1,6 @@
 import type { ObjectiveOutcomeStatus } from "../intelligence/contracts.js";
 import { analyzeGoalContract } from "../intelligence/goal-contract.js";
+import { parseCalculatorExpression } from "../intelligence/calculator-expression.js";
 import type { AutonomousTaskOutcome, TaskExecution } from "./contracts.js";
 import { browserEvidence } from "./browser-evidence.js";
 
@@ -60,10 +61,23 @@ export class ObjectiveVerifier implements CompletionEvaluator {
     if (execution.task.requirements.calculator && !execution.steps.some((step) => step.toolCall?.tool === "calculator" && step.toolResult?.success)) {
       return fail("Required calculator execution evidence is missing.", "NEEDS_CAPABILITY", ["calculator-evidence"], "ENABLE_CAPABILITY");
     }
+    const expression = parseCalculatorExpression(contract.normalizedObjective);
+    if (expression && !execution.steps.some((step) => {
+      const args = step.toolCall?.arguments as { operation?: string; operands?: unknown[] } | undefined;
+      return step.toolCall?.tool === "calculator" && step.toolResult?.success && args?.operation === expression.operation
+        && args.operands?.length === expression.operands.length && args.operands.every((operand, index) => operand === expression.operands[index]);
+    })) {
+      return fail("Calculator evidence does not match the requested arithmetic expression.", "FAILED", ["requested-calculation"], "RETRY_SYNTHESIS");
+    }
 
     const result = execution.result ?? execution.steps.at(-1)?.observationSummary ?? "";
+    if (expression) {
+      const observed = execution.steps.filter((step) => step.toolCall?.tool === "calculator" && step.toolResult?.success).at(-1)?.toolResult?.output as { value?: unknown } | undefined;
+      if (typeof observed?.value !== "number" || !Number.isFinite(observed.value) || result.trim() !== String(observed.value)) return fail("The result differs from the observed calculator output.", "FAILED", ["calculator-result-consistency"], "RETRY_SYNTHESIS");
+    }
     if (!result.trim()) return fail("The execution produced no user-facing result.", "FAILED", ["non-empty-result"], "RETRY_SYNTHESIS");
     if (isObviousNonAnswer(result)) return fail("The result is a refusal or limitation, not an answer to the objective.", "FAILED", ["objective-answer"], browserRequired && evidence.sources.length ? "ALTERNATE_MODEL" : browserRequired ? "ACQUIRE_EVIDENCE" : "ALTERNATE_MODEL");
+    if (contract.outputFormat === "JSON" && !parseJson(result).ok) return fail("The goal requires valid JSON output; the result is not JSON.", "FAILED", ["json-output-format"], "RETRY_SYNTHESIS");
 
     if (criteria.expectedText !== undefined && !result.includes(criteria.expectedText)) return fail(`Expected text '${criteria.expectedText}' was not found.`, "FAILED", ["expected-text"], "RETRY_SYNTHESIS");
     if (criteria.expectedJsonField) {

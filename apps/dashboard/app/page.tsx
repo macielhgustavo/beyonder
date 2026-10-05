@@ -29,7 +29,7 @@ export default async function HomePage() {
 
       <ProvenanceNotice provenance={source.provenance} />
 
-      <ObjectiveBox />
+      <ObjectiveBox initialMission={home.activeTask} />
 
       {home.firstRun ? (
         <Panel title="Primeira abertura" meta="health check" className="first-run-panel first-run-panel-secondary">

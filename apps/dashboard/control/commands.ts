@@ -3,6 +3,7 @@ import {
   createRuntime,
   DEFAULT_TASK_BUDGET,
   classifyEconomicState,
+  classifyFailure,
   findReconciliationRequired,
   loadConfig,
   validatePlan,
@@ -209,6 +210,12 @@ async function submitObjective(objective: string, preparedTask?: IntelligenceTas
     const inspection = preparedTask ? undefined : await runtime.intelligence.inspect(normalized);
     const task: IntelligenceTask = preparedTask ?? { ...inspection!.task, id: `task_${nanoid()}` };
     taskId = task.id;
+    if (task.goalContract?.clarificationRequired) {
+      const message = "Preciso de mais informação: especifique o assunto, os itens envolvidos e o resultado desejado para continuar.";
+      await saveTask(runtime, { id: task.id, task, state: "BLOCKED", objectiveStatus: "NEEDS_INPUT", executionPhase: "EXECUTION_FINISHED", error: message, startedAt: new Date().toISOString(), completedAt: new Date().toISOString(), plan: { objective: normalized, steps: [] }, usage: {}, steps: [] });
+      await runtime.audit.record("info", "mission.needs_input", { taskId: task.id, goalContract: task.goalContract });
+      return { ok: false, taskId: task.id, status: "BLOCKED", result: null, error: message };
+    }
     if (!preparedTask) {
       await saveTask(runtime, { id: task.id, task, state: "PLANNING", executionPhase: "EXECUTING", startedAt: new Date().toISOString(), plan: { objective: normalized, steps: [] }, usage: {}, steps: [] });
       await runtime.audit.record("info", "mission.created", { taskId: task.id, objective: normalized, goalContract: task.goalContract });
@@ -248,11 +255,15 @@ async function submitObjective(objective: string, preparedTask?: IntelligenceTas
     await writeHeartbeat(runtime, null);
     return { ok: outcome.success, taskId: task.id, status: outcome.status, result: outcome.result ?? null, error: outcome.success ? undefined : humanFailure(outcome.failureReason ?? (outcome.status === "BLOCKED" ? "policy blocked" : undefined)) };
   } catch (error) {
-    const message = humanFailure(error instanceof Error ? error.message : "Falha na execução.");
+    const failure = classifyFailure(error);
+    const capabilityBlocked = failure.failureClass === "NEEDS_CAPABILITY";
+    const message = capabilityBlocked ? "Nenhum modelo disponível atende aos requisitos desta missão. Consulte Resources para os motivos de capacidade e qualidade." : humanFailure(error instanceof Error ? error.message : "Falha na execução.");
+    const status = capabilityBlocked ? "BLOCKED" : "FAILED";
+    const objectiveStatus = capabilityBlocked ? "NEEDS_CAPABILITY" : "FAILED";
     if (taskId) {
-      await saveTask(runtime, { id: taskId, task: preparedTask ?? { id: taskId, input: normalized }, state: "FAILED", objectiveStatus: "FAILED", executionPhase: "EXECUTION_FINISHED", error: message, startedAt: new Date().toISOString(), completedAt: new Date().toISOString(), plan: { objective: normalized, steps: [] }, usage: {}, steps: [] });
-      await runtime.audit.record("warn", "control.objective.failed", { taskId, objective: normalized, status: "FAILED", reason: message });
-      return { ok: false, taskId, status: "FAILED", result: null, error: message };
+      await saveTask(runtime, { id: taskId, task: preparedTask ?? { id: taskId, input: normalized }, state: status, objectiveStatus, executionPhase: "EXECUTION_FINISHED", failure: { failureClass: failure.failureClass, message }, error: message, startedAt: new Date().toISOString(), completedAt: new Date().toISOString(), plan: { objective: normalized, steps: [] }, usage: {}, steps: [] });
+      await runtime.audit.record("warn", "control.objective.failed", { taskId, objective: normalized, status, objectiveStatus, failureClass: failure.failureClass, reason: message });
+      return { ok: false, taskId, status, result: null, error: message };
     }
     throw new Error(message);
   } finally {

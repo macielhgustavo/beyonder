@@ -5,6 +5,7 @@ import path from "node:path";
 import { createRuntime, DEFAULT_TASK_BUDGET, loadConfig, ModelRouter, LlmPlanner, normalizeOpportunity, ToolSideEffect, type TaskExecution } from "@beyonder/runtime";
 import { queueControlObjective, runControlCommand } from "../control/commands";
 import { markInterruptedTasks } from "../control/heartbeat";
+import { CapacityAwareDashboardDataSource } from "../data/capacity-aware";
 import { LocalDashboardDataSource, safeExternalUrl } from "../data/local";
 import { validateCommand } from "../control/validation";
 let dir: string;
@@ -18,6 +19,19 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); rmSync(dir, { recursive: true, force: true }); });
 
 describe("real operation honesty", () => {
+  it("keeps intermediate execution failure live until objective verification is persisted", async () => {
+    const runtime = createRuntime(loadConfig());
+    try {
+      const taskId = "task_verification_boundary";
+      await runtime.state.set("control-center:tasks:index", [taskId]);
+      const execution = { id: taskId, task: { id: taskId, input: "Explain a concept" }, state: "FAILED", executionPhase: "EXECUTING", plan: { objective: "Explain a concept", steps: [] }, usage: {}, steps: [], startedAt: new Date().toISOString() };
+      await runtime.state.set(`control-center:task:${taskId}`, execution);
+      const source = new LocalDashboardDataSource(process.env.BEYONDER_DB_PATH);
+      expect(await source.getTask(taskId)).toMatchObject({ status: "running", humanStatus: "Verificando o resultado antes de encerrar a missão.", resultVerified: false });
+      await runtime.state.set(`control-center:task:${taskId}`, { ...execution, state: "BLOCKED", objectiveStatus: "NEEDS_CAPABILITY", executionPhase: "EXECUTION_FINISHED", completedAt: new Date().toISOString() });
+      expect(await source.getTask(taskId)).toMatchObject({ status: "blocked", objectiveStatus: "NEEDS_CAPABILITY", resultVerified: false });
+    } finally { runtime.sqlite.close(); }
+  });
   it("persists a mission identity before asynchronous execution and preserves it through completion", async () => {
     vi.stubEnv("BEYONDER_CONTROL_FIXTURE", "1");
     const queued = await queueControlObjective("Execute a persistent fixture mission");
@@ -28,18 +42,12 @@ describe("real operation honesty", () => {
     expect(completed).toMatchObject({ ok: true, status: "COMPLETED", taskId: queued.response.taskId });
     expect(await source.getTask(queued.response.taskId)).toMatchObject({ status: "succeeded", taskId: queued.response.taskId, resultVerified: true, objectiveStatus: "SUCCEEDED" });
   });
-  it("delegates to LlmPlanner and real executor with mocked model responses", async () => {
-    vi.stubEnv("BEYONDER_MODEL_PROVIDER", "ollama");
+  it("uses the real planner and calculator without unnecessary model inference", async () => {
     const planner = vi.spyOn(LlmPlanner.prototype, "createPlan");
-    const completion = vi.spyOn(ModelRouter.prototype, "completeForPlanningCandidate").mockImplementation(async (messages) => {
-      const input = JSON.parse(messages[1].content);
-      expect(JSON.stringify(input.tools ?? input.availableTools)).not.toContain("safe-objective");
-      const content = input.taskId ? JSON.stringify({ id: "real-plan", taskId: input.taskId, objective: input.objective, createdAt: new Date().toISOString(), revision: 1, steps: [{ id: "calculate", description: "Somar os números", status: "PENDING", allowedToolCapabilities: ["calculation"] }] }) : JSON.stringify({ id: "calculation-call", tool: "calculator", arguments: { operation: "add", operands: [2, 3] } });
-      return { content, provider: "ollama", model: "mock-model", estimatedCostUsd: 0 };
-    });
+    const completion = vi.spyOn(ModelRouter.prototype, "completeForPlanningCandidate");
     const result = await runControlCommand({ type: "submitObjective", objective: "Calculate 2 plus 3" });
     expect(result).toMatchObject({ ok: true, status: "COMPLETED" });
-    expect(planner).toHaveBeenCalledOnce(); expect(completion).toHaveBeenCalledTimes(2);
+    expect(planner).toHaveBeenCalledOnce(); expect(completion).not.toHaveBeenCalled();
     const source = new LocalDashboardDataSource(process.env.BEYONDER_DB_PATH);
     const tasks = await source.getTasks();
     expect(tasks).toHaveLength(1); expect(tasks[0].result).toBe("5"); expect(tasks[0].fixture).toBe(false);
@@ -47,10 +55,17 @@ describe("real operation honesty", () => {
     expect(events.some((event) => event.event === "plan.created")).toBe(true);
     expect(events.some((event) => event.event === "tool.completed")).toBe(true);
   });
+  it("persists planning capacity failure as BLOCKED / NEEDS_CAPABILITY", async () => {
+    const queued = await queueControlObjective("Use a calculadora para somar uma lista contendo 16, 28 e 43");
+    expect(await queued.run()).toMatchObject({ ok: false, status: "BLOCKED" });
+    const mission = await new CapacityAwareDashboardDataSource(new LocalDashboardDataSource(process.env.BEYONDER_DB_PATH)).getTask(queued.response.taskId);
+    expect(mission).toMatchObject({ status: "blocked", objectiveStatus: "NEEDS_CAPABILITY", executionPhase: "EXECUTION_FINISHED", resultVerified: false });
+    expect(mission?.failureSummary).not.toContain("regras de segurança");
+  });
   it("fails visibly without a provider and does not fabricate completion", async () => {
-    await expect(runControlCommand({ type: "submitObjective", objective: "Pesquisar dados" })).resolves.toMatchObject({ ok: false, status: "FAILED" });
-    const tasks = await new LocalDashboardDataSource(process.env.BEYONDER_DB_PATH).getTasks();
-    expect(tasks[0].status).toBe("failed"); expect(tasks[0].result).toBeNull(); expect(tasks[0].failureSummary).toContain("Não consegui concluir");
+    await expect(runControlCommand({ type: "submitObjective", objective: "Pesquisar dados" })).resolves.toMatchObject({ ok: false, status: "BLOCKED" });
+    const tasks = await new CapacityAwareDashboardDataSource(new LocalDashboardDataSource(process.env.BEYONDER_DB_PATH)).getTasks();
+    expect(tasks[0].status).toBe("blocked"); expect(tasks[0].objectiveStatus).toBe("NEEDS_CAPABILITY"); expect(tasks[0].result).toBeNull(); expect(tasks[0].failureSummary).toContain("Nenhum modelo disponível");
   });
   it("does not send an application or submission merely because a human approved", async () => {
     const runtime = createRuntime(loadConfig());

@@ -29,6 +29,7 @@ export interface ObjectiveSuccessCriterion {
 
 /** Persisted, multi-dimensional interpretation of what would actually satisfy the user. */
 export interface GoalContract {
+  outputFormat?: "JSON";
   version: 1;
   normalizedObjective: string;
   primaryIntent: ObjectiveIntent;

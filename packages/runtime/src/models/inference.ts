@@ -145,6 +145,9 @@ export async function runCandidates<T>(input: {
       await input.record?.(redactSecrets(attempt) as InferenceAttempt);
     }
   }
+  if (cloudFirstMetadata && attempts.length > 0 && attempts.every((attempt) => ["AUTH_REQUIRED", "FORBIDDEN", "MODEL_UNAVAILABLE", "RATE_LIMITED", "PROVIDER_UNAVAILABLE", "TIMEOUT", "NETWORK_ERROR"].includes(attempt.failureClass ?? ""))) {
+    throw new InferenceError(`No acceptable compute remains after qualified provider attempts failed (${last.failureClass}).`, "NEEDS_CAPABILITY");
+  }
   throw last;
 }
 

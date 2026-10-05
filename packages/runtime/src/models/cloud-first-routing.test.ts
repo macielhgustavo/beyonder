@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { IntelligenceTask } from "../intelligence/contracts.js";
 import type { ModelResponse } from "../types.js";
 import type { ModelCandidate } from "./adaptive-types.js";
-import { assessCapability, computeTier, resolveQualityFloor } from "./compute-policy.js";
+import { assessCapability, computeTier, resolveQualityFloor, routingScore } from "./compute-policy.js";
 import { InferenceError, runCandidates } from "./inference.js";
 import { inferenceAttemptPolicy } from "./router-config.js";
 
@@ -18,6 +18,19 @@ function task(overrides: Partial<IntelligenceTask> = {}): IntelligenceTask {
     ...overrides
   };
 }
+
+describe("mission-adjusted cloud efficiency", () => {
+  it("prefers efficient adequate cloud for a minimal floor while retaining quality dominance for high floors", () => {
+    const floor = resolveQualityFloor(task());
+    const strong = candidate({ predictedQuality: 0.98, latencyPenalty: 1 });
+    const efficient = candidate({ predictedQuality: 0.8, latencyPenalty: 0.01 });
+    const strongFit = assessCapability(strong, task(), floor), efficientFit = assessCapability(efficient, task(), floor);
+    expect(efficientFit.passes).toBe(true);
+    expect(routingScore(efficient, efficientFit, "STRONG_FREE_CLOUD", floor)).toBeGreaterThan(routingScore(strong, strongFit, "STRONG_FREE_CLOUD", floor));
+    const high = { ...floor, level: "HIGH" as const, minimumOverall: 0.77 };
+    expect(routingScore(strong, strongFit, "STRONG_FREE_CLOUD", high)).toBeGreaterThan(routingScore(efficient, efficientFit, "STRONG_FREE_CLOUD", high));
+  });
+});
 
 function candidate(overrides: Partial<ModelCandidate> = {}): ModelCandidate {
   const provider = overrides.provider ?? "groq";
@@ -249,7 +262,7 @@ describe("cloud-first routing policy", () => {
         throw new InferenceError("cloud unavailable", "PROVIDER_UNAVAILABLE");
       },
       validate: (value) => value.content
-    })).rejects.toMatchObject({ failureClass: "PROVIDER_UNAVAILABLE" });
+    })).rejects.toMatchObject({ failureClass: "NEEDS_CAPABILITY" });
     expect(order).toEqual(["cloud-a"]);
   });
 

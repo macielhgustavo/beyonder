@@ -259,7 +259,7 @@ describe("AutonomousTaskExecutor", () => {
     expect(outcome.execution.usage.consecutiveFailures).toBe(1);
   });
 
-  it("records router choice and available tool context without bypassing tool runtime", async () => {
+  it("executes an explicit tool action without unnecessary inference or bypassing tool runtime", async () => {
     const route = vi.fn(async () => ({
       task: task(),
       economicState: "survival" as const,
@@ -275,6 +275,7 @@ describe("AutonomousTaskExecutor", () => {
     }).execute({ task: task(), plan: plan([step("one")]), economicState: "survival" });
 
     expect(outcome.status).toBe("COMPLETED");
-    expect(route).toHaveBeenCalledOnce();
+    expect(route).not.toHaveBeenCalled();
+    expect(outcome.execution.steps[0]?.toolResult?.success).toBe(true);
   });
 });

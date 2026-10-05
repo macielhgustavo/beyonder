@@ -14,7 +14,7 @@ export function browserEvidence(steps: StepExecution[], objective = ""): { sourc
   const excerpts: string[] = [];
   for (const step of steps) {
     if (step.status !== "COMPLETED" || !step.toolResult?.success || !step.toolCapabilities?.includes("browser")) continue;
-    if (!step.toolResult.sideEffects.every((effect) => effect === "READ" || effect === "NONE")) continue;
+    if (!Array.isArray(step.toolResult.sideEffects) || !step.toolResult.sideEffects.every((effect) => effect === "READ" || effect === "NONE")) continue;
     const output = step.toolResult.output as { result?: { status?: string; observation?: { url?: string; visibleText?: string }; data?: { text?: string } } } | undefined;
     const result = output?.result;
     const text = result?.observation?.visibleText?.trim() || result?.data?.text?.trim();

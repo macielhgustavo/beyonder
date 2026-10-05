@@ -61,6 +61,18 @@ function fakeRouter(models: string[], complete: (system: string, model: string) 
 }
 
 describe("objective verification truth", () => {
+  it.each(["Qual é a capital do Canadá?", "O que significa HTTP 410?", "Para que serve uma chave primária em SQL?"])("independently verifies static factual relevance for %s", async (input) => {
+    const task = { ...comparisonTask(), input, type: "chat" as const, requirements: { directResponse: true }, goalContract: analyzeGoalContract(input, "chat") };
+    const { router } = fakeRouter(["producer", "verifier"], () => JSON.stringify({ satisfied: false, confidence: 0.95, relevance: false, completeness: false, consistentWithEvidence: true, reason: "Neighboring answer is irrelevant", missingRequirements: ["relevant-answer"], recoveryRecommendation: "NONE" }));
+    const verdict = await new ModelObjectiveVerifier(router).evaluate(execution(task, "Borboletas têm asas coloridas."));
+    expect(verdict.taskCompleted).toBe(false);
+    expect(verdict.method).toBe("independent-semantic-objective-verifier");
+  });
+  it.each(["Retorne somente JSON válido descrevendo HTTP 404.", "Return only valid JSON with ready set to true.", "Forneça somente JSON com status igual pronto."])("enforces explicit JSON output in the goal contract for %s", (input) => {
+    const task = { ...comparisonTask(), input, goalContract: analyzeGoalContract(input, "chat") };
+    expect(task.goalContract.outputFormat).toBe("JSON");
+    expect(new ObjectiveVerifier().evaluate(execution(task, "Plain text instead of JSON"))).toMatchObject({ taskCompleted: false, objectiveStatus: "FAILED", missingRequirements: ["json-output-format"] });
+  });
   it("requires current external evidence instead of accepting a fluent unsupported answer", () => {
     const input = "Qual é a versão estável atual do Python?";
     const task: IntelligenceTask = { ...comparisonTask("current"), input, type: "research", requirements: { browser: true, toolUse: true, tools: ["browser"] }, goalContract: analyzeGoalContract(input, "research") };

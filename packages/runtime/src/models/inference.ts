@@ -88,8 +88,15 @@ export async function runCandidates<T>(input: {
   const attempts: InferenceAttempt[] = [];
   let monetaryCostUsd = 0, shadowCostUsd = 0;
   let last: InferenceError = new InferenceError("Adequate models for this mission are unavailable. Available compute is below the required quality floor or policy constraints.", "NEEDS_CAPABILITY");
-  const remoteAttemptBudget = Math.max(0, input.remoteAttemptBudget ?? input.maxCandidates ?? 3);
+  const requestedRemoteAttemptBudget = Math.max(0, input.remoteAttemptBudget ?? input.maxCandidates ?? 3);
   const localFallbackBudget = Math.max(0, input.localFallbackBudget ?? 1);
+  const cloudFirstMetadata = input.candidates.some((candidate) => candidate.computeTier !== undefined);
+  const legacyMaxCandidates = Math.max(0, input.maxCandidates ?? requestedRemoteAttemptBudget);
+  const legacyHasLocal = input.candidates.some((candidate) => candidate.local);
+  const legacyRemoteBudget = legacyHasLocal && legacyMaxCandidates > 0
+    ? Math.min(requestedRemoteAttemptBudget, Math.max(1, legacyMaxCandidates - 1))
+    : Math.min(requestedRemoteAttemptBudget, legacyMaxCandidates);
+  const remoteAttemptBudget = cloudFirstMetadata ? requestedRemoteAttemptBudget : legacyRemoteBudget;
   // Do not slice before canAttempt: a sibling invalidated by provider health must not
   // consume a physical-attempt slot or prevent a later healthy cloud from being tried.
   const remoteCandidates = input.candidates.filter((candidate) => !candidate.local);

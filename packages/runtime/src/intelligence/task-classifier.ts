@@ -1,6 +1,7 @@
 import type { IntelligenceTaskType } from "./contracts.js";
 import { browserIntent } from "./browser-intent.js";
 import { calculatorIntent } from "./calculator-intent.js";
+import { analyzeGoalContract } from "./goal-contract.js";
 
 const RULES: Array<{ type: IntelligenceTaskType; patterns: RegExp[] }> = [
   {
@@ -82,7 +83,16 @@ export class TaskClassifier {
     if (browserIntent(input).navigation) return "browser";
     if (calculatorIntent(input).required) return "tool-use";
     for (const rule of RULES) {
-      if (rule.patterns.some((pattern) => pattern.test(input))) return rule.type;
+      if (rule.patterns.some((pattern) => pattern.test(input))) {
+        if (rule.type === "coding") {
+          // Language/software names are topic clues, not coding requirements.
+          // The goal contract's actual intent remains authoritative.
+          const contract = analyzeGoalContract(input, rule.type);
+          if (contract.primaryIntent === "PLANNING") return "planning";
+          if (["FACTUAL", "COMPARISON", "RESEARCH"].includes(contract.primaryIntent)) return contract.evidenceRequirement === "REQUIRED" || contract.primaryIntent === "RESEARCH" ? "research" : contract.primaryIntent === "COMPARISON" ? "reasoning" : "chat";
+        }
+        return rule.type;
+      }
     }
     return "chat";
   }

@@ -200,7 +200,7 @@ export class ModelRouter {
         // A catalog declaration is not proof that native JSON mode was evaluated.
         // Keep the observed BIB request mode instead of silently changing the
         // inference profile used to establish structured-output capability.
-        body: JSON.stringify({ model: candidate.model, messages, temperature: 0, max_tokens: 2400, stream: false, ...(candidate.capabilities?.includes("reasoning-control") ? { reasoning: { effort: "low" } } : {}), ...(structured && (candidate.benchmarkCapability?.structuredOutputMode ?? candidate.structuredOutput) === "native" ? { response_format: { type: "json_object" } } : {}) })
+        body: JSON.stringify({ model: candidate.model, messages, temperature: 0, max_tokens: 2400, stream: false, ...(candidate.capabilities?.includes("reasoning-control") ? { reasoning: candidate.inferenceProfile === "reasoning-disabled:max-output-2400" && candidate.benchmarkCapability?.inferenceProfile === candidate.inferenceProfile ? { enabled: false } : { effort: "low" } } : {}), ...(structured && (candidate.benchmarkCapability?.structuredOutputMode ?? candidate.structuredOutput) === "native" ? { response_format: { type: "json_object" } } : {}) })
       });
       if (!response.ok) throw httpFailure(response.status, (await response.text()).replaceAll(apiKey || "\u0000", "[REDACTED]"), response.headers);
       const json = await response.json() as { error?: unknown; model?: string; provider?: string; choices?: Array<{ finish_reason?: string; message?: { content?: string; tool_calls?: unknown[]; function_call?: unknown; provider_metadata?: { gateway?: { routing?: { resolvedProvider?: string; totalProviderAttemptCount?: number } } } } }>; usage?: { total_tokens?: number; cost?: number | string } };

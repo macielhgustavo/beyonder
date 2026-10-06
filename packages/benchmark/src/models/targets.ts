@@ -5,7 +5,7 @@ const UNSAFE_MODEL_MARKERS = ["verify-current", "auto"];
 type AutopilotState = Parameters<typeof buildComputeInventory>[0];
 type ComputeInventoryEntry = ReturnType<typeof buildComputeInventory>[number];
 
-export interface BenchmarkTargetSelection { provider?: string; models?: string[]; }
+export interface BenchmarkTargetSelection { provider?: string; models?: string[]; reasoningMode?: "low" | "disabled"; }
 
 export function selectFreeModelTargets(state: AutopilotState, broker: CredentialBroker, selection: BenchmarkTargetSelection = {}): ModelTarget[] {
   return buildComputeInventory(state).filter(entry => !selection.provider || entry.providerId === selection.provider).flatMap((entry) => targetsForEntry(entry, broker, selection));
@@ -29,6 +29,7 @@ function targetsForEntry(entry: ComputeInventoryEntry, broker: CredentialBroker,
       const metadata = entry.modelMetadata.find(row => row.id === model);
       return metadata && isModelMetadataEligibleForWorkload(metadata, "benchmark_text") && ["FREE_CONFIRMED", "FREE_TIER_ELIGIBLE"].includes(metadata.costClass ?? "UNKNOWN_COST");
     })
+    .filter(model => selection.reasoningMode !== "disabled" || entry.modelMetadata.find(row => row.id === model)?.reasoningControl)
     .slice(0, selection.models ? selection.models.length : 2)
     .map((model) => ({
       provider: entry.providerId,
@@ -38,7 +39,7 @@ function targetsForEntry(entry: ComputeInventoryEntry, broker: CredentialBroker,
       apiKey,
       accountId: broker.getSecret(provider.id, "CLOUDFLARE_ACCOUNT_ID"),
       rateLimitDelayMs: rateLimitDelay(entry),
-      ...(entry.modelMetadata.find(row => row.id === model)?.reasoningControl ? { reasoning: { effort: "low" as const } } : {})
+      ...(entry.modelMetadata.find(row => row.id === model)?.reasoningControl ? { reasoning: selection.reasoningMode === "disabled" ? { enabled: false } : { effort: "low" as const } } : {})
     }));
 }
 

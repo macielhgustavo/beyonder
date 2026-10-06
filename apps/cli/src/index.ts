@@ -190,12 +190,14 @@ benchmark
   .option("--provider <id>", "qualify one configured provider")
   .option("--models <ids>", "comma-separated explicit live model ids; zero-price eligibility still applies")
   .option("--categories <names>", "comma-separated capability categories to measure")
-  .action(async (options: { smoke?: boolean; standard?: boolean; db?: string; provider?: string; models?: string; categories?: string }, command: Command) => {
+  .option("--reasoning-mode <mode>", "qualify low or disabled optional reasoning; scores remain specific to the measured profile")
+  .action(async (options: { smoke?: boolean; standard?: boolean; db?: string; provider?: string; models?: string; categories?: string; reasoningMode?: string }, command: Command) => {
     const mode = benchmarkMode(options);
+    if (options.reasoningMode && !["low", "disabled"].includes(options.reasoningMode)) throw new Error("reasoning-mode must be low or disabled.");
     const config = loadConfig();
     const state = await new AutopilotStateStore(config.model.providerStatePath).read();
     const broker = await credentialBroker();
-    const targets = selectFreeModelTargets(state, broker, { provider: options.provider, models: options.models?.split(",").map(model => model.trim()).filter(Boolean) });
+    const targets = selectFreeModelTargets(state, broker, { provider: options.provider, models: options.models?.split(",").map(model => model.trim()).filter(Boolean), reasoningMode: options.reasoningMode as "low" | "disabled" | undefined });
     if (!targets.length) {
       console.log("MODEL PERFORMANCE\n\nNo READY zero-cost benchmark models available. monetary cost: $0.00");
       return;

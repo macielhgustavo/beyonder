@@ -7,7 +7,7 @@ export type InferencePhase = "PLANNING" | "ACTION_PLANNING" | "DIRECT_RESPONSE" 
 export type FailureClass = "BAD_REQUEST" | "AUTH_REQUIRED" | "FORBIDDEN" | "MODEL_UNAVAILABLE" | "RATE_LIMITED" | "PROVIDER_UNAVAILABLE" | "TIMEOUT" | "NETWORK_ERROR" | "INVALID_OUTPUT" | "INVALID_ACTION" | "NO_CANDIDATES" | "NEEDS_CAPABILITY" | "BUDGET_EXHAUSTED" | "TOOL_ERROR" | "TOOL_UNAVAILABLE";
 export interface InferenceAttempt {
   id: string; taskId: string; stepId?: string; phase: InferencePhase; attempt: number;
-  provider: string; model: string; startedAt: string; completedAt?: string;
+  provider: string; model: string; inferenceProfile?: string; startedAt: string; completedAt?: string;
   status: "STARTED" | "SUCCEEDED" | "FAILED"; latencyMs?: number;
   failureClass?: FailureClass; httpStatus?: number; upstreamHttpStatus?: number; error?: string; responseBody?: string; retryAfterAt?: string;
   monetaryCostUsd: number; shadowCostUsd: number;
@@ -26,7 +26,7 @@ export function classifyFailure(error: unknown): InferenceError {
   if (/abort|timeout|timed out/i.test(message) || (error instanceof Error && /Abort|Timeout/.test(error.name))) return new InferenceError(message, "TIMEOUT");
   return new InferenceError(message, "NETWORK_ERROR");
 }
-function safeDiagnosticBody(body: string): string {
+export function safeDiagnosticBody(body: string): string {
   try { return JSON.stringify(redactSecrets(JSON.parse(body))); }
   catch {
     return redactString(body).replace(
@@ -146,7 +146,7 @@ export async function runCandidates<T>(input: {
 
     if (candidate.local) localAttempts++;
     else remoteAttempts++;
-    const attempt: InferenceAttempt = { id: nanoid(), taskId: input.taskId, stepId: input.stepId, phase: input.phase, attempt: attempts.length + 1, provider: candidate.provider, model: candidate.model, startedAt: new Date().toISOString(), status: "STARTED", monetaryCostUsd: 0, shadowCostUsd: candidate.shadowCostUsd };
+    const attempt: InferenceAttempt = { id: nanoid(), taskId: input.taskId, stepId: input.stepId, phase: input.phase, attempt: attempts.length + 1, provider: candidate.provider, model: candidate.model, inferenceProfile: candidate.inferenceProfile, startedAt: new Date().toISOString(), status: "STARTED", monetaryCostUsd: 0, shadowCostUsd: candidate.shadowCostUsd };
     attempts.push(attempt);
     await input.record?.(attempt);
     shadowCostUsd += candidate.shadowCostUsd;

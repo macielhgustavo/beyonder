@@ -3,6 +3,17 @@ import { CredentialBroker } from "@beyonder/compute";
 import { selectFreeModelTargets } from "./targets.js";
 
 describe("free model target selection", () => {
+  it("qualifies disabled reasoning only on explicitly compatible free models", () => {
+    const targets = selectFreeModelTargets({ version: 1, updatedAt: new Date().toISOString(), providers: {
+      "kilo-gateway": { providerId: "kilo-gateway", state: "READY", classification: "KEYLESS", attempts: 1, lastUpdatedAt: new Date().toISOString(), validation: { status: "validated", models: ["measured", "unsupported", "paid"], modelMetadata: [
+        { id: "measured", capabilities: ["CHAT"], role: "instruct", costClass: "FREE_CONFIRMED", reasoningControl: true },
+        { id: "unsupported", capabilities: ["CHAT"], role: "instruct", costClass: "FREE_CONFIRMED", reasoningControl: false },
+        { id: "paid", capabilities: ["CHAT"], role: "instruct", costClass: "PAID", reasoningControl: true }
+      ] } }
+    } }, new CredentialBroker({}, {}), { provider: "kilo-gateway", models: ["measured", "unsupported", "paid"], reasoningMode: "disabled" });
+    expect(targets.map(t => t.model)).toEqual(["measured"]);
+    expect(targets[0]?.reasoning).toEqual({ enabled: false });
+  });
   it("ignores unavailable providers and billing-risk states", () => {
     const targets = selectFreeModelTargets(
       {

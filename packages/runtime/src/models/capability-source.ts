@@ -24,6 +24,7 @@ export interface ModelCapabilityEvidence {
 }
 
 export interface ModelCapabilitySource {
+  listInferenceProfiles?(input: Pick<ModelCapabilityRequest, "provider" | "model">): Promise<string[]>;
   getCapability(input: ModelCapabilityRequest): Promise<ModelCapabilityEvidence | null>;
   getCapabilityScore(input: ModelCapabilityRequest): Promise<number | null>;
   getLastSuccessfulRequest?(provider: string): Promise<{ model: string; observedAt: string } | null>;

@@ -123,6 +123,19 @@ describe("objective verification truth", () => {
     expect(complete).not.toHaveBeenCalled();
   });
 
+  it.each([
+    '{"satisfied":true,"confidence":0.9,"reason":"Bearer private-auth","apiKey":"private-key"}',
+    'not JSON api_key=private-key Bearer private-auth'
+  ])("retains redacted diagnostics for an unusable real verifier envelope", async body => {
+    const { router, attempts } = fakeRouter(["producer", "verifier"], () => body);
+    const verdict = await new ModelObjectiveVerifier(router).evaluate(execution(comparisonTask(), "A comparison with trade-offs."));
+    expect(verdict).toMatchObject({ taskCompleted: false, objectiveStatus: "NEEDS_CAPABILITY" });
+    const failure = [...attempts.values()].find(attempt => attempt.model === "verifier");
+    expect(failure).toMatchObject({ status: "FAILED", failureClass: "INVALID_OUTPUT", httpStatus: 200 });
+    expect(failure?.responseBody).toContain("[REDACTED]");
+    expect(failure?.responseBody).not.toMatch(/private-auth|private-key/);
+  });
+
   it.each(["vendor/same-model:free", "same_model", "Same-Model"])("does not invent verifier independence across gateway aliases: %s", async model => {
     const { router, complete } = fakeRouter([model], () => JSON.stringify({ satisfied: true }));
     const verdict = await new ModelObjectiveVerifier(router).evaluate(execution(comparisonTask(), "A comparison with trade-offs.", "same-model"));

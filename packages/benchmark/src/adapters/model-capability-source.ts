@@ -28,6 +28,12 @@ export class BibModelCapabilitySource implements ModelCapabilitySource {
     }
   }
 
+  async listInferenceProfiles(input: Pick<ModelCapabilityRequest, "provider" | "model">): Promise<string[]> {
+    // Only real evaluated profiles can be considered. A repeated easy case or
+    // an operational failure alone never establishes an inference capability.
+    return [...new Set(this.summaries.filter(entry => entry.provider === input.provider && entry.model === input.model && entry.avgQuality != null && (entry.distinctEvaluatedCases ?? 0) >= 2).flatMap(entry => entry.inferenceProfile ? [entry.inferenceProfile] : []))];
+  }
+
   async getCapability(input: ModelCapabilityRequest): Promise<ModelCapabilityEvidence | null> {
     const category = TASK_TO_BENCHMARK_CATEGORY[input.taskType];
     const all = this.summaries.filter(entry => entry.provider === input.provider && entry.model === input.model && (!input.inferenceProfile || entry.inferenceProfile === input.inferenceProfile));

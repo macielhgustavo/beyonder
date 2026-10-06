@@ -33,6 +33,7 @@ export interface CandidateCapabilityFit {
 }
 
 export interface RejectedCandidate {
+  inferenceProfile?: string;
   provider: string;
   model: string;
   computeTier: ComputeTier;
@@ -93,6 +94,7 @@ export interface CandidateExplanation {
 }
 
 export interface ModelCandidate {
+  inferenceProfile?: string;
   metadataQuality?: number;
   local?: boolean;
   externalQuotaConsumption?: boolean;

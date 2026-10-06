@@ -7,6 +7,7 @@ export function objectivePhaseTask(task: IntelligenceTask, phase: "DIRECT_RESPON
   const verifying = phase === "OBJECTIVE_VERIFICATION";
   return {
     ...task,
+    inferencePhase: phase,
     type: verifying ? "reasoning" : task.type,
     requirements: {
       ...task.requirements,
@@ -72,7 +73,12 @@ export function resolveQualityFloor(task: IntelligenceTask): QualityFloor {
       if (dimension) require(dimension);
     }
     if (contract.expectedResultKind === "COMPARISON") require("synthesis");
-    if (["EXPLANATION", "COMPARISON", "CODE", "PLAN"].includes(contract.expectedResultKind)) require("verification", Math.max(0.54, minimumOverall - 0.03));
+    // The producer must meet the artifact floor; a different physical model
+    // must meet the independent-verification floor. Requiring the producer to
+    // be an eligible judge too incorrectly removed useful producers and left
+    // the only eligible judge producing an answer it cannot certify itself.
+    // Unphased mission assessments retain the full contract's requirements.
+    if (task.inferencePhase !== "DIRECT_RESPONSE" && ["EXPLANATION", "COMPARISON", "CODE", "PLAN"].includes(contract.expectedResultKind)) require("verification", Math.max(0.54, minimumOverall - 0.03));
     if (contract.freshness !== "STATIC" || contract.evidenceRequirement === "REQUIRED") {
       require("freshnessEvidence", Math.max(0.58, minimumOverall));
       reasons.push(`freshness=${contract.freshness}`, `evidence=${contract.evidenceRequirement}:${contract.minimumEvidenceSources}`);
@@ -80,6 +86,7 @@ export function resolveQualityFloor(task: IntelligenceTask): QualityFloor {
   }
 
   if (Object.keys(dimensions).length === 0) require("synthesis", Math.max(0.42, minimumOverall - 0.06));
+  if (task.inferencePhase) reasons.push(`phase=${task.inferencePhase}`);
   return { level, minimumOverall, dimensions, reasons };
 }
 

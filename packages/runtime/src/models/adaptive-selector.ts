@@ -85,11 +85,24 @@ export class AdaptiveModelSelector {
       count: viablePairs.length
     });
 
+    const profiledPairs: Array<(typeof viablePairs)[number] & { inferenceProfile: string }> = [];
     for (const pair of viablePairs) {
+      const reasoningControl = pair.entry.modelMetadata.find(model => model.id === pair.model)?.reasoningControl;
+      const defaultProfile = `reasoning-${reasoningControl ? "low" : "default"}:max-output-2400`;
+      const observedProfiles = reasoningControl ? await this.capabilitySource.listInferenceProfiles?.({ provider: pair.entry.providerId, model: pair.model }) ?? [] : [];
+      // Keep the same bounded output budget. Disabling optional thinking is
+      // eligible only after that exact profile has real BIB observations; it
+      // still must meet every mission floor and independent-verifier boundary.
+      const profiles = [defaultProfile, ...observedProfiles.filter(profile => profile === "reasoning-disabled:max-output-2400")];
+      for (const inferenceProfile of new Set(profiles)) profiledPairs.push({ ...pair, inferenceProfile });
+    }
+
+    for (const pair of profiledPairs) {
       if (this.options.canAttempt && !await this.options.canAttempt({ provider: pair.entry.providerId, model: pair.model })) {
         const rejected: RejectedCandidate = {
           provider: pair.entry.providerId,
           model: pair.model,
+          inferenceProfile: pair.inferenceProfile,
           computeTier: pair.entry.providerId === "ollama" ? "LOCAL_EMERGENCY" : "OTHER_FREE_CLOUD",
           reasons: ["operational cooldown prevents another attempt"]
         };
@@ -99,7 +112,7 @@ export class AdaptiveModelSelector {
       }
 
       const performance = await this.performance.get(pair.entry.providerId, pair.model, task.type);
-      const inferenceProfile = `reasoning-${pair.entry.modelMetadata.find(model => model.id === pair.model)?.reasoningControl ? "low" : "default"}:max-output-2400`;
+      const inferenceProfile = pair.inferenceProfile;
       const benchmarkCapability = await this.capabilitySource.getCapability({
         provider: pair.entry.providerId,
         model: pair.model,
@@ -174,6 +187,7 @@ export class AdaptiveModelSelector {
       }, economicState) - structuredPenalty;
 
       const candidate: ModelCandidate = {
+        inferenceProfile,
         metadataQuality: ROUTER_CONFIG.qualityClassDefaults[pair.entry.qualityClass],
         local: pair.entry.providerId === "ollama",
         externalQuotaConsumption: pair.entry.providerId !== "ollama",
@@ -217,6 +231,7 @@ export class AdaptiveModelSelector {
           ],
           constraints: [
             `economic-state=${economicState}`,
+            `inference-profile=${inferenceProfile}`,
             `effective-resource-cost=${effectiveResourceCost}`,
             shadow.reason
           ]
@@ -249,6 +264,7 @@ export class AdaptiveModelSelector {
         const rejected: RejectedCandidate = {
           provider: candidate.provider,
           model: candidate.model,
+          inferenceProfile: candidate.inferenceProfile,
           computeTier: tier,
           reasons: rejectionReasons,
           capabilityFit,
@@ -264,6 +280,15 @@ export class AdaptiveModelSelector {
     }
 
     candidates.sort((a, b) => executionTierRank(a.computeTier) - executionTierRank(b.computeTier) || (b.routingScore ?? -Infinity) - (a.routingScore ?? -Infinity) || b.predictedQuality - a.predictedQuality);
+    // Multiple qualified modes are alternatives for one physical candidate,
+    // not additional providers, verifier independence, or fresh quota capacity.
+    const selectedModels = new Set<string>();
+    for (let index = 0; index < candidates.length;) {
+      const candidate = candidates[index]!;
+      const identity = `${candidate.provider}/${candidate.model}`;
+      if (selectedModels.has(identity)) candidates.splice(index, 1);
+      else { selectedModels.add(identity); index++; }
+    }
     consideredCandidates.sort((a, b) => executionTierRank(a.computeTier) - executionTierRank(b.computeTier) || (b.routingScore ?? -Infinity) - (a.routingScore ?? -Infinity));
 
     if (candidates.length === 0) {
@@ -368,6 +393,7 @@ function serializeCandidate(candidate: ModelCandidate, taskId: string): Record<s
     taskId,
     provider: candidate.provider,
     model: candidate.model,
+    inferenceProfile: candidate.inferenceProfile,
     computeTier: candidate.computeTier,
     eligible: candidate.eligible,
     rejectionReasons: candidate.rejectionReasons,

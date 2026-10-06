@@ -1,0 +1,37 @@
+[
+  {
+    "name": "inherited-original",
+    "objective": "Escreva uma função TypeScript groupByCategory para objetos com category string, sem alterar o array recebido.",
+    "badAnswer": "function groupByCategory<T extends { category:string }>(items:T[]):Record<string,T[]> { return items.reduce((acc,item)=>{ const key=item.category; if(!acc[key])acc[key]=[]; acc[key].push(item); return acc;},{} as Record<string,T[]>); }"
+  },
+  {
+    "name": "inherited-analog-a",
+    "objective": "Escreva uma função TypeScript que conte todas as strings de uma lista, sem modificar a lista.",
+    "badAnswer": "function frequencies(values:string[]):Record<string,number> {const result:Record<string,number>={}; for(const v of values) result[v]=(result[v]||0)+1; return result;}"
+  },
+  {
+    "name": "inherited-analog-b",
+    "objective": "Escreva uma função TypeScript que agrupe valores pelo campo label string, preservando a ordem em cada grupo.",
+    "badAnswer": "function group<T extends {label:string}>(values:T[]):Record<string,T[]> {const groups:Record<string,T[]>={}; for(const v of values) {if(!groups[v.label])groups[v.label]=[];groups[v.label].push(v);}return groups;}"
+  },
+  {
+    "name": "static-original",
+    "objective": "Explique em até quatro frases a diferença entre concorrência e paralelismo.",
+    "badAnswer": "Concorrência ocorre quando várias tarefas são executadas de forma intercalada em um único processador. Paralelismo executa operações simultaneamente em núcleos distintos. Concorrência é sobre alternar tarefas em um único fluxo de tempo."
+  },
+  {
+    "name": "static-analog-a",
+    "objective": "Explique o que uma chave primária garante em um banco relacional.",
+    "badAnswer": "Uma chave primária identifica cada linha e impede valores nulos. Ela também garante que qualquer SELECT venha ordenado pela chave sem ORDER BY."
+  },
+  {
+    "name": "static-analog-b",
+    "objective": "Explique a diferença entre criptografia assimétrica e hash criptográfico.",
+    "badAnswer": "Ambos são irreversíveis. Nenhuma chave pode recuperar uma mensagem criptografada com chave pública, portanto criptografia e hashing têm a mesma possibilidade de recuperar o texto."
+  },
+  {
+    "name": "static-full-original",
+    "objective": "Explique em até quatro frases a diferença entre concorrência e paralelismo.",
+    "badAnswer": "A concorrência e o paralelismo são conceitos relacionados à execução de múltiplas tarefas, mas diferem fundamentalmente na sua natureza e infraestrutura. A concorrência ocorre quando várias tarefas ou processos são executadas de forma intercalada em um único processador, competindo pela mesma unidade de CPU ao longo do tempo. Já o paralelismo consiste na execução simultânea de múltiplas operações em diferentes núcleos de processamento ou unidades físicas distintas. Portanto, a concorrência é sobre gerenciar e alternar tarefas em um único fluxo de tempo, enquanto o paralelismo é sobre executar tarefas de forma verdadeiramente simultânea para aumentar a velocidade de processamento."
+  }
+]

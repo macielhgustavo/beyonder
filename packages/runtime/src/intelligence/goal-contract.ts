@@ -63,8 +63,9 @@ export function analyzeGoalContract(input: string, type: IntelligenceTaskType): 
     successCriteria: [
       { id: "answer-objective", description: "The result directly answers the operator's objective.", required: true, kind: "CONTENT" },
       ...(evidenceRequirement === "REQUIRED" ? [{ id: "current-evidence", description: `Use at least ${minimumEvidenceSources} observed external source${minimumEvidenceSources === 1 ? "" : "s"}.`, required: true, kind: "EVIDENCE" as const }] : []),
-      ...(comparison ? [{ id: "explain-comparison", description: "Explain the comparison metric and material differences. Scope each winner to the observed metric: search interest, downloads and survey samples cannot prove universal usage or superiority.", required: true, kind: "CONTENT" as const }] : []),
+      ...(comparison ? [{ id: "explain-comparison", description: "Explain material differences and the relevant criteria or assumptions. For measured rankings, scope any winner to the observed metric; search interest, downloads and survey samples do not prove universal usage.", required: true, kind: "CONTENT" as const }] : []),
       ...(primaryIntent === "CALCULATION" ? [{ id: "calculator-evidence", description: "Use deterministic calculator evidence.", required: true, kind: "CAPABILITY" as const }] : []),
+      { id: "technical-correctness", description: primaryIntent === "CODING" ? "Code must satisfy the full declared input domain, output types, ordering, mutation and complexity constraints; compilation alone does not prove behavior." : "Every material technical or conceptual claim must be correct; a common implementation example must not be stated as a necessary or universal property.", required: true, kind: "CONTENT" },
       { id: "requested-format", description: "Respect the requested result format and language.", required: true, kind: "FORMAT" }
     ],
     expectedResultKind,
@@ -83,17 +84,22 @@ function detectFreshness(input: string): ObjectiveFreshness {
 }
 
 function detectIntent(input: string, type: IntelligenceTaskType, comparison: boolean, research: boolean): ObjectiveIntent {
+  // Explicit code generation owns its artifact contract even when field names
+  // or implementation verbs also mention classification or extraction.
+  if (hasAny(input, SIGNALS.coding) && /\b(?:implemente|refatore|escreva|write|implement|refactor|crie|create)\b/.test(input)) return "CODING";
   if (type === "classification" || hasAny(input, SIGNALS.classification)) return "CLASSIFICATION";
   if (type === "extraction" || hasAny(input, SIGNALS.extraction)) return "EXTRACTION";
-  if (hasAny(input, SIGNALS.coding) && /\b(?:implemente|refatore|escreva|write|implement|refactor|crie|create)\b/.test(input)) return "CODING";
   if (hasAny(input, SIGNALS.calculation) || /\b\d+(?:[.,]\d+)?\s*(?:\*|x|×|\/|\+|-)\s*\d+(?:[.,]\d+)?\b/.test(input)) return "CALCULATION";
   if (comparison) return "COMPARISON";
   if (type === "planning" || hasAny(input, SIGNALS.planning)) return "PLANNING";
-  if (research || type === "research") return "RESEARCH";
+  if (research) return "RESEARCH";
   if (type === "browser") return "FACTUAL";
   if (type === "reasoning" || hasAny(input, SIGNALS.reasoning)) return "REASONING";
   if (type === "memory" || hasAny(input, SIGNALS.memory)) return "MEMORY";
   if (/^(?:qual|quais|quem|quando|onde|o que|explique o que|informe|what|which|who|when|where|how|explain what)\b/.test(input) || input.includes("?")) return "FACTUAL";
+  // The execution may require research to answer a factual current question.
+  // Routing metadata must not change what the user actually asked for.
+  if (type === "research") return "RESEARCH";
   return "OTHER";
 }
 

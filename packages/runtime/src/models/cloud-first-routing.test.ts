@@ -307,6 +307,24 @@ describe("cloud-first routing policy", () => {
 });
 
 describe("phase requirements retain the goal's quality floor", () => {
+  it.each(["Escreva uma função TypeScript que remova duplicatas.", "Compare dois índices atuais de popularidade de linguagens.", "Planeje uma migração de dados."])("keeps producer and independent judge capacity distinct: %s", input => {
+    const original = task({ input, goalContract: analyzeGoalContract(input, "reasoning") });
+    const mission = resolveQualityFloor(original);
+    const producer = resolveQualityFloor(objectivePhaseTask(original, "DIRECT_RESPONSE"));
+    const verifier = resolveQualityFloor(objectivePhaseTask(original, "OBJECTIVE_VERIFICATION"));
+    expect(producer.level).toBe(mission.level);
+    expect(producer.minimumOverall).toBe(mission.minimumOverall);
+    expect(verifier.minimumOverall).toBe(mission.minimumOverall);
+    expect(producer.dimensions.verification).toBeUndefined();
+    expect(verifier.dimensions.verification).toBe(mission.dimensions.verification);
+    expect(mission.dimensions.verification).toBeDefined();
+    for (const [dimension, minimum] of Object.entries(mission.dimensions)) {
+      if (dimension !== "verification" && dimension !== "toolUse") expect(producer.dimensions[dimension as keyof typeof producer.dimensions]).toBe(minimum);
+    }
+    const badJudge = candidate({ predictedQuality: 0.99, reliability: 0.99, benchmarkCapability: { score: 0.99, samples: 10, source: "BIB", dimensions: Object.fromEntries(Object.keys(verifier.dimensions).map(dimension => [dimension, { score: dimension === "verification" ? 0.1 : 0.99, samples: 3, updatedAt: new Date().toISOString() }])) } });
+    expect(assessCapability(badJudge, objectivePhaseTask(original, "DIRECT_RESPONSE"), producer).passes).toBe(true);
+    expect(assessCapability(badJudge, objectivePhaseTask(original, "OBJECTIVE_VERIFICATION"), verifier).passes).toBe(false);
+  });
   it.each(["Qual é a versão estável atual do Python?", "Qual é a versão LTS atual do Node.js?", "Compare dois índices atuais de popularidade de linguagens."])("does not ask the answer/verifier to replan completed research: %s", objective => {
     const original = task({type: "browser", input: objective, requirements: {browser: true, planning: true, toolUse: true, tools: ["browser"]}, goalContract: analyzeGoalContract(objective, "browser")});
     for (const phase of ["DIRECT_RESPONSE", "OBJECTIVE_VERIFICATION"] as const) {

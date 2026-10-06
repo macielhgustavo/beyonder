@@ -1,7 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { typescriptDiagnostics } from "./typescript-validation.js";
+import { staticCodeReview, typescriptDiagnostics } from "./typescript-validation.js";
 
 describe("standalone generated TypeScript static verification", () => {
+  it.each([
+    "function counts(values:string[]) { const dict:Record<string,number>={}; for(const value of values) dict[value]=(dict[value]||0)+1; return dict; }",
+    "function buckets<T extends {key:string}>(values:T[]) { return values.reduce((acc,value)=>{if(!acc[value.key])acc[value.key]=[];acc[value.key].push(value);return acc;},{} as Record<string,T[]>); }",
+    "function flags(values:string[]) { const original:Record<string,boolean>={}; const alias=original; for(const value of values) alias[value]=true; return original; }"
+  ])("finds a dynamic ordinary-object dictionary without executing generated code: %s", source => {
+    const review = staticCodeReview(source);
+    expect(review.diagnostics).toEqual([]);
+    expect(review.findings.length).toBeGreaterThan(0);
+    expect(review.findings.every(f => f.includes("static source analysis"))).toBe(true);
+  });
+  it.each([
+    "function counts(values:string[]) { const dict:Record<string,number>=Object.create(null); for(const value of values) dict[value]=(dict[value]||0)+1; return dict; }",
+    "function counts(values:string[]) { const dict=new Map<string,number>(); for(const value of values) dict.set(value,(dict.get(value)||0)+1); return dict; }",
+    "function fixed(key:'left'|'right') { const obj={left:1,right:2}; return obj[key]; }"
+  ])("keeps safe dictionaries and constrained keys clear of the candidate finding: %s", source => {
+    expect(staticCodeReview(source)).toEqual({ diagnostics: [], findings: [] });
+  });
   it.each(["Node", "Request", "Response"])("allows a module-local %s declaration without an unrelated ambient DOM collision", name => {
     expect(typescriptDiagnostics(`class ${name}<T> { constructor(public value:T) {} } function wrap<T>(value:T):${name}<T> { return new ${name}(value); }`)).toEqual([]);
   });

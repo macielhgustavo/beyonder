@@ -102,6 +102,18 @@ describe("BibModelCapabilitySource", () => {
     const source = new BibModelCapabilitySource(store);
     expect((await source.getCapability({ provider: "kilo-gateway", model: "openrouter/free", taskType: "coding" }))?.dimensions?.coding).toBeUndefined();
   });
+
+  it("offers only profiles with distinct real evaluated cases, retaining negative grades", async () => {
+    const store = new BenchmarkStore(":memory:");
+    store.saveResults([
+      ...["coding-a", "coding-b"].map(caseId => ({ ...result(0, false), caseId, inferenceProfile: "reasoning-disabled:max-output-2400" })),
+      ...[1, 2].map(() => ({ ...result(1, true), inferenceProfile: "repeated-only" })),
+      { ...result(0, false), status: "TIMEOUT" as const, quality: null, success: null, inferenceProfile: "unavailable" }
+    ]);
+    const source = new BibModelCapabilitySource(store);
+    expect(await source.listInferenceProfiles({ provider: "kilo-gateway", model: "openrouter/free" })).toEqual(["reasoning-disabled:max-output-2400"]);
+    expect(await source.getCapabilityScore({ provider: "kilo-gateway", model: "openrouter/free", taskType: "coding", inferenceProfile: "reasoning-disabled:max-output-2400" })).toBe(0);
+  });
 });
 
 function result(quality: number, success: boolean) {

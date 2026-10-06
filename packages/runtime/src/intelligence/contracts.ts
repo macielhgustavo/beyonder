@@ -68,6 +68,8 @@ export interface IntelligenceTask {
   risk: number;
   estimatedTokens: number;
   requirements: IntelligenceRequirements;
+  /** Routing role; the persisted GoalContract still covers the whole mission. */
+  inferencePhase?: "DIRECT_RESPONSE" | "OBJECTIVE_VERIFICATION";
   /** Present for tasks created through IntelligenceLayer; legacy fixtures are analyzed on use. */
   goalContract?: GoalContract;
 }

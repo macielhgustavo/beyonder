@@ -13,9 +13,9 @@ describe("benchmark runner", () => {
     expect(results).toHaveLength(1);
     expect(results[0]).toMatchObject({ status: "BILLING_REQUIRED", quality: null, success: null, monetaryCost: cost });
   });
-  it("runs smoke mode with two cases per category and adversarial verification", async () => {
+  it("runs smoke mode with two cases per category and adversarial code/verification", async () => {
     const results = await runBenchmark({ mode: "smoke", targets: [target], client: new EchoClient() });
-    expect(results).toHaveLength(26);
+    expect(results).toHaveLength(30);
     expect(new Set(results.map((result) => result.category)).size).toBe(12);
   });
 
@@ -64,7 +64,7 @@ describe("benchmark runner", () => {
         return { provider: target.provider, model: target.model, content: "READY", estimatedCostUsd: 0 };
       }
     } });
-    expect(results).toHaveLength(26);
+    expect(results).toHaveLength(30);
     expect(results[0]).toMatchObject({ status: "OUTPUT_LIMIT", quality: null, success: null });
     expect(results.at(-1)?.status).toBe("PASS");
   });

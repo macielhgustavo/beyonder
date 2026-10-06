@@ -49,6 +49,7 @@
     "providers:nvidia-smoke": "tsx packages/benchmark/src/models/nvidia-nim-smoke.ts",
     "control-center:security-smoke": "pnpm --filter @beyonder/control-center security-smoke",
     "control-center:supervisor-smoke": "pnpm --filter @beyonder/control-center supervisor-smoke",
+    "control-center:live-verifier-smoke": "pnpm --filter @beyonder/browser-agent exec node scripts/control-center-live-verifier-smoke.mjs",
     "test:browser:e2e": "BEYONDER_BROWSER_E2E=1 vitest run packages/browser-agent/src/browser-agent.e2e.test.ts"
   },
   "engines": {

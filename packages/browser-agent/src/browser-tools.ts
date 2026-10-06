@@ -12,6 +12,7 @@ import type { BrowserAction, BrowserActionResult, BrowserPolicy, BrowserTarget }
 
 export interface BrowserToolInput {
   sessionId?: string;
+  textOnly?: boolean;
 }
 
 export interface BrowserToolOutput {
@@ -74,7 +75,7 @@ function browserTool<TAction extends BrowserAction>(
     cost: { monetaryCostUsd: 0 },
     metadata: { actionType },
     async execute(input) {
-      const sessionId = input.sessionId ?? await agent.startSession(options.sessionPolicy);
+      const sessionId = input.sessionId ?? await agent.startSession({ ...options.sessionPolicy, ...(input.textOnly ? { javaScriptEnabled: false } : {}) });
       const action = parseBrowserAction({ ...input, type: actionType });
       const result = await agent.execute(sessionId, action);
       return { output: { sessionId, result } };
@@ -92,6 +93,7 @@ function validateBrowserToolInput<TAction extends BrowserAction>(
   if (typeof input.sessionId !== "undefined" && !isNonEmptyString(input.sessionId)) {
     return validationFailure("sessionId must be a non-empty string.", ["sessionId"]);
   }
+  if (input.textOnly !== undefined && (typeof input.textOnly !== "boolean" || input.sessionId !== undefined)) return validationFailure("textOnly is a boolean for a new browser.open session only.", ["textOnly"]);
 
   const actionCandidate = { ...input, type: actionType };
   try {
@@ -116,6 +118,7 @@ function browserToolJsonSchema(actionType: BrowserAction["type"]): unknown {
   const properties: Record<string, unknown> = { sessionId: { type: "string", description: "Reuse the sessionId returned by the preceding browser observation." }, type: { const: actionType } };
   const required: string[] = [];
   if (actionType === "open" || actionType === "navigate") { properties.url = { type: "string", format: "uri" }; required.push("url"); }
+  if (actionType === "open") properties.textOnly = { type: "boolean", description: "Observe the complete server-rendered document in a new session with scripts disabled. DNS pinning and all network protections remain mandatory." };
   if (["find", "click", "fill", "waitFor", "extractText"].includes(actionType)) properties.target = target;
   if (["find", "click", "fill", "waitFor"].includes(actionType)) required.push("target");
   if (actionType === "extractText") properties.maxChars = { type: "integer", minimum: 1 };

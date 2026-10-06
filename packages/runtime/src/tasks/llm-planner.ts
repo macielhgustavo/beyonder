@@ -10,6 +10,7 @@ import { classifyFailure, InferenceError, parseStructuredObject, runCandidates }
 import { getEconomicRoutingPolicy, inferenceAttemptPolicy } from "../models/router-config.js";
 import { isReadOnlyBrowserTool } from "./browser-evidence.js";
 import { parseCalculatorExpression } from "../intelligence/calculator-expression.js";
+import { alternativeSearchUrls, publicSearchUrl, researchSources } from "./research-sources.js";
 
 export interface LlmPlannerOptions {
   modelRouter: ModelRouter;
@@ -171,15 +172,16 @@ export class LlmPlanner implements Planner {
 function deterministicBrowserPlan(request: PlanRequest, browserTools: ToolDescriptor[]): Plan {
   const open = browserTools.find((tool) => tool.capabilities.includes("browser:open"));
   if (!open) throw new InferenceError("Browser reading is required but no compatible read-only browser open tool is available.", "TOOL_UNAVAILABLE");
-  const target = resolveAuthoritativeBrowserTarget(request.objective);
   const minimumSources = Math.max(1, Math.min(3, request.task.goalContract?.minimumEvidenceSources ?? 1));
   const steps: Plan["steps"] = [];
   const sourceIds: string[] = [];
-  const seedUrls = target ? [target] : researchSourceSeeds(request).slice(0, minimumSources);
+  const sources = researchSources(request.objective).slice(0, 3);
+  const seedUrls = sources.map(source => source.url);
 
   for (const [index, url] of seedUrls.entries()) {
     const id = `browser-source-${index + 1}`;
     sourceIds.push(id);
+    const topics = sources[index]!.discoveryTopics ?? (sources[index]!.topic ? [sources[index]!.topic!] : []);
     steps.push({
       id,
       kind: "TOOL",
@@ -188,8 +190,15 @@ function deterministicBrowserPlan(request: PlanRequest, browserTools: ToolDescri
       expectedOutcome: "The requested public page is open and its visible contents are observed.",
       allowedToolCapabilities: ["browser", "browser:open"],
       dependencies: steps.length ? [steps.at(-1)!.id] : undefined,
-      action: { id: `call_${request.task.id}_browser_source_${index + 1}`, tool: open.id, arguments: { url } }
+      action: { id: `call_${request.task.id}_browser_source_${index + 1}`, tool: open.id, arguments: { url } },
+      alternativeUrls: sources[index]!.alternatives,
+      evidenceRole: topics.length ? "DISCOVERY" : "SOURCE"
     });
+    for (const [topicIndex, topic] of topics.entries()) {
+      const topicId = topics.length === 1 ? `${id}-topic` : `${id}-topic-${topicIndex + 1}`;
+      steps.push({ id: topicId, kind: "TOOL", description: "Read the relevant page linked from the observed official index.", status: "PENDING", allowedToolCapabilities: ["browser", "browser:open"], dependencies: [steps.at(-1)!.id], actionStrategy: "DISCOVERED_BROWSER_LINK", sourceDomain: new URL(url).hostname.replace(/^www\./, ""), sourceTopic: topic, evidenceRole: topicIndex < topics.length - 1 ? "DISCOVERY" : "SOURCE" });
+      sourceIds[sourceIds.length - 1] = topicId;
+    }
   }
 
   if (sourceIds.length < minimumSources) {
@@ -200,9 +209,11 @@ function deterministicBrowserPlan(request: PlanRequest, browserTools: ToolDescri
       description: "Search the public web for sources relevant to the objective.",
       status: "PENDING",
       expectedOutcome: "A read-only search result page with public source links is observed.",
+      evidenceRole: "DISCOVERY",
       allowedToolCapabilities: ["browser", "browser:open"],
       dependencies: steps.length ? [steps.at(-1)!.id] : undefined,
-      action: { id: `call_${request.task.id}_browser_search`, tool: open.id, arguments: { url: publicSearchUrl(request.objective) } }
+      action: { id: `call_${request.task.id}_browser_search`, tool: open.id, arguments: { url: publicSearchUrl(request.objective), textOnly: true } },
+      alternativeUrls: alternativeSearchUrls(request.objective)
     });
     for (let index = sourceIds.length; index < minimumSources; index += 1) {
       const id = `browser-source-${index + 1}`;
@@ -234,51 +245,9 @@ function deterministicBrowserPlan(request: PlanRequest, browserTools: ToolDescri
     objective: request.objective,
     revision: 1,
     createdAt: new Date().toISOString(),
-    assumptions: ["LLM planning was unavailable or invalid; preserve the mandatory read-only browser evidence boundary."],
+    assumptions: ["Use stable source identities and observed discovery links through the mandatory read-only browser boundary."],
     steps
   };
-}
-
-function publicSearchUrl(objective: string): string {
-  const query = objective.replace(/https?:\/\/[^\s<>"']+/gi, " ").replace(/\s+/g, " ").trim().slice(0, 500);
-  const locale = /\b(?:qual|quais|hoje|atual|mais|pesquise|procure|compare|versao|linguagem)\b/i.test(query) ? "pt" : "en";
-  const endpoint = new URL(`https://${locale}.wikipedia.org/w/api.php`);
-  endpoint.search = new URLSearchParams({ action: "query", list: "search", srsearch: query, srlimit: "10", format: "json", origin: "*" }).toString();
-  return endpoint.href;
-}
-
-/** Stable source roots, not canned answers. They are selected by persisted goal semantics. */
-function researchSourceSeeds(request: PlanRequest): string[] {
-  const contract = request.task.goalContract;
-  if (contract?.domain === "software-development" && contract.evidenceRequirement === "REQUIRED") {
-    if (/\bpython\b/i.test(request.objective)) return ["https://www.python.org/downloads/"];
-    if (/\bnode(?:\.js)?\b/i.test(request.objective)) return ["https://nodejs.org/"];
-    if (/\btypescript\b/i.test(request.objective)) return ["https://www.typescriptlang.org/docs/"];
-  }
-  if (contract?.domain === "software-development" && contract.primaryIntent === "COMPARISON") {
-    return ["https://www.tiobe.com/tiobe-index/", "https://pypl.github.io/PYPL.html"];
-  }
-  return [];
-}
-
-const AUTHORITATIVE_BROWSER_TARGETS: ReadonlyArray<{ matches: RegExp; url: string }> = [
-  { matches: /\bpython\b/i, url: "https://www.python.org/downloads/" },
-  { matches: /\bnode(?:\.js)?\b/i, url: "https://nodejs.org/" },
-  { matches: /\btypescript\b/i, url: "https://www.typescriptlang.org/docs/" }
-];
-
-function resolveAuthoritativeBrowserTarget(objective: string): string | undefined {
-  const explicit = objective.match(/https?:\/\/[^\s<>"']+/i)?.[0]?.replace(/[),.;!?]+$/, "");
-  if (explicit) {
-    try {
-      const url = new URL(explicit);
-      if (["http:", "https:"].includes(url.protocol) && !url.username && !url.password) return url.href;
-    } catch {
-      return undefined;
-    }
-  }
-  if (!/(?:site|website|documenta(?:cao|ção|tion)|oficial|official)/i.test(objective)) return undefined;
-  return AUTHORITATIVE_BROWSER_TARGETS.find((target) => target.matches.test(objective))?.url;
 }
 
 function planningPrompt(request: PlanRequest): ModelMessage[] {

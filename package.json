@@ -15,7 +15,7 @@
     "test:tools": "vitest run packages/tools/src",
     "test:runtime": "vitest run packages/runtime/src/**/*.test.ts",
     "test:benchmark": "vitest run packages/benchmark/src/**/*.test.ts",
-    "test:browser": "vitest run packages/browser-agent/src/action-parser.test.ts packages/browser-agent/src/policy.test.ts packages/browser-agent/src/ssrf-boundary.test.ts packages/browser-agent/src/redaction.test.ts packages/browser-agent/src/browser-agent.test.ts packages/browser-agent/src/browser-tools.test.ts && node --test packages/browser-agent/scripts/network-failures.test.mjs",
+    "test:browser": "vitest run packages/browser-agent/src/action-parser.test.ts packages/browser-agent/src/policy.test.ts packages/browser-agent/src/ssrf-boundary.test.ts packages/browser-agent/src/pinned-transport.test.ts packages/browser-agent/src/redaction.test.ts packages/browser-agent/src/browser-agent.test.ts packages/browser-agent/src/browser-tools.test.ts && node --test packages/browser-agent/scripts/network-failures.test.mjs",
     "test:web-evals": "vitest run packages/web-evals/src",
     "test:integration": "vitest run tests/integration",
     "browser:smoke": "tsx packages/browser-agent/src/smoke.ts",
@@ -48,7 +48,8 @@
     "providers:status": "tsx apps/cli/src/index.ts providers status",
     "providers:nvidia-smoke": "tsx packages/benchmark/src/models/nvidia-nim-smoke.ts",
     "control-center:security-smoke": "pnpm --filter @beyonder/control-center security-smoke",
-    "control-center:supervisor-smoke": "pnpm --filter @beyonder/control-center supervisor-smoke"
+    "control-center:supervisor-smoke": "pnpm --filter @beyonder/control-center supervisor-smoke",
+    "test:browser:e2e": "BEYONDER_BROWSER_E2E=1 vitest run packages/browser-agent/src/browser-agent.e2e.test.ts"
   },
   "engines": {
     "node": ">=22.0.0",

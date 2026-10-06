@@ -79,12 +79,55 @@ describe("objective verification truth", () => {
     const verdict = new ObjectiveVerifier().evaluate(execution(task, "Python 3.x is current."));
     expect(verdict).toMatchObject({ taskCompleted: false, objectiveStatus: "NEEDS_CAPABILITY", recoveryRecommendation: "ENABLE_CAPABILITY" });
   });
+  it.each(["vendor/same-model:free", "same_model", "Same-Model"])("rechecks physical independence from the actual gateway response (%s)", async reportedModel => {
+    const task = comparisonTask("resolved-alias");
+    const verdict = JSON.stringify({ satisfied: true, confidence: 1, relevance: true, completeness: true, consistentWithEvidence: true, reason: "Satisfied", missingRequirements: [], recoveryRecommendation: "NONE" });
+    const { router, complete, attempts } = fakeRouter(["gateway-alias", "independent-verifier"], () => verdict);
+    complete.mockImplementation(async (_messages, model) => ({ provider: model.provider, model: model.model, estimatedCostUsd: 0, content: verdict, attribution: { requestedModel: model.model, reportedModel: model.model === "gateway-alias" ? reportedModel : "independent-verifier" } }));
+    expect(await new ModelObjectiveVerifier(router).evaluate(execution(task, "A complete comparison.", "same-model"))).toMatchObject({ taskCompleted: true });
+    expect([...attempts.values()].find(attempt => attempt.model === "gateway-alias")).toMatchObject({ status: "FAILED", failureClass: "INVALID_OUTPUT" });
+    expect([...attempts.values()].find(attempt => attempt.model === "independent-verifier")).toMatchObject({ status: "SUCCEEDED" });
+  });
 
+  it("rejects incompatible TypeScript before a permissive semantic verdict can certify it", async () => {
+    const input = "Implemente um cache LRU em TypeScript com capacidade fixa.";
+    const task: IntelligenceTask = { ...comparisonTask("lru"), input, type: "coding", requirements: { coding: true }, goalContract: analyzeGoalContract(input, "coding") };
+    const { router, complete } = fakeRouter(["producer", "verifier"], () => JSON.stringify({ satisfied: true, confidence: 1, relevance: true, completeness: true, consistentWithEvidence: true, reason: "Looks correct", missingRequirements: [], recoveryRecommendation: "NONE" }));
+    const result = "```typescript\nfunction evict<K,V>(cache:Map<K,V>) { const key=cache.keys().next().value; cache.delete(key); }\n```";
+    expect(await new ModelObjectiveVerifier(router).evaluate(execution(task, result))).toMatchObject({ taskCompleted: false, objectiveStatus: "FAILED", missingRequirements: ["typescript-typecheck"] });
+    expect(complete).not.toHaveBeenCalled();
+  });
+
+  it.each([25, 87, 39])("provides actual completed calculator evidence to independent verification (%s)", async value => {
+    const task = { ...comparisonTask(), input: "Explique um cálculo em várias etapas.", goalContract: analyzeGoalContract("Explique um cálculo em várias etapas.", "reasoning") };
+    const { router, complete } = fakeRouter(["producer", "verifier"], () => JSON.stringify({ satisfied: true, confidence: 0.95, relevance: true, completeness: true, consistentWithEvidence: true, reason: "Observed calculator result matches", missingRequirements: [], recoveryRecommendation: "NONE" }));
+    const ex = execution(task, "Result and explanation: " + value);
+    ex.steps.unshift({ ...ex.steps[0]!, toolCall: {id: "calc", tool: "calculator", arguments: {operation: "add", operands: [value, 0]}}, toolResult: {success: true, output: {value}, durationMs: 0, sideEffects: []} });
+    expect((await new ModelObjectiveVerifier(router).evaluate(ex)).taskCompleted).toBe(true);
+    const request = JSON.parse(complete.mock.calls[0]![0][1]!.content);
+    expect(request.toolEvidence).toContainEqual(expect.objectContaining({tool: "calculator", observedOutput: JSON.stringify({value})}));
+  });
+  it("sends the complete coding result and fails closed above the review limit", async () => {
+    const { router, complete } = fakeRouter(["producer", "verifier"], () => JSON.stringify({ satisfied: true, confidence: 0.95, relevance: true, completeness: true, consistentWithEvidence: true, reason: "Complete result reviewed", missingRequirements: [], recoveryRecommendation: "NONE" }));
+    const result = "Full program: " + "x".repeat(5_000) + " important final invariant";
+    await new ModelObjectiveVerifier(router).evaluate(execution(comparisonTask(), result));
+    expect(JSON.parse(complete.mock.calls[0]![0][1]!.content).result).toBe(result);
+    expect((await new ModelObjectiveVerifier(router).evaluate(execution(comparisonTask(), "x".repeat(16_001)))).objectiveStatus).toBe("NEEDS_CAPABILITY");
+    expect(complete).toHaveBeenCalledTimes(1);
+  });
   it("does not let the answer producer certify its own open-ended answer", async () => {
     const task = comparisonTask();
     const { router, complete } = fakeRouter(["producer"], () => JSON.stringify({ satisfied: true }));
     const verdict = await new ModelObjectiveVerifier(router).evaluate(execution(task, "A comparison with trade-offs."));
     expect(verdict).toMatchObject({ taskCompleted: false, objectiveStatus: "NEEDS_CAPABILITY", recoveryRecommendation: "ENABLE_CAPABILITY" });
+    expect(complete).not.toHaveBeenCalled();
+  });
+
+  it.each(["vendor/same-model:free", "same_model", "Same-Model"])("does not invent verifier independence across gateway aliases: %s", async model => {
+    const { router, complete } = fakeRouter([model], () => JSON.stringify({ satisfied: true }));
+    const verdict = await new ModelObjectiveVerifier(router).evaluate(execution(comparisonTask(), "A comparison with trade-offs.", "same-model"));
+    expect(verdict.objectiveStatus).toBe("NEEDS_CAPABILITY");
+    expect(verdict.reason).toContain("Only the producer is eligible");
     expect(complete).not.toHaveBeenCalled();
   });
 
@@ -166,5 +209,18 @@ describe("objective verification truth", () => {
     ]);
     expect(outcomes.at(-1)).toMatchObject({ provider: "fixture", model: "alternate", success: true, evaluation: { method: "independent-semantic-objective-verifier" } });
     expect(complete).toHaveBeenCalledTimes(3);
+  });
+  it("records terminal completion after independent verification, separately from execution finish", async () => {
+    const task = comparisonTask("terminal-time"); let clock = Date.now();
+    const { router } = fakeRouter(["producer", "verifier"], system => {
+      if (!system.includes("independent objective verifier")) return "Queues distribute work; append-only logs preserve replayable history.";
+      clock += 5_000;
+      return JSON.stringify({ satisfied: true, confidence: 0.9, relevance: true, completeness: true, consistentWithEvidence: true, reason: "Comparison is complete", missingRequirements: [], recoveryRecommendation: "NONE" });
+    });
+    const executor = new AutonomousTaskExecutor({ toolExecutor: new ToolExecutor(new ToolRegistry()), getAvailableTools: async () => [], modelRouter: router, completionEvaluator: new ModelObjectiveVerifier(router), now: () => clock });
+    const plan: Plan = { id: "plan", taskId: task.id, objective: task.input, revision: 1, createdAt: new Date(clock).toISOString(), steps: [{ id: "answer", description: "Compare", kind: "DIRECT_RESPONSE", status: "PENDING" }] };
+    const { execution: result } = await executor.execute({ task, plan, economicState: "normal" });
+    expect(Date.parse(result.completedAt!) - Date.parse(result.executionFinishedAt!)).toBe(5_000);
+    expect(result.executionPhase).toBe("OBJECTIVE_VERIFIED");
   });
 });

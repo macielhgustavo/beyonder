@@ -79,7 +79,12 @@ export function createRuntime(config: AppConfig, options: RuntimeOptions = {}): 
   const memory = new MemoryEngine(memoryStore);
   const intelligence = new IntelligenceLayer(memory);
   const evaluation = new EvaluationLayer();
-  const performance = new MemoryPerformanceRepository(memoryStore);
+  const performance = new MemoryPerformanceRepository(memoryStore, async taskId => {
+    try {
+      const checkpoint = await state.get<{ execution?: { objectiveStatus?: string; objectiveVerification?: { objectiveStatus?: string } } } | null>(`task-checkpoint:${taskId}`, null);
+      return checkpoint?.execution?.objectiveVerification?.objectiveStatus ?? checkpoint?.execution?.objectiveStatus;
+    } catch { return undefined; }
+  });
   const audit = new AuditLog(db);
   const modelRouter = new ModelRouter(config.model, { state, performanceRepository: performance, capabilitySource: options.capabilitySource, telemetry: audit });
   const adaptiveExecution = new AdaptiveExecutionController(modelRouter, evaluation, audit);

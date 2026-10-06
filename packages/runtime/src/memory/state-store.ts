@@ -1,4 +1,4 @@
-import { eq, and } from "drizzle-orm";
+import { eq, and, like } from "drizzle-orm";
 import type { Db } from "../db/client.js";
 import { state } from "../db/schema.js";
 
@@ -9,6 +9,11 @@ export class StateStore {
     const raw = await this.readRaw(key);
     if (!raw.found) return fallback;
     return JSON.parse(raw.value) as T;
+  }
+
+  async values<T>(prefix: string): Promise<T[]> {
+    const rows = await this.db.select({ value: state.value }).from(state).where(like(state.key, `${prefix}%`));
+    return rows.map(row => JSON.parse(row.value) as T);
   }
 
   async readRaw(key: string): Promise<{ found: false } | { found: true; value: string }> {

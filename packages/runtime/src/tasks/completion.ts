@@ -3,6 +3,7 @@ import { analyzeGoalContract } from "../intelligence/goal-contract.js";
 import { parseCalculatorExpression } from "../intelligence/calculator-expression.js";
 import type { AutonomousTaskOutcome, TaskExecution } from "./contracts.js";
 import { browserEvidence } from "./browser-evidence.js";
+import { typescriptDiagnostics } from "./typescript-validation.js";
 
 export type CompletionEvaluationStatus = "PASS" | "FAIL" | "BLOCKED" | "BUDGET_EXHAUSTED" | "CANCELLED";
 export type RecoveryRecommendation = "NONE" | "ACQUIRE_EVIDENCE" | "RETRY_SYNTHESIS" | "ALTERNATE_MODEL" | "REQUEST_INPUT" | "ENABLE_CAPABILITY" | "RECONCILE";
@@ -78,6 +79,11 @@ export class ObjectiveVerifier implements CompletionEvaluator {
     if (!result.trim()) return fail("The execution produced no user-facing result.", "FAILED", ["non-empty-result"], "RETRY_SYNTHESIS");
     if (isObviousNonAnswer(result)) return fail("The result is a refusal or limitation, not an answer to the objective.", "FAILED", ["objective-answer"], browserRequired && evidence.sources.length ? "ALTERNATE_MODEL" : browserRequired ? "ACQUIRE_EVIDENCE" : "ALTERNATE_MODEL");
     if (contract.outputFormat === "JSON" && !parseJson(result).ok) return fail("The goal requires valid JSON output; the result is not JSON.", "FAILED", ["json-output-format"], "RETRY_SYNTHESIS");
+    const typescriptRequired = contract.expectedResultKind === "CODE" && /\btypescript\b/i.test(contract.normalizedObjective);
+    if (typescriptRequired) {
+      const diagnostics = typescriptDiagnostics(result);
+      if (diagnostics.length) return fail(`Generated TypeScript does not pass standalone strict typechecking: ${diagnostics.join("; ")}`, "FAILED", ["typescript-typecheck"], "RETRY_SYNTHESIS");
+    }
 
     if (criteria.expectedText !== undefined && !result.includes(criteria.expectedText)) return fail(`Expected text '${criteria.expectedText}' was not found.`, "FAILED", ["expected-text"], "RETRY_SYNTHESIS");
     if (criteria.expectedJsonField) {
@@ -97,7 +103,7 @@ export class ObjectiveVerifier implements CompletionEvaluator {
         { name: "execution", passed: true, reason: "Execution finished." },
         { name: "result", passed: true, reason: "A non-empty, non-refusal result exists." },
         { name: "evidence", passed: true, reason: browserRequired ? `${evidence.sources.length} required external source(s) observed.` : "No mandatory external evidence." },
-        { name: "format", passed: true, reason: "Requested deterministic format checks passed." }
+        { name: "format", passed: true, reason: typescriptRequired ? "Standalone TypeScript passed strict static typechecking without execution; behavior still requires independent semantic verification." : "Requested deterministic format checks passed." }
       ],
       missingRequirements: [],
       recoveryRecommendation: "NONE"

@@ -1,11 +1,12 @@
 import type { AppConfig } from "../config/env.js";
 import type { IntelligenceTask, TaskOutcome } from "../intelligence/contracts.js";
 import type { EconomicState, ModelMessage, ModelResponse } from "../types.js";
-import { getProvider } from "@beyonder/compute";
+import { getProvider, providerFetch as fetch } from "@beyonder/compute";
+import { redactSecrets } from "@beyonder/tools";
 import { AdaptiveModelSelector, type AdaptiveSelectorOptions } from "./adaptive-selector.js";
 import type { ModelCandidate, RouteDecision, RouterTelemetry } from "./adaptive-types.js";
 import { EmptyPerformanceRepository, type PerformanceRepository } from "./performance-repository.js";
-import { httpFailure, InferenceError, type InferenceAttempt } from "./inference.js";
+import { completionEnvelopeFailure, httpFailure, InferenceError, type InferenceAttempt } from "./inference.js";
 import type { StateStore } from "../memory/state-store.js";
 import { OperationalHealthStore } from "./operational-health.js";
 
@@ -44,7 +45,22 @@ export class ModelRouter {
   }
 
   async canAttempt(candidate: Pick<ModelCandidate, "provider" | "model">): Promise<boolean> {
-    const cooldown = await this.operationalHealth.blocked(candidate.provider, candidate.model);
+    const repaired = await this.operationalHealth.reclassifyLegacyProviderCooldown(candidate.provider);
+    if (repaired) await this.options.telemetry?.record("info", "router.cooldown_scope_repaired", { provider: candidate.provider, ...repaired, evidenceSource: "persisted-original-provider-response" });
+    let cooldown = await this.operationalHealth.blocked(candidate.provider, candidate.model);
+    if (cooldown?.scope === "provider" && cooldown.reason === "AUTH_REQUIRED" && getProvider(candidate.provider)?.authType === "keyless") {
+      // A real, newer successful keyless inference disproves an old gateway-
+      // wide auth block. This never clears rate/quota cooldowns or uses a mere
+      // public catalog response as proof of inference access.
+      const health = await this.operationalHealth.get(candidate.provider);
+      const evidence = await this.options.capabilitySource?.getLastSuccessfulRequest?.(candidate.provider);
+      const provenAt = Date.parse(evidence?.observedAt ?? "");
+      if (Number.isFinite(provenAt) && provenAt > Date.parse(health.lastFailureAt ?? "") && provenAt <= Date.now()) {
+        await this.operationalHealth.credentialValidated(candidate.provider);
+        await this.options.telemetry?.record("info", "router.authentication_recovered", { provider: candidate.provider, model: evidence!.model, evidenceSource: "real-BIB-inference", observedAt: evidence!.observedAt });
+        cooldown = await this.operationalHealth.blocked(candidate.provider, candidate.model);
+      }
+    }
     if (cooldown) await this.options.telemetry?.record("info", "router.candidate_deferred", { provider: candidate.provider, model: candidate.model, ...cooldown });
     return !cooldown;
   }
@@ -164,12 +180,15 @@ export class ModelRouter {
     const provider = getProvider(candidate.provider);
     if (!provider?.openAiCompatibleEndpoint) throw new Error(`Provider ${candidate.provider} has no compatible completion endpoint.`);
     const apiKey = provider.credentialEnvVars.filter((name) => !name.endsWith("ACCOUNT_ID")).map((name) => process.env[name]).find((value) => Boolean(value));
-    if (provider.credentialEnvVars.length > 0 && !apiKey) throw new InferenceError(`Provider ${candidate.provider} credential is unavailable.`, "AUTH_REQUIRED");
+    if (provider.authType !== "keyless" && !apiKey) throw new InferenceError(`Provider ${candidate.provider} credential is unavailable.`, "AUTH_REQUIRED");
     const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
     if (provider.openAiCompatibleEndpoint.includes("{account_id}") && !accountId) throw new InferenceError("Provider account configuration is unavailable.", "AUTH_REQUIRED");
     const endpoint = provider.openAiCompatibleEndpoint.replace("{account_id}", encodeURIComponent(accountId ?? ""));
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 20_000);
+    // Live evidence-bearing synthesis completed correctly in 36.9s on an
+    // otherwise qualified free reasoning model. Keep a bounded per-request
+    // allowance for that profile; the enclosing mission deadline still wins.
+    const timer = setTimeout(() => controller.abort(), candidate.capabilities?.includes("reasoning-control") ? 45_000 : 20_000);
     try {
       const response = await fetch(`${endpoint.replace(/\/$/, "")}/chat/completions`, {
         method: "POST",
@@ -178,16 +197,28 @@ export class ModelRouter {
           ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {})
         },
         signal: AbortSignal.any([controller.signal, ...(signal ? [signal] : [])]),
-        body: JSON.stringify({ model: candidate.model, messages, temperature: 0, max_tokens: structured ? 300 : 800, stream: false, ...(structured ? { response_format: { type: "json_object" } } : {}) })
+        // A catalog declaration is not proof that native JSON mode was evaluated.
+        // Keep the observed BIB request mode instead of silently changing the
+        // inference profile used to establish structured-output capability.
+        body: JSON.stringify({ model: candidate.model, messages, temperature: 0, max_tokens: 2400, stream: false, ...(candidate.capabilities?.includes("reasoning-control") ? { reasoning: { effort: "low" } } : {}), ...(structured && (candidate.benchmarkCapability?.structuredOutputMode ?? candidate.structuredOutput) === "native" ? { response_format: { type: "json_object" } } : {}) })
       });
       if (!response.ok) throw httpFailure(response.status, (await response.text()).replaceAll(apiKey || "\u0000", "[REDACTED]"), response.headers);
-      const json = await response.json() as { choices?: Array<{ message?: { content?: string; tool_calls?: unknown[]; function_call?: unknown } }>; usage?: { total_tokens?: number } };
+      const json = await response.json() as { error?: unknown; model?: string; provider?: string; choices?: Array<{ finish_reason?: string; message?: { content?: string; tool_calls?: unknown[]; function_call?: unknown; provider_metadata?: { gateway?: { routing?: { resolvedProvider?: string; totalProviderAttemptCount?: number } } } } }>; usage?: { total_tokens?: number; cost?: number | string } };
+      const completion = json.choices?.[0];
+      // An HTTP 200 can still carry a gateway error or a truncated/empty
+      // completion. Preserve a bounded, redacted diagnostic, without storing
+      // hidden reasoning, so an operator can distinguish these failure modes.
+      const diagnostic = () => JSON.stringify(redactSecrets({ model: json.model, error: json.error, usage: json.usage, finishReason: completion?.finish_reason, content: typeof completion?.message?.content === "string" ? completion.message.content.slice(0, 500) : undefined })).slice(0, 1500);
+      if (json.error) throw completionEnvelopeFailure(json.error, response.status, response.headers);
+      if (completion?.finish_reason === "length") throw new InferenceError("Completion exhausted its output budget before finishing.", "INVALID_OUTPUT", response.status, diagnostic());
+      if (!completion?.message || typeof completion.message.content !== "string" || !completion.message.content.trim()) throw new InferenceError("Provider returned an empty or invalid completion envelope.", "INVALID_OUTPUT", response.status, diagnostic());
       if (json.choices?.[0]?.message?.tool_calls?.length || json.choices?.[0]?.message?.function_call) throw new InferenceError("Model returned unsolicited native tool calls while tools are disabled; no tool was executed.", "INVALID_OUTPUT");
       return {
         content: json.choices?.[0]?.message?.content ?? "",
         provider: candidate.provider,
         model: candidate.model,
-        estimatedCostUsd: 0,
+        estimatedCostUsd: json.usage?.cost === undefined ? 0 : Number(json.usage.cost),
+        attribution: { requestedModel: candidate.model, reportedModel: json.model, upstreamProvider: json.provider ?? json.choices?.[0]?.message?.provider_metadata?.gateway?.routing?.resolvedProvider, upstreamAttemptCount: json.choices?.[0]?.message?.provider_metadata?.gateway?.routing?.totalProviderAttemptCount },
         raw: { usage: json.usage }
       };
     } finally {

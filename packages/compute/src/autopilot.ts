@@ -122,7 +122,8 @@ export class ProviderAutopilotOrchestrator {
         message: report.status.validationMessage,
         latencyMs: report.latencyMs,
         modelCount: report.modelCount,
-        models: report.models.slice(0, 50),
+        models: report.models,
+        modelMetadata: report.modelMetadata,
         rateLimitHeaders: report.rateLimitHeaders
       };
       if (report.status.validationStatus === "failed") {

@@ -6,6 +6,8 @@ on:
     paths:
       - 'apps/dashboard/**'
       - 'packages/browser-agent/scripts/**'
+      - 'docs/architecture/**'
+      - 'docs/qualification/**'
       - '.github/workflows/visual-qa-control-center.yml'
       - 'package.json'
       - 'pnpm-lock.yaml'

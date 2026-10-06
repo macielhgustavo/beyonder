@@ -187,12 +187,15 @@ benchmark
   .option("--smoke", "run the tiny, cheap benchmark set")
   .option("--standard", "run the broader economical benchmark set")
   .option("--db <path>", "benchmark SQLite path")
-  .action(async (options: { smoke?: boolean; standard?: boolean; db?: string }, command: Command) => {
+  .option("--provider <id>", "qualify one configured provider")
+  .option("--models <ids>", "comma-separated explicit live model ids; zero-price eligibility still applies")
+  .option("--categories <names>", "comma-separated capability categories to measure")
+  .action(async (options: { smoke?: boolean; standard?: boolean; db?: string; provider?: string; models?: string; categories?: string }, command: Command) => {
     const mode = benchmarkMode(options);
     const config = loadConfig();
     const state = await new AutopilotStateStore(config.model.providerStatePath).read();
     const broker = await credentialBroker();
-    const targets = selectFreeModelTargets(state, broker);
+    const targets = selectFreeModelTargets(state, broker, { provider: options.provider, models: options.models?.split(",").map(model => model.trim()).filter(Boolean) });
     if (!targets.length) {
       console.log("MODEL PERFORMANCE\n\nNo READY zero-cost benchmark models available. monetary cost: $0.00");
       return;
@@ -201,6 +204,7 @@ benchmark
     const results = await runBenchmark({
       mode,
       targets,
+      categories: options.categories?.split(",").map(category => parseBenchmarkCategory(category.trim())),
       client: new OpenAiCompatibleBenchmarkClient(),
       telemetry: new StderrTelemetrySink()
     });

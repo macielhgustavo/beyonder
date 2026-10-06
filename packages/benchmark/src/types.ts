@@ -1,4 +1,8 @@
 export type BenchmarkCategory =
+  | "research"
+  | "synthesis"
+  | "verification"
+  | "evidence-grounding"
   | "reasoning"
   | "coding"
   | "planning"
@@ -13,6 +17,7 @@ export type BenchmarkEvaluator = "exact" | "json-schema" | "contains" | "code-te
 export type BenchmarkMode = "smoke" | "standard";
 
 export type BenchmarkExecutionStatus =
+  | "OUTPUT_LIMIT"
   | "PASS"
   | "FAIL"
   | "RATE_LIMITED"
@@ -45,6 +50,7 @@ export interface EvaluationResult {
 }
 
 export interface BenchmarkResult {
+  structuredOutputMode?: "prompted" | "native";
   id?: string;
   caseId: string;
   provider: string;
@@ -60,10 +66,12 @@ export interface BenchmarkResult {
   httpStatus?: number;
   errorCode?: string;
   failureReason?: string;
+  inferenceProfile?: string;
   timestamp: Date;
 }
 
 export interface ModelTarget {
+  reasoning?: { enabled?: boolean; effort?: "low" | "medium" | "high" };
   provider: string;
   providerName: string;
   model: string;
@@ -79,6 +87,7 @@ export interface BenchmarkModelMessage {
 }
 
 export interface BenchmarkModelResponse {
+  structuredOutputMode?: "prompted" | "native";
   content: string;
   provider: string;
   model: string;
@@ -88,10 +97,13 @@ export interface BenchmarkModelResponse {
 }
 
 export interface BenchmarkSummary {
+  structuredOutputMode?: "prompted" | "native";
+  inferenceProfile?: string;
   provider: string;
   model: string;
   category: BenchmarkCategory;
   evaluatedSamples: number;
+  distinctEvaluatedCases?: number;
   operationalFailures: number;
   successes: number;
   avgQuality: number | null;
@@ -102,6 +114,7 @@ export interface BenchmarkSummary {
   latestFailureReason?: string;
   latestHttpStatus?: number;
   lastTestedAt: Date;
+  lastEvaluatedAt?: Date;
 }
 
 export interface ProviderOperationalStats {

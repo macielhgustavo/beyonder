@@ -1,4 +1,4 @@
-import { lookup } from "node:dns/promises";
+import { Resolver } from "node:dns/promises";
 import { isIP } from "node:net";
 import type {
   BrowserAction,
@@ -41,9 +41,18 @@ export type BrowserConnectionDecision =
   | { decision: BrowserPolicyDecision; target?: undefined };
 
 export class SystemAddressResolver implements AddressResolver {
+  constructor(private readonly resolver: Pick<Resolver, "resolve4" | "resolve6"> = new Resolver({ timeout: 1_000, tries: 2 })) {}
   async resolve(hostname: string): Promise<string[]> {
-    const records = await lookup(hostname, { all: true, verbatim: true });
-    return records.map((record) => record.address);
+    // Resolve both families concurrently. OS getaddrinfo can block for five
+    // seconds on AAAA in proxy environments. Neither family is silently dropped
+    // on a network failure, and every returned address still passes policy.
+    const results = await Promise.allSettled([this.resolver.resolve4(hostname), this.resolver.resolve6(hostname)]);
+    const addresses: string[] = [];
+    for (const result of results) {
+      if (result.status === "fulfilled") addresses.push(...result.value);
+      else if (!["ENODATA", "ENOTFOUND"].includes((result.reason as { code?: string })?.code ?? "")) throw result.reason;
+    }
+    return addresses;
   }
 }
 
@@ -200,12 +209,15 @@ export function isPrivateAddress(address: string): boolean {
   const ipVersion = isIP(normalized);
   if (ipVersion === 4) {
     const octets = normalized.split(".").map(Number);
-    const [a, b] = octets;
+    const [a, b, c] = octets;
     if (a === 10 || a === 127 || a === 0) return true;
     if (a === 169 && b === 254) return true;
     if (a === 172 && b !== undefined && b >= 16 && b <= 31) return true;
     if (a === 192 && b === 168) return true;
     if (a === 100 && b !== undefined && b >= 64 && b <= 127) return true;
+    if (a === 192 && b === 0 && (c === 0 || c === 2)) return true;
+    if (a === 198 && (b === 18 || b === 19 || b === 51 && c === 100)) return true;
+    if (a === 203 && b === 0 && c === 113) return true;
     if (a !== undefined && a >= 224) return true;
     return false;
   }
@@ -222,6 +234,15 @@ export function isPrivateAddress(address: string): boolean {
         const low = Number.parseInt(groups[1], 16);
         return isPrivateAddress(`${high >> 8}.${high & 255}.${low >> 8}.${low & 255}`);
       }
+    }
+    // Default browser egress accepts ordinary global unicast only. This also
+    // closes multicast, documentation and deprecated transition-address paths.
+    const first = Number.parseInt(normalized.split(":")[0] ?? "", 16);
+    if (!(first >= 0x2000 && first <= 0x3fff)) return true;
+    if (first === 0x2002 || first === 0x3ffe) return true;
+    if (first === 0x2001) {
+      const second = Number.parseInt(normalized.split(":")[1] || "0", 16);
+      if (second < 0x200 || second === 0xdb8) return true;
     }
   }
   return false;

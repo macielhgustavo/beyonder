@@ -99,6 +99,7 @@ try {
   const home = await (await fetch(`${url}/api/control/overview`)).json();
   assertVerifiedMission(home.recentMissions.find((mission) => mission.taskId === queued.taskId), queued.taskId, browserObjective);
   await page.reload();
+  await assertMissionCard(page.getByRole("region", { name: "Command Beyonder", exact: true }).locator(missionSelector), browserMission);
   await assertMissionCard(page.locator(".home-recent").locator(missionSelector), browserMission, true);
   await page.goto(`${url}/missions`);
   await assertMissionCard(page.locator(".mission-list").locator(missionSelector), browserMission);
@@ -140,9 +141,11 @@ try {
   page = await browser.newPage();
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto(url);
+  await assertMissionCard(page.getByRole("region", { name: "Command Beyonder", exact: true }).locator(`[data-mission-id="${browserMission.taskId}"]`), browserMission);
   const restoredCard = page.locator(".home-recent").locator(`[data-mission-id="${browserMission.taskId}"]`);
   await assertMissionCard(restoredCard, browserMission, true);
   await restoredCard.getByRole("link", { name: "Abrir missão", exact: true }).click();
+  await page.waitForURL(`${url}/missions/${browserMission.taskId}`);
   await assertMissionCard(page.locator(`[data-mission-id="${browserMission.taskId}"]`), browserMission);
   assert(errors.length === 0, `Browser errors after restart: ${errors.join(", ")}`);
   await browser.close(); browser = null;

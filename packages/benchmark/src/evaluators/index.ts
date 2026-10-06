@@ -32,6 +32,13 @@ function jsonSchema(output: string, expected: unknown): EvaluationResult {
   const required = expected && typeof expected === "object" && "required" in expected ? toStringArray((expected as { required: unknown }).required) : [];
   const parsed = parseJsonObject(output);
   if (!parsed) return result(0, { error: "invalid-json" });
+  if (expected && typeof expected === "object" && "equals" in expected) {
+    if (required.some(key => !(key in parsed))) return result(0, { error: "missing-required-fields", required });
+    const value = (expected as { equals: unknown }).equals;
+    const allowedKeys = value && typeof value === "object" ? new Set([...required, ...Object.keys(value)]) : new Set();
+    const equal = value && typeof value === "object" && Object.keys(parsed).length === allowedKeys.size && Object.entries(value).every(([key, expectedValue]) => deepEqual(parsed[key], expectedValue));
+    return result(equal ? 1 : 0, { expected: value, actual: parsed });
+  }
   const hits = required.filter((key) => key in parsed);
   return result(required.length === 0 ? 1 : hits.length / required.length, { required, hits });
 }

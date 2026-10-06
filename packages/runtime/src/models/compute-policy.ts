@@ -1,6 +1,25 @@
 import type { GoalContract, IntelligenceTask, RequiredCapability } from "../intelligence/contracts.js";
 import type { CandidateCapabilityFit, CapabilityDimension, ComputeTier, ModelCandidate, QualityFloor } from "./adaptive-types.js";
 
+/** Completed tools/planning do not need to be performed again by synthesis or
+ * verification. Explicit goal requirements remain authoritative in both phases. */
+export function objectivePhaseTask(task: IntelligenceTask, phase: "DIRECT_RESPONSE" | "OBJECTIVE_VERIFICATION"): IntelligenceTask {
+  const verifying = phase === "OBJECTIVE_VERIFICATION";
+  return {
+    ...task,
+    type: verifying ? "reasoning" : task.type,
+    requirements: {
+      ...task.requirements,
+      planning: task.goalContract ? task.goalContract.requiredCapabilities.includes("planning") : task.requirements.planning,
+      browser: verifying ? false : task.requirements.browser,
+      toolUse: false,
+      tools: [],
+      directResponse: true,
+      ...(verifying ? { reasoning: true, structuredOutput: true } : {})
+    }
+  };
+}
+
 export const CLOUD_FIRST_POLICY = {
   paidEscalationEnabled: false,
   localEmergencyFallbackBudget: 1,
@@ -66,11 +85,12 @@ export function resolveQualityFloor(task: IntelligenceTask): QualityFloor {
 
 export function assessCapability(candidate: ModelCandidate, task: IntelligenceTask, floor: QualityFloor): CandidateCapabilityFit {
   const prior = clamp(candidate.predictedQuality);
-  const outcome = candidate.performance.samples > 0
-    ? clamp((candidate.performance.avgEvaluationScore + candidate.performance.successRate) / 2)
-    : prior;
   const reliability = clamp(candidate.reliability);
-  const overall = clamp(prior * 0.62 + outcome * 0.2 + reliability * 0.18);
+  // predictedQuality is already the BIB/metadata posterior updated with real
+  // outcomes. Applying raw outcomes again counted the same failure twice and
+  // could permanently exclude a model after one failed mission. Reliability
+  // remains a separate observed signal; the numerical floor is unchanged.
+  const overall = clamp(prior * 0.82 + reliability * 0.18);
   const caps = new Set(candidate.capabilities.map((capability) => capability.toLowerCase()));
   const dimensions: CandidateCapabilityFit["dimensions"] = {};
   const evidence = [
@@ -80,7 +100,15 @@ export function assessCapability(candidate: ModelCandidate, task: IntelligenceTa
   ];
 
   const supported = (dimension: CapabilityDimension): number => {
-    let value = overall;
+    const observed = candidate.benchmarkCapability?.dimensions?.[dimension];
+    if (observed && observed.samples >= 2) {
+      evidence.push(`${dimension}=${observed.score.toFixed(3)}:BIB:${observed.samples}:${observed.updatedAt}`);
+      return clamp(observed.score);
+    }
+    // A good observed synthesis score is not evidence of coding or JSON ability.
+    // Unmeasured dimensions retain their metadata prior until they are measured.
+    let value = candidate.benchmarkCapability?.dimensions && candidate.metadataQuality !== undefined
+      ? clamp(candidate.metadataQuality * 0.82 + reliability * 0.18) : overall;
     if (dimension === "reasoning") {
       if (caps.has("reasoning")) value += 0.06;
       else if (task.requirements.reasoning) value -= 0.035;

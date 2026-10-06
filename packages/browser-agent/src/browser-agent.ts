@@ -33,9 +33,9 @@ export interface BrowserAgentOptions {
 }
 
 const DEFAULT_OBSERVATION_LIMITS: BrowserObservationLimits = {
-  maxTextChars: 5_000,
+  maxTextChars: 12_000,
   maxInteractiveElements: 40,
-  maxLinks: 30,
+  maxLinks: 160,
   maxForms: 10,
   maxErrors: 10
 };
@@ -165,7 +165,14 @@ export class BrowserAgent {
         const element = await active.session.inspect(action.target);
         const decision = await active.policyEngine.evaluateClick(sessionId, action, element, this.options.authorize);
         if (!decision.allowed) return this.blocked(sessionId, action, decision, actionId);
-        await active.session.click(action.target);
+        const method = (element.formMethod ?? "GET").toUpperCase();
+        let submission: { url: string; method: string } | undefined;
+        if (element.isSubmit && !["GET", "HEAD"].includes(method) && action.authorizationId) {
+          const destination = new URL(element.formAction || (await active.session.current()).url);
+          destination.hash = "";
+          submission = { url: destination.href, method };
+        }
+        await active.session.click(action.target, submission);
         return this.withObservation(active.session, action.type, sessionId, actionId);
       }
       case "fill": {
@@ -285,6 +292,7 @@ function summarizeAction(action: BrowserAction): Record<string, unknown> {
 
 function summarizePolicy(policy: BrowserPolicy): Record<string, unknown> {
   return {
+    javaScriptEnabled: policy.javaScriptEnabled ?? true,
     allowDomains: policy.allowDomains,
     denyDomains: policy.denyDomains,
     allowNavigation: policy.allowNavigation,

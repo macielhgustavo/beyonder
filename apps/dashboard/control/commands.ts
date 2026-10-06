@@ -1,4 +1,5 @@
 import { Vault, providers, CredentialBroker, validateProviderDetailed, AutopilotStateStore } from "@beyonder/compute";
+import { BenchmarkStore, BibModelCapabilitySource } from "@beyonder/benchmark";
 import {
   createRuntime,
   DEFAULT_TASK_BUDGET,
@@ -16,7 +17,7 @@ import { nanoid } from "nanoid";
 import { mkdir, unlink, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
-import { defaultControlState, resolveDashboardDbPath, resolveProviderStatePath } from "../data/local";
+import { defaultControlState, resolveDashboardDbPath, resolveProviderStatePath, resolveBenchmarkDbPath } from "../data/local";
 import type { ControlCenterState } from "../data/types";
 
 export type ControlCommand =
@@ -41,8 +42,8 @@ const root = globalThis as typeof globalThis & { beyonderControl?: { stopping: b
 const lifecycle = root.beyonderControl ??= { stopping: false, emergency: false, shutdownResponseSent: false, active: 0, controllers: new Set(), browsers: new Set(), serial: Promise.resolve() };
 export function shutdownReady() { return lifecycle.stopping && lifecycle.shutdownResponseSent && lifecycle.active === 0; }
 export function markShutdownResponseSent() { lifecycle.shutdownResponseSent = true; }
-export function loadControlConfig() { return loadConfig({ BEYONDER_DB_PATH: resolveDashboardDbPath(), BEYONDER_PROVIDER_STATE_PATH: resolveProviderStatePath(), BEYONDER_TOOLS_ENABLED: process.env.BEYONDER_TOOLS_ENABLED ?? "1", BEYONDER_BROWSER_ENABLED: process.env.BEYONDER_BROWSER_ENABLED ?? "1" }); }
-function controlRuntime() { const runtime = createRuntime(loadControlConfig(), { fixture: process.env.BEYONDER_CONTROL_FIXTURE === "1", onProgress: async (execution) => {
+export function loadControlConfig() { return loadConfig({ BEYONDER_DB_PATH: resolveDashboardDbPath(), BEYONDER_PROVIDER_STATE_PATH: resolveProviderStatePath(), BEYONDER_BENCHMARK_DB_PATH: resolveBenchmarkDbPath(), BEYONDER_TOOLS_ENABLED: process.env.BEYONDER_TOOLS_ENABLED ?? "1", BEYONDER_BROWSER_ENABLED: process.env.BEYONDER_BROWSER_ENABLED ?? "1" }); }
+function controlRuntime() { const config = loadControlConfig(); const runtime = createRuntime(config, { capabilitySource: new BibModelCapabilitySource(new BenchmarkStore(config.model.benchmarkDbPath)), fixture: process.env.BEYONDER_CONTROL_FIXTURE === "1", onProgress: async (execution) => {
   const writer = createRuntime(loadControlConfig());
   try { await saveTask(writer, execution); } finally { writer.sqlite.close(); }
 }, isPaused: async () => {
@@ -50,7 +51,7 @@ function controlRuntime() { const runtime = createRuntime(loadControlConfig(), {
   try { const state = await reader.state.get<ControlCenterState>("control-center:state", defaultControlState()); return state.paused && !state.safeShutdownRequestedAt && !state.emergencyStopRequestedAt && !lifecycle.stopping; } finally { reader.sqlite.close(); }
 }, beforeStep: async () => {
   const reader = createRuntime(loadControlConfig());
-  try { await assertNotPaused(reader); } finally { reader.sqlite.close(); }
+  try { await assertNotPaused(reader, true); } finally { reader.sqlite.close(); }
 } }); lifecycle.browsers.add(runtime.browser); return runtime; }
 async function closeRuntime(runtime: ReturnType<typeof createRuntime>) { try { await runtime.browser.closeAll(); } finally { lifecycle.browsers.delete(runtime.browser); runtime.sqlite.close(); } }
 
@@ -66,7 +67,7 @@ export async function runControlCommand(command: ControlCommand) {
   if (tracked) lifecycle.active++;
   try {
     if (serial) await previous;
-    if (lifecycle.stopping && command.type !== "safeShutdown") throw new Error("Beyonder está encerrando.");
+    if (lifecycle.stopping && !["safeShutdown", "emergencyStop"].includes(command.type)) throw new Error("Beyonder está encerrando.");
     return await dispatch(command);
   } finally { if (tracked) lifecycle.active--; release(); }
 }
@@ -248,7 +249,10 @@ async function submitObjective(objective: string, preparedTask?: IntelligenceTas
       signal: controller.signal,
       initialUsage: { monetaryCostUsd: runtime.planner.lastResult?.monetaryCostUsd ?? 0, shadowCostUsd: runtime.planner.lastResult?.shadowCostUsd ?? 0 },
       ...(process.env.BEYONDER_CONTROL_FIXTURE === "1" ? { completionCriteria: { expectedText: normalized.slice(0, Math.min(24, normalized.length)) } } : {}),
-      budget: { maxMonetaryCostUsd: 0, maxShadowCostUsd: 0.02, maxDurationMs: 30_000 }
+      // The async mission includes source reads, synthesis and independent
+      // verification. Use the runtime's bounded mission budget rather than a
+      // one-response UI budget; individual provider requests remain bounded.
+      budget: { maxMonetaryCostUsd: 0, maxShadowCostUsd: 0.02, maxDurationMs: DEFAULT_TASK_BUDGET.maxDurationMs }
     });
     await saveTask(runtime, outcome.execution);
     await runtime.audit.record(outcome.success ? "info" : "warn", outcome.success ? "control.objective.completed" : "control.objective.failed", { taskId: task.id, objective: normalized, status: outcome.status });
@@ -364,7 +368,7 @@ async function setSecret(command: Extract<ControlCommand, { type: "setSecret" }>
   const ready = validated?.validationStatus === "validated";
   if (ready) for (const record of broker.getProviderSecrets(provider.id)) process.env[record.envVar] = record.value;
   const stateStore = new AutopilotStateStore(loadControlConfig().model.providerStatePath);
-  await stateStore.update(provider, ready ? "READY" : "HUMAN_GATE", { validation: { status: validated?.validationStatus ?? "skipped", models: report?.models, modelCount: report?.modelCount, latencyMs: report?.latencyMs, rateLimitHeaders: report?.rateLimitHeaders, message: ready ? "Credencial validada." : "Credencial não validada. Verifique a chave e a conexão." } });
+  await stateStore.update(provider, ready ? "READY" : "HUMAN_GATE", { validation: { status: validated?.validationStatus ?? "skipped", models: report?.models, modelMetadata: report?.modelMetadata, modelCount: report?.modelCount, latencyMs: report?.latencyMs, rateLimitHeaders: report?.rateLimitHeaders, message: ready ? "Credencial validada." : "Credencial não validada. Verifique a chave e a conexão." } });
   const runtime = controlRuntime();
   try {
     await runtime.audit.record("info", "control.secret_set", { providerId: command.providerId, envVar: command.envVar, status: ready ? "READY" : "INVALID" });
@@ -390,10 +394,11 @@ async function writeHeartbeat(runtime: ReturnType<typeof createRuntime>, current
   await runtime.state.update<ControlCenterState>(CONTROL_STATE_KEY, defaultControlState(), (current) => ({ ...current, currentActivity }));
 }
 
-async function assertNotPaused(runtime: ReturnType<typeof createRuntime>) {
+async function assertNotPaused(runtime: ReturnType<typeof createRuntime>, allowDraining = false) {
   const state = await runtime.state.get<ControlCenterState>(CONTROL_STATE_KEY, defaultControlState());
-  if (lifecycle.stopping || state.safeShutdownRequestedAt) throw new Error("Beyonder está encerrando.");
-  if (lifecycle.emergency || state.paused) throw new Error("Beyonder is paused. Resume before starting new work.");
+  const draining = allowDraining && lifecycle.stopping && Boolean(state.safeShutdownRequestedAt);
+  if (lifecycle.emergency || state.emergencyStopRequestedAt || (state.paused && !draining)) throw new Error("Beyonder is paused. Resume before starting new work.");
+  if ((lifecycle.stopping || state.safeShutdownRequestedAt) && !draining) throw new Error("Beyonder está encerrando.");
 }
 
 async function saveTask(runtime: ReturnType<typeof createRuntime>, execution: unknown) {

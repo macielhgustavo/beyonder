@@ -1,11 +1,14 @@
 import type { IntelligenceTaskType } from "../intelligence/contracts.js";
 import type { HistoricalPerformance } from "./adaptive-types.js";
 import { ROUTER_CONFIG } from "./router-config.js";
+import type { CapabilityDimension } from "./adaptive-types.js";
 
 export interface ModelCapabilityRequest {
   provider: string;
   model: string;
   taskType: IntelligenceTaskType;
+  dimensions?: CapabilityDimension[];
+  inferenceProfile?: string;
 }
 
 export interface ModelCapabilityEvidence {
@@ -13,11 +16,18 @@ export interface ModelCapabilityEvidence {
   samples: number;
   source: "BIB";
   updatedAt?: string;
+  latencyMs?: number;
+  inferenceProfile?: string;
+  dimensions?: Partial<Record<CapabilityDimension, { score: number; samples: number; updatedAt: string }>>;
+  structuredOutputMode?: "prompted" | "native";
+  operational?: { samples: number; failures: number; lastSuccessfulRequestAt?: string };
 }
 
 export interface ModelCapabilitySource {
   getCapability(input: ModelCapabilityRequest): Promise<ModelCapabilityEvidence | null>;
   getCapabilityScore(input: ModelCapabilityRequest): Promise<number | null>;
+  getLastSuccessfulRequest?(provider: string): Promise<{ model: string; observedAt: string } | null>;
+  getOperationalEvidence?(input: Pick<ModelCapabilityRequest, "provider" | "model" | "inferenceProfile">): Promise<NonNullable<ModelCapabilityEvidence["operational"]> | null>;
 }
 
 export class NullCapabilitySource implements ModelCapabilitySource {

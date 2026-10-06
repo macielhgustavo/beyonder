@@ -33,6 +33,29 @@ function outcome(overrides: Partial<TaskOutcome> = {}): TaskOutcome {
 }
 
 describe("MemoryPerformanceRepository", () => {
+  it.each(["NEEDS_CAPABILITY", "NEEDS_INPUT", "RECONCILIATION_REQUIRED"])("preserves %s costs without treating it as failed producer quality", async objectiveStatus => {
+    const { db, sqlite } = openDatabase(":memory:");
+    const store = new MemoryStore(db), memory = new MemoryEngine(store), repository = new MemoryPerformanceRepository(store);
+    try {
+      await memory.recordOutcome(outcome({ success: false, evaluation: { score: 0, passed: false, criteria: { objectiveStatus } } }));
+      expect((await repository.get("provider-a", "model-a", "coding")).samples).toBe(0);
+      const economic = (await store.all()).find(record => record.kind === "economic")!;
+      expect(economic.metadata).toMatchObject({ success: false, evaluationScore: null, qualityEvaluated: false, shadowCostUsd: 0.002, objectiveStatus });
+      await memory.recordOutcome(outcome({ success: false, evaluation: { score: 0, passed: false, criteria: { objectiveStatus: "FAILED" } } }));
+      expect(await repository.get("provider-a", "model-a", "coding")).toMatchObject({ samples: 1, failures: 1, avgEvaluationScore: 0 });
+    } finally { sqlite.close(); }
+  });
+
+  it("recovers interpretation of a legacy blocked row using persisted mission truth", async () => {
+    const { db, sqlite } = openDatabase(":memory:");
+    const store = new MemoryStore(db);
+    try {
+      await store.remember({ kind: "economic", content: "legacy blocked mission", taskId: "legacy", metadata: { provider: "provider-a", model: "model-a", taskType: "coding", success: false, evaluationScore: 0 } });
+      const repository = new MemoryPerformanceRepository(store, async () => "NEEDS_CAPABILITY");
+      expect((await repository.get("provider-a", "model-a", "coding")).samples).toBe(0);
+      expect((await store.all()).length).toBe(1);
+    } finally { sqlite.close(); }
+  });
   it("aggregates real-world outcomes without a benchmark table", async () => {
     const { db, sqlite } = openDatabase(":memory:");
     const store = new MemoryStore(db);

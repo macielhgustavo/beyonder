@@ -9,11 +9,13 @@ export interface InferenceAttempt {
   id: string; taskId: string; stepId?: string; phase: InferencePhase; attempt: number;
   provider: string; model: string; startedAt: string; completedAt?: string;
   status: "STARTED" | "SUCCEEDED" | "FAILED"; latencyMs?: number;
-  failureClass?: FailureClass; httpStatus?: number; error?: string; responseBody?: string; retryAfterAt?: string;
+  failureClass?: FailureClass; httpStatus?: number; upstreamHttpStatus?: number; error?: string; responseBody?: string; retryAfterAt?: string;
   monetaryCostUsd: number; shadowCostUsd: number;
+  attribution?: ModelResponse["attribution"];
+  failureScope?: "provider" | "model";
 }
 export class InferenceError extends Error {
-  constructor(message: string, readonly failureClass: FailureClass, readonly httpStatus?: number, readonly responseBody?: string, readonly retryAfterAt?: string) { super(message); }
+  constructor(message: string, readonly failureClass: FailureClass, readonly httpStatus?: number, readonly responseBody?: string, readonly retryAfterAt?: string, readonly failureScope?: "provider" | "model", readonly upstreamHttpStatus?: number) { super(message); }
 }
 export function classifyFailure(error: unknown): InferenceError {
   if (error instanceof InferenceError) return error;
@@ -37,7 +39,31 @@ export function httpFailure(status: number, body: string, headers?: Headers): In
   const failureClass: FailureClass = status === 400 || status === 422 ? "BAD_REQUEST" : status === 401 ? "AUTH_REQUIRED" : status === 403 ? "FORBIDDEN" : status === 404 ? "MODEL_UNAVAILABLE" : status === 429 || status === 402 ? "RATE_LIMITED" : "PROVIDER_UNAVAILABLE";
   const safeBody = safeDiagnosticBody(body);
   const detail = /tool_use_failed|Tool choice is none, but model called a tool/i.test(body) ? " Model attempted a tool call in an inference phase where tools are disabled; it was not executed." : "";
-  return new InferenceError(`Provider returned HTTP ${status}.${detail}`, failureClass, status, safeBody.slice(0, 1500), parseRetryAfter(headers?.get("retry-after")));
+  const failureScope = responseFailureScope(body);
+  return new InferenceError(`Provider returned HTTP ${status}.${detail}`, failureClass, status, safeBody.slice(0, 1500), parseRetryAfter(headers?.get("retry-after")), failureScope);
+}
+
+/** Gateways can report upstream HTTP errors in a successful HTTP envelope. */
+export function completionEnvelopeFailure(error: unknown, httpStatus: number, headers?: Headers): InferenceError {
+  const body = JSON.stringify({ error });
+  const code = error && typeof error === "object" && "code" in error ? Number(error.code) : NaN;
+  if (!Number.isInteger(code) || code < 400 || code > 599) return new InferenceError("Provider returned an invalid completion envelope.", "INVALID_OUTPUT", httpStatus, safeDiagnosticBody(body).slice(0, 1500));
+  const upstream = httpFailure(code, body, headers);
+  return new InferenceError(`Gateway reported an upstream failure: ${upstream.message}`, upstream.failureClass, httpStatus, upstream.responseBody, upstream.retryAfterAt, upstream.failureScope, code);
+}
+
+/** A daily cap may belong to one upstream model, not the entire gateway.
+ * Unknown shared-capacity scopes retain the conservative provider exclusion. */
+export function responseFailureScope(body: string): "model" | "provider" | undefined {
+  if (/Rate limit exceeded for free models|gateway[_ -]rate[_ -]limit/i.test(body)) return "provider";
+  if (/PAID_MODEL_AUTH_REQUIRED|paid_model_auth_required|upstream_provider_(?:shared_pool|account)/.test(body)) return "model";
+  try {
+    const payload = JSON.parse(body) as { error?: { message?: unknown; metadata?: { limit_source?: unknown } } };
+    const error = payload?.error;
+    if (error?.metadata?.limit_source === "openrouter_shared_capacity" && typeof error.message === "string"
+      && /\blimit_(?:rpd|rpm|tpd|tpm)\/[a-z0-9_.-]+\/[a-z0-9_.:-]+\/[a-z0-9-]+/i.test(error.message)) return "model";
+  } catch { /* No concrete scope was observed. */ }
+  return undefined;
 }
 
 export function parseRetryAfter(raw?: string | null, now = Date.now()): string | undefined {
@@ -130,14 +156,16 @@ export async function runCandidates<T>(input: {
     try {
       response = await Promise.race([input.complete(input.messages, candidate, controller.signal), new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new InferenceError("Inference deadline exceeded.", "TIMEOUT")); }, Math.max(1, input.maxDurationMs - (Date.now() - start))); })]);
       attempt.monetaryCostUsd = response.estimatedCostUsd;
+      attempt.attribution = response.attribution;
       monetaryCostUsd += response.estimatedCostUsd;
+      if (!Number.isFinite(response.estimatedCostUsd) || response.estimatedCostUsd < 0 || monetaryCostUsd > input.maxMonetaryCostUsd) throw new InferenceError("Provider reported a cost outside the authorized monetary budget.", "BUDGET_EXHAUSTED");
       const value = input.validate(response);
       attempt.status = "SUCCEEDED";
       return { value, response, candidate, attempts, monetaryCostUsd, shadowCostUsd };
     } catch (error) {
       last = classifyFailure(error);
       if (last.failureClass === "INVALID_OUTPUT" && response?.content) last = new InferenceError(last.message, last.failureClass, last.httpStatus, safeDiagnosticBody(response.content).slice(0, 1_500), last.retryAfterAt);
-      Object.assign(attempt, { status: "FAILED", failureClass: last.failureClass, httpStatus: last.httpStatus, error: last.message, responseBody: last.responseBody, retryAfterAt: last.retryAfterAt });
+      Object.assign(attempt, { status: "FAILED", failureClass: last.failureClass, failureScope: last.failureScope, httpStatus: last.httpStatus, upstreamHttpStatus: last.upstreamHttpStatus, error: last.message, responseBody: last.responseBody, retryAfterAt: last.retryAfterAt });
     } finally {
       if (timer) clearTimeout(timer);
       attempt.completedAt = new Date().toISOString();

@@ -72,6 +72,9 @@ importers:
 
   apps/dashboard:
     dependencies:
+      '@beyonder/benchmark':
+        specifier: workspace:^
+        version: link:../../packages/benchmark
       '@beyonder/compute':
         specifier: workspace:*
         version: link:../../packages/compute
@@ -162,7 +165,11 @@ importers:
         specifier: ^1.63.0
         version: 1.63.0
 
-  packages/compute: {}
+  packages/compute:
+    dependencies:
+      undici:
+        specifier: ^6.21.3
+        version: 6.29.0
 
   packages/credentials: {}
 
@@ -186,6 +193,9 @@ importers:
       '@beyonder/tools':
         specifier: workspace:*
         version: link:../tools
+      typescript:
+        specifier: ^5.7.3
+        version: 5.9.3
 
   packages/tools: {}
 
@@ -1445,6 +1455,10 @@ packages:
   undici-types@6.21.0:
     resolution: {integrity: sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ==}
 
+  undici@6.29.0:
+    resolution: {integrity: sha512-R+RODBqp6i2pPflGdq+xIOUkl+RNfGgHwoinecKu/JCuf2uO06cOKoDbI2P7Dn6KcswdKwrczbU6IYJ6K8X+wg==}
+    engines: {node: '>=18.17'}
+
   vite-node@3.2.4:
     resolution: {integrity: sha512-EbKSKh+bh1E1IFxeO0pg1n4dvoOTt0UDiXMd/qn++r98+jPO1xtJilvXldeuQ8giIB5IkpjCgMleHMNEsGH6pg==}
     engines: {node: ^18.0.0 || ^20.0.0 || >=22.0.0}
@@ -2424,6 +2438,8 @@ snapshots:
   typescript@5.9.3: {}
 
   undici-types@6.21.0: {}
+
+  undici@6.29.0: {}
 
   vite-node@3.2.4(@types/node@22.20.5)(tsx@4.23.15):
     dependencies:

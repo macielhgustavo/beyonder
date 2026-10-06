@@ -1,4 +1,5 @@
 import type { BenchmarkModelClient, BenchmarkModelMessage, BenchmarkModelResponse, ModelTarget } from "../types.js";
+import { providerFetch as fetch } from "@beyonder/compute";
 
 const REQUEST_TIMEOUT_MS = 20_000;
 
@@ -9,7 +10,7 @@ export class OpenAiCompatibleBenchmarkClient implements BenchmarkModelClient {
     });
     if (target.provider === "cloudflare-workers-ai") return completeCloudflareWorkersAi(target, messages);
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    const timer = setTimeout(() => controller.abort(), target.reasoning ? 45_000 : REQUEST_TIMEOUT_MS);
     try {
       const response = await fetch(`${target.baseUrl.replace(/\/$/, "")}/chat/completions`, {
         method: "POST",
@@ -19,7 +20,8 @@ export class OpenAiCompatibleBenchmarkClient implements BenchmarkModelClient {
           model: target.model,
           messages,
           temperature: 0,
-          max_tokens: 256
+          max_tokens: 2400,
+          ...(target.reasoning ? { reasoning: target.reasoning } : {})
         })
       });
       if (!response.ok) {
@@ -29,14 +31,21 @@ export class OpenAiCompatibleBenchmarkClient implements BenchmarkModelClient {
         });
       }
       const json = (await response.json()) as {
-        choices?: Array<{ message?: { content?: string } }>;
-        usage?: { total_tokens?: number; totalTokens?: number };
+        choices?: Array<{ finish_reason?: string; message?: { content?: string } }>;
+        usage?: { total_tokens?: number; totalTokens?: number; cost?: number };
+        error?: unknown;
+        model?: unknown;
       };
+      const cost = freeResponseCost(json.usage?.cost);
+      if (json.error || typeof json.choices?.[0]?.message?.content !== "string" || !json.choices[0].message.content.trim()) throw new BenchmarkRequestError("Provider returned an invalid completion envelope.", { errorCode: "INVALID_OUTPUT", monetaryCostUsd: cost });
+      if (typeof json.model !== "string" || !json.model || physicalIdentity(json.model) !== physicalIdentity(target.model)) throw new BenchmarkRequestError("Provider did not report the requested physical model; its capability cannot be attributed.", { errorCode: "INVALID_OUTPUT", monetaryCostUsd: cost });
+      if (json.choices?.[0]?.finish_reason === "length") throw new BenchmarkRequestError("Completion exhausted its output budget before finishing.", { errorCode: "OUTPUT_LIMIT", monetaryCostUsd: cost });
       return {
         content: json.choices?.[0]?.message?.content ?? "",
         provider: target.provider,
         model: target.model,
-        estimatedCostUsd: 0,
+        estimatedCostUsd: cost,
+        structuredOutputMode: "prompted",
         tokens: json.usage?.total_tokens ?? json.usage?.totalTokens,
         raw: json
       };
@@ -80,14 +89,15 @@ async function completeCloudflareWorkersAi(
       result?: {
         choices?: Array<{ message?: { content?: string } }>;
         response?: string;
-        usage?: { total_tokens?: number; totalTokens?: number };
+        usage?: { total_tokens?: number; totalTokens?: number; cost?: number };
       };
     };
     return {
       content: json.result?.choices?.[0]?.message?.content ?? json.result?.response ?? "",
       provider: target.provider,
       model: target.model,
-      estimatedCostUsd: 0,
+      estimatedCostUsd: freeResponseCost(json.result?.usage?.cost),
+      structuredOutputMode: "prompted",
       tokens: json.result?.usage?.total_tokens ?? json.result?.usage?.totalTokens,
       raw: json
     };
@@ -105,13 +115,26 @@ async function completeCloudflareWorkersAi(
 export class BenchmarkRequestError extends Error {
   readonly httpStatus?: number;
   readonly errorCode?: string;
+  readonly monetaryCostUsd?: number;
 
-  constructor(message: string, details: { httpStatus?: number; errorCode?: string } = {}) {
+  constructor(message: string, details: { httpStatus?: number; errorCode?: string; monetaryCostUsd?: number } = {}) {
     super(message);
     this.name = "BenchmarkRequestError";
     this.httpStatus = details.httpStatus;
     this.errorCode = details.errorCode;
+    this.monetaryCostUsd = details.monetaryCostUsd;
   }
+}
+
+function freeResponseCost(reported: unknown): number {
+  if (reported === undefined) return 0; // Targets are selected from explicit free catalog entries.
+  if (typeof reported !== "number" || !Number.isFinite(reported) || reported < 0) throw new BenchmarkRequestError("Provider returned invalid monetary usage.", { errorCode: "INVALID_COST" });
+  if (reported > 0) throw new BenchmarkRequestError("Provider reported a charge; stop zero-money qualification.", { errorCode: "BILLING_REQUIRED", monetaryCostUsd: reported });
+  return reported;
+}
+
+function physicalIdentity(model: string): string {
+  return model.split("/").at(-1)!.replace(/:free$/i, "").replace(/^meta-/i, "").replace(/[^a-z0-9]/gi, "").toLowerCase();
 }
 
 function requestHeaders(target: ModelTarget): Record<string, string> {

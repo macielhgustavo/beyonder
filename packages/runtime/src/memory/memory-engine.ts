@@ -118,6 +118,10 @@ export class MemoryEngine {
   }
 
   async recordOutcome(outcome: TaskOutcome): Promise<{ episodic: MemoryRecord; economic: MemoryRecord }> {
+    const objectiveStatus = outcome.evaluation?.criteria?.objectiveStatus;
+    const qualityEvaluated = !["NEEDS_CAPABILITY", "NEEDS_INPUT", "CANCELLED", "RECONCILIATION_REQUIRED"].includes(String(objectiveStatus ?? ""))
+      && (!outcome.failureClass || ["INVALID_OUTPUT", "INVALID_ACTION"].includes(outcome.failureClass));
+    const evaluationScore = qualityEvaluated ? outcome.evaluation?.score ?? null : null;
     const commonMetadata = {
       phase: outcome.phase,
       failureClass: outcome.failureClass,
@@ -126,7 +130,10 @@ export class MemoryEngine {
       model: outcome.model ?? outcome.attempts.at(-1)?.model ?? "none",
       attempts: outcome.attempts.length,
       success: outcome.success,
-      evaluationScore: outcome.evaluation?.score ?? null
+      evaluationScore,
+      qualityEvaluated,
+      objectiveStatus,
+      objectiveScore: outcome.evaluation?.score ?? null
     };
     const keywords = [...tokenize(outcome.task.input)].slice(0, 24);
 
@@ -161,7 +168,7 @@ export class MemoryEngine {
         latencyMs: outcome.latencyMs,
         attempts: outcome.attempts.length,
         success: outcome.success,
-        evaluationScore: outcome.evaluation?.score ?? null,
+        evaluationScore,
         quotaConsumed: outcome.quotaConsumed ?? null
       }),
       importance: 3,

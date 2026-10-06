@@ -1,19 +1,21 @@
-import { buildComputeInventory, getProvider, isModelEligibleForWorkload, type CredentialBroker } from "@beyonder/compute";
+import { buildComputeInventory, getProvider, isModelMetadataEligibleForWorkload, type CredentialBroker } from "@beyonder/compute";
 import type { ModelTarget } from "../types.js";
 
 const UNSAFE_MODEL_MARKERS = ["verify-current", "auto"];
 type AutopilotState = Parameters<typeof buildComputeInventory>[0];
 type ComputeInventoryEntry = ReturnType<typeof buildComputeInventory>[number];
 
-export function selectFreeModelTargets(state: AutopilotState, broker: CredentialBroker): ModelTarget[] {
-  return buildComputeInventory(state).flatMap((entry) => targetsForEntry(entry, broker));
+export interface BenchmarkTargetSelection { provider?: string; models?: string[]; }
+
+export function selectFreeModelTargets(state: AutopilotState, broker: CredentialBroker, selection: BenchmarkTargetSelection = {}): ModelTarget[] {
+  return buildComputeInventory(state).filter(entry => !selection.provider || entry.providerId === selection.provider).flatMap((entry) => targetsForEntry(entry, broker, selection));
 }
 
-function targetsForEntry(entry: ComputeInventoryEntry, broker: CredentialBroker): ModelTarget[] {
+function targetsForEntry(entry: ComputeInventoryEntry, broker: CredentialBroker, selection: BenchmarkTargetSelection): ModelTarget[] {
   const provider = getProvider(entry.providerId);
   const baseUrl = provider?.openAiCompatibleEndpoint;
   if (!baseUrl) return [];
-  if (entry.cost !== "$0") return [];
+  if (entry.cost === "billing-risk") return [];
   if (!["healthy", "keyless"].includes(entry.status)) return [];
   if (provider.billingRisk || provider.classification === "PAID_ONLY") return [];
 
@@ -21,9 +23,13 @@ function targetsForEntry(entry: ComputeInventoryEntry, broker: CredentialBroker)
   if (provider.authType !== "keyless" && !apiKey) return [];
 
   return entry.models
+    .filter(model => !selection.models || selection.models.includes(model))
     .filter((model) => isSafeModel(entry.providerId, model))
-    .filter((model) => isBenchmarkEligible(provider, model))
-    .slice(0, 2)
+    .filter((model) => {
+      const metadata = entry.modelMetadata.find(row => row.id === model);
+      return metadata && isModelMetadataEligibleForWorkload(metadata, "benchmark_text") && ["FREE_CONFIRMED", "FREE_TIER_ELIGIBLE"].includes(metadata.costClass ?? "UNKNOWN_COST");
+    })
+    .slice(0, selection.models ? selection.models.length : 2)
     .map((model) => ({
       provider: entry.providerId,
       providerName: entry.providerName,
@@ -31,17 +37,14 @@ function targetsForEntry(entry: ComputeInventoryEntry, broker: CredentialBroker)
       baseUrl: resolveBaseUrl(baseUrl, broker, provider.id),
       apiKey,
       accountId: broker.getSecret(provider.id, "CLOUDFLARE_ACCOUNT_ID"),
-      rateLimitDelayMs: rateLimitDelay(entry)
+      rateLimitDelayMs: rateLimitDelay(entry),
+      ...(entry.modelMetadata.find(row => row.id === model)?.reasoningControl ? { reasoning: { effort: "low" as const } } : {})
     }));
 }
 
 function apiKeyForProvider(providerId: string, broker: CredentialBroker): string | undefined {
   if (providerId === "cloudflare-workers-ai") return broker.getSecret(providerId, "CLOUDFLARE_API_TOKEN");
   return broker.getProviderSecrets(providerId)[0]?.value;
-}
-
-function isBenchmarkEligible(provider: NonNullable<ReturnType<typeof getProvider>>, model: string): boolean {
-  return isModelEligibleForWorkload(provider, model, "benchmark_text");
 }
 
 function isSafeModel(providerId: string, model: string): boolean {

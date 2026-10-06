@@ -1,5 +1,5 @@
 import type { StateStore } from "../memory/state-store.js";
-import type { InferenceAttempt } from "./inference.js";
+import { responseFailureScope, type InferenceAttempt } from "./inference.js";
 
 export interface OperationalHealth {
   samples: number;
@@ -15,15 +15,17 @@ export function operationalCooldown(attempt: InferenceAttempt, now = Date.now())
   const body = attempt.responseBody ?? "";
   const cls = attempt.failureClass;
   let duration = 0, scope: "provider" | "model" = "model", reason = cls ?? "unknown";
-  if (cls === "AUTH_REQUIRED") { duration = 60 * 60_000; scope = "provider"; }
+  if (cls === "AUTH_REQUIRED") { duration = 60 * 60_000; scope = attempt.failureScope ?? (/PAID_MODEL_AUTH_REQUIRED|paid_model_auth_required/.test(body) ? "model" : "provider"); }
   else if (cls === "FORBIDDEN") duration = 60 * 60_000;
   else if (cls === "MODEL_UNAVAILABLE") duration = 6 * 60 * 60_000;
   else if (cls === "RATE_LIMITED") {
     const daily = /per[_ -]?day|daily|\brpd\b|\btpd\b/i.test(body);
     const account = attempt.httpStatus === 402 || /account|insufficient[_ ](?:quota|balance)|credits? exhausted|billing/i.test(body);
-    scope = daily || account ? "provider" : "model";
-    reason = daily || account ? "QUOTA_EXHAUSTED" : "RATE_LIMITED";
-    duration = daily || account ? 24 * 60 * 60_000 : 3 * 60_000;
+    const upstreamScope = attempt.failureScope ?? responseFailureScope(body);
+    scope = upstreamScope ?? (daily || account ? "provider" : "model");
+    const exhausted = daily || (account && scope === "provider");
+    reason = exhausted ? "QUOTA_EXHAUSTED" : "RATE_LIMITED";
+    duration = exhausted ? 24 * 60 * 60_000 : 3 * 60_000;
   } else if (["TIMEOUT", "NETWORK_ERROR", "PROVIDER_UNAVAILABLE"].includes(cls ?? "")) duration = 60_000;
   // A generic bad request/output is not evidence that a provider is unavailable.
   if (!duration) return undefined;
@@ -33,6 +35,23 @@ export function operationalCooldown(attempt: InferenceAttempt, now = Date.now())
 }
 
 export class OperationalHealthStore {
+  private readonly checkedLegacyScopes = new Set<string>();
+  async reclassifyLegacyProviderCooldown(provider: string): Promise<{ attemptId: string; model: string; reason: string } | undefined> {
+    if (!this.state || this.checkedLegacyScopes.has(provider)) return;
+    this.checkedLegacyScopes.add(provider);
+    const health = await this.get(provider);
+    if (!health.cooldown || health.cooldown.scope !== "provider") return;
+    const attempts = (await this.state.values<InferenceAttempt[]>("task-attempts:")).flat();
+    const origin = attempts.find(attempt => attempt.provider === provider && attempt.status === "FAILED" && attempt.completedAt === health.lastFailureAt);
+    if (!origin || operationalCooldown(origin)?.scope !== "model") return;
+    // Reinterpret the retained original response, retaining the old backoff on
+    // the affected model. Genuine gateway quota remains blocked.
+    const cooldown = { ...health.cooldown, scope: "model" as const };
+    await this.state.update<OperationalHealth>(`model-health:${provider}:${origin.model}`, empty(), current => ({ ...current, cooldown: !current.cooldown || current.cooldown.until < cooldown.until ? cooldown : current.cooldown }));
+    await this.state.update<OperationalHealth>(`provider-health:${provider}`, empty(), current => current.cooldown?.until === health.cooldown!.until ? { ...current, cooldown: undefined } : current);
+    return { attemptId: origin.id, model: origin.model, reason: cooldown.reason };
+  }
+
   constructor(private readonly state?: StateStore, private readonly now = () => Date.now()) {}
 
   async get(provider: string, model?: string): Promise<OperationalHealth> {

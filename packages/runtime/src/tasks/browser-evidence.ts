@@ -9,10 +9,11 @@ export function hasBrowserEvidence(steps: StepExecution[]): boolean {
   return browserEvidence(steps).sources.length > 0;
 }
 
-export function browserEvidence(steps: StepExecution[], objective = ""): { sources: string[]; excerpts: string[] } {
+export function browserEvidence(steps: StepExecution[], objective = "", excerptLimit = 1_400): { sources: string[]; excerpts: string[] } {
   const sources = new Set<string>();
   const excerpts: string[] = [];
   for (const step of steps) {
+    if (step.evidenceRole === "DISCOVERY") continue;
     if (step.status !== "COMPLETED" || !step.toolResult?.success || !step.toolCapabilities?.includes("browser")) continue;
     if (!Array.isArray(step.toolResult.sideEffects) || !step.toolResult.sideEffects.every((effect) => effect === "READ" || effect === "NONE")) continue;
     const output = step.toolResult.output as { result?: { status?: string; observation?: { url?: string; visibleText?: string }; data?: { text?: string } } } | undefined;
@@ -20,12 +21,16 @@ export function browserEvidence(steps: StepExecution[], objective = ""): { sourc
     const text = result?.observation?.visibleText?.trim() || result?.data?.text?.trim();
     if (result?.status !== "ok" || !text) continue;
     if (result.observation?.url) sources.add(result.observation.url);
-    excerpts.push(relevantEvidenceExcerpt(text, objective, 1_400));
+    const observedAt = step.completedAt ? `Observed at ${step.completedAt}\n` : "";
+    excerpts.push(`${observedAt}${relevantEvidenceExcerpt(text, objective, excerptLimit)}`);
   }
   return { sources: [...sources], excerpts };
 }
 
 export function relevantEvidenceExcerpt(text: string, objective: string, limit: number): string {
+  // The browser preserves <s>/<del> as observed superseded text. Excerpts
+  // must not promote an old, visibly struck-out claim into current evidence.
+  text = text.replace(/\[SUPERSEDED\][\s\S]*?(?:\[\/SUPERSEDED\]|$)/g, " [superseded text omitted] ");
   if (text.length <= limit) return text;
   const terms = [...new Set(normalize(objective).split(/[^a-z0-9]+/).filter((term) => term.length >= 4 && !STOP_WORDS.has(term)))];
   const separator = "\n[...content omitted...]\n";

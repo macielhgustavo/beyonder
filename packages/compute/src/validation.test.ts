@@ -91,6 +91,25 @@ test("malformed catalog cannot validate a credential", async () => {
   } finally { restore(); }
 });
 
+test("live catalog preserves useful capabilities and explicitly distinguishes zero, paid and unknown prices", async () => {
+  const restore = mockFetch(() => new Response(JSON.stringify({ data: [
+    { id: "opaque-chat", architecture: { input_modalities: ["text"], output_modalities: ["text"] }, context_length: 131072, supported_parameters: ["tools", "response_format", "reasoning"], pricing: { prompt: "0", completion: "0" } },
+    { id: "paid-chat", pricing: { prompt: "0", completion: "0.01" } },
+    { id: "unknown-chat", pricing: { prompt: "-1", completion: "-1" } }
+  ] }), { headers: { "content-type": "application/json" } }));
+  try {
+    const report = await validateProviderDetailed(getProvider("kilo-gateway")!, new CredentialBroker({}, {}));
+    assert.deepEqual(report.modelMetadata?.map(row => row.costClass), ["FREE_TIER_ELIGIBLE", "PAID", "UNKNOWN_COST"]);
+    assert.equal(report.modelMetadata?.[0]?.role, "instruct");
+    assert.ok(report.modelMetadata?.[0]?.capabilities.includes("CHAT"));
+    assert.equal(report.modelMetadata?.[0]?.contextWindow, 131072);
+    assert.equal(report.modelMetadata?.[0]?.toolCalling, "yes");
+    assert.equal(report.modelMetadata?.[0]?.structuredOutput, "native");
+    assert.equal(report.modelMetadata?.[0]?.reasoningControl, true);
+    assert.equal(report.modelMetadata?.[0]?.costEvidence?.source, "live-catalog");
+  } finally { restore(); }
+});
+
 test("validation extracts Gemini model names from the same response", async () => {
   const restore = mockFetch(() => new Response('{"models":[{"name":"models/gemini-fixture"}]}', { headers: { "content-type": "application/json" } }));
   try {
@@ -108,3 +127,13 @@ test("validation does not persist credential-bearing network errors", async () =
     assert.doesNotMatch(JSON.stringify(report), /SECRET/);
   } finally { globalThis.fetch = original; }
 });
+
+for (const extra of [{ isFree: false }, { isFree: false, architecture: { input_modalities: ["text"], output_modalities: ["text", "audio"] } }, { isFree: false, description: "Per request billing" }]) {
+  test("explicitly non-free catalog models cannot become free through zero token prices", async () => {
+    const restore = mockFetch(() => new Response(JSON.stringify({ data: [{ id: "catalog-model", pricing: { prompt: "0", completion: "0" }, ...extra }] }), { headers: { "content-type": "application/json" } }));
+    try {
+      const report = await validateProviderDetailed(getProvider("kilo-gateway")!, new CredentialBroker({}, {}));
+      assert.equal(report.modelMetadata?.[0]?.costClass, "PAID");
+    } finally { restore(); }
+  });
+}

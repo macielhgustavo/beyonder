@@ -8,14 +8,25 @@ export interface PerformanceRepository {
 }
 
 export class MemoryPerformanceRepository implements PerformanceRepository {
-  constructor(private readonly memoryStore: MemoryStore) {}
+  constructor(private readonly memoryStore: MemoryStore, private readonly objectiveStatusFor?: (taskId: string) => Promise<string | undefined>) {}
 
   async get(provider: string, model: string, taskType: IntelligenceTaskType): Promise<HistoricalPerformance> {
-    const records = (await this.memoryStore.all(2000)).filter((record) => {
+    const matching = (await this.memoryStore.all(2000)).filter((record) => {
       if (record.kind !== "economic") return false;
+      // The mission remains blocked and its costs remain in Economic Memory.
+      // Unavailable verification is not an evaluated producer-quality failure.
+      if (record.metadata.qualityEvaluated === false) return false;
       if (record.metadata.failureClass && !["INVALID_OUTPUT", "INVALID_ACTION"].includes(String(record.metadata.failureClass))) return false;
       return record.metadata.provider === provider && record.metadata.model === model && record.metadata.taskType === taskType;
     });
+    const records = [] as typeof matching;
+    for (const record of matching) {
+      // Old economic rows did not preserve objective status. Consult their
+      // persisted checkpoint when available, without deleting audit history.
+      const status = record.metadata.objectiveStatus ?? (record.metadata.qualityEvaluated === undefined && record.taskId ? await this.objectiveStatusFor?.(record.taskId) : undefined);
+      if (["NEEDS_CAPABILITY", "NEEDS_INPUT", "CANCELLED", "RECONCILIATION_REQUIRED"].includes(String(status ?? ""))) continue;
+      records.push(record);
+    }
 
     const samples = records.length;
     let successes = 0;

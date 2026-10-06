@@ -26,5 +26,5 @@ globalThis.fetch = async (input, init = {}) => {
   if (!verification && scenario.timeoutProvider === provider) throw new DOMException("Controlled provider timeout", "TimeoutError");
   const verdict = { satisfied: !scenario.badAnswer, confidence: 0.95, relevance: !scenario.badAnswer, completeness: !scenario.badAnswer, consistentWithEvidence: !scenario.badAnswer, reason: scenario.badAnswer ? "Controlled insufficient answer rejected" : "Controlled result satisfies the request", missingRequirements: scenario.badAnswer ? ["correct-answer"] : [], recoveryRecommendation: scenario.badAnswer ? "NONE" : "NONE" };
   const content = verification ? JSON.stringify(verdict) : scenario.badAnswer ?? scenario.goodAnswer ?? "HTTP 404 means the requested resource was not found on the server.";
-  return provider === "ollama" ? json({ message: { content } }) : json({ choices: [{ message: { content } }], usage: { total_tokens: 25 } });
+  return provider === "ollama" ? json({ model: body.model, message: { content } }) : json({ model: body.model, choices: [{ message: { content } }], usage: { total_tokens: 25 } });
 };

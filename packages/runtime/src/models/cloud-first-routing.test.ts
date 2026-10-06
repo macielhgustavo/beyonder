@@ -1,10 +1,12 @@
+import { analyzeGoalContract } from "../intelligence/goal-contract.js";
 import { describe, expect, it, vi } from "vitest";
 import type { IntelligenceTask } from "../intelligence/contracts.js";
 import type { ModelResponse } from "../types.js";
 import type { ModelCandidate } from "./adaptive-types.js";
-import { assessCapability, computeTier, resolveQualityFloor, routingScore } from "./compute-policy.js";
+import { assessCapability, computeTier, objectivePhaseTask, resolveQualityFloor, routingScore } from "./compute-policy.js";
 import { InferenceError, runCandidates } from "./inference.js";
 import { inferenceAttemptPolicy } from "./router-config.js";
+import { predictCapability } from "./capability-source.js";
 
 function task(overrides: Partial<IntelligenceTask> = {}): IntelligenceTask {
   return {
@@ -20,6 +22,17 @@ function task(overrides: Partial<IntelligenceTask> = {}): IntelligenceTask {
 }
 
 describe("mission-adjusted cloud efficiency", () => {
+  it.each([1, 40])("counts %s observed failures once while preserving rejection for poor sustained quality", samples => {
+    const performance = { ...candidate().performance, samples, successes: 0, failures: samples, successRate: 0, avgEvaluationScore: 0 };
+    const predictedQuality = predictCapability({ benchmarkPrior: 1, performance, metadataQualityClass: "high" });
+    const current = candidate({ predictedQuality, performance, reliability: 1 });
+    const floor = { level: "HIGH" as const, minimumOverall: 0.745, dimensions: {}, reasons: [] };
+    const fit = assessCapability(current, task(), floor);
+    expect(fit.overall).toBeCloseTo(predictedQuality * 0.82 + 0.18);
+    expect(fit.passes).toBe(samples === 1);
+    expect(predictedQuality).toBeLessThan(1);
+    expect(floor.minimumOverall).toBe(0.745);
+  });
   it("prefers efficient adequate cloud for a minimal floor while retaining quality dominance for high floors", () => {
     const floor = resolveQualityFloor(task());
     const strong = candidate({ predictedQuality: 0.98, latencyPenalty: 1 });
@@ -102,6 +115,12 @@ function response(forCandidate: ModelCandidate, content = "ok"): ModelResponse {
 }
 
 describe("cloud-first routing policy", () => {
+  it.each(["coding", "planning", "research"] as const)("does not promote unmeasured %s from a good synthesis benchmark", taskType => {
+    const current = task({ type: taskType, complexity: 0.5, requirements: { [taskType]: true } });
+    const floor = { ...resolveQualityFloor(current), minimumOverall: 0.75, dimensions: { [taskType]: 0.75 } };
+    const measured = candidate({ predictedQuality: 1, metadataQuality: 0.68, reliability: 0.72, performance: { ...candidate().performance, samples: 0 }, capabilities: ["text"], contextWindow: "unknown", benchmarkCapability: { score: 1, samples: 2, source: "BIB", dimensions: { synthesis: { score: 1, samples: 2, updatedAt: new Date().toISOString() } } } });
+    expect(assessCapability(measured, current, floor).passes).toBe(false);
+  });
   it("raises a HIGH multidimensional floor for current multi-source research", () => {
     const research = task({
       type: "research",
@@ -284,5 +303,24 @@ describe("cloud-first routing policy", () => {
 
   it("budgets multiple cloud attempts in survival while keeping one local airbag", () => {
     expect(inferenceAttemptPolicy("survival")).toEqual({ remoteAttemptBudget: 2, localFallbackBudget: 1 });
+  });
+});
+
+describe("phase requirements retain the goal's quality floor", () => {
+  it.each(["Qual é a versão estável atual do Python?", "Qual é a versão LTS atual do Node.js?", "Compare dois índices atuais de popularidade de linguagens."])("does not ask the answer/verifier to replan completed research: %s", objective => {
+    const original = task({type: "browser", input: objective, requirements: {browser: true, planning: true, toolUse: true, tools: ["browser"]}, goalContract: analyzeGoalContract(objective, "browser")});
+    for (const phase of ["DIRECT_RESPONSE", "OBJECTIVE_VERIFICATION"] as const) {
+      const phased = objectivePhaseTask(original, phase); const floor = resolveQualityFloor(phased);
+      expect(floor.minimumOverall).toBe(resolveQualityFloor(original).minimumOverall);
+      expect(floor.level).toBe("HIGH");
+      expect(floor.dimensions.planning).toBeUndefined();
+      expect(floor.dimensions.research).toBeGreaterThanOrEqual(0.71);
+      expect(floor.dimensions.freshnessEvidence).toBeGreaterThanOrEqual(0.71);
+      expect(phased.goalContract).toBe(original.goalContract);
+    }
+  });
+  it("retains planning capability for an actual planning objective in both phases", () => {
+    const original = task({type: "planning", input: "Planeje uma migração de dados.", requirements: {planning: true}, goalContract: analyzeGoalContract("Planeje uma migração de dados.", "planning")});
+    for (const phase of ["DIRECT_RESPONSE", "OBJECTIVE_VERIFICATION"] as const) expect(resolveQualityFloor(objectivePhaseTask(original, phase)).dimensions.planning).toBeDefined();
   });
 });

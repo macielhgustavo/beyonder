@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DefaultToolPolicy, ToolExecutor, ToolRegistry, ToolSideEffect } from "@beyonder/tools";
 import { BrowserAgent } from "./browser-agent.js";
 import { createBrowserToolDefinitions, type BrowserToolOutput } from "./browser-tools.js";
@@ -24,6 +24,17 @@ function setup() {
 }
 
 describe("Browser tools", () => {
+  it("opens a static read session while preserving every network and mutation boundary", async () => {
+    const sessionFactory = new FakeBrowserSessionFactory();
+    const create = vi.spyOn(sessionFactory, "create");
+    const agent = new BrowserAgent({ sessionFactory, defaultPolicy: { allowDomains: ["example.com"], allowInternalNetwork: false, allowSubmit: false }, policyEngineFactory: policy => new BrowserPolicyEngine(mergeBrowserPolicy(policy), new PublicResolver()) });
+    const executor = new ToolExecutor(new ToolRegistry().registerMany(createBrowserToolDefinitions(agent)), { policy: new DefaultToolPolicy() });
+    const result = await executor.execute({ id: "static-read", tool: "browser.open", arguments: { url: "https://example.com/", textOnly: true } });
+    expect(result.success).toBe(true);
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ javaScriptEnabled: false, allowInternalNetwork: false, allowSubmit: false, allowDomains: ["example.com"] }));
+    expect((await executor.execute({ id: "bad-static", tool: "browser.open", arguments: { url: "https://example.com/", textOnly: true, sessionId: "existing" } })).success).toBe(false);
+    await agent.closeAll();
+  });
   it("advertises actual navigation and extraction arguments to the planner", async () => {
     const { registry } = setup();
     const tools = await registry.getAvailableTools({}, new DefaultToolPolicy());

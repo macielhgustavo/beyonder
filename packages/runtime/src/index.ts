@@ -46,7 +46,7 @@ export type { RetrievedMemory, RetrieveMemoryRequest, MemoryStats, RetrievalWeig
 export type { MemoryConsolidator, ConsolidationCandidate, ConsolidationContext } from "./memory/consolidation.js";
 export type { ModelCapabilityEvidence, ModelCapabilityRequest, ModelCapabilitySource } from "./models/capability-source.js";
 export type { PerformanceRepository } from "./models/performance-repository.js";
-export type { ModelCandidate, RouteDecision, QuotaSnapshot, HistoricalPerformance } from "./models/adaptive-types.js";
+export type { ModelCandidate, RouteDecision, QuotaSnapshot, HistoricalPerformance, CapabilityDimension } from "./models/adaptive-types.js";
 export type { AgentDecision, AgentStepStatus, ModelMessage, ModelResponse } from "./types.js";
 export type {
   AutonomousTaskOutcome,

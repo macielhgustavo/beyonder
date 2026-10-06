@@ -205,6 +205,7 @@ export interface AuditEventView {
 }
 
 export interface AuditQuery extends PageQuery {
+  event?: string;
   level?: AuditEventView["level"] | "all";
   search?: string;
 }

@@ -14,7 +14,7 @@ const SIGNALS = {
   recent: ["recente", "recentes", "ultimos dias", "ultima semana", "recent", "recently", "last few days", "last week"],
   research: ["pesquise", "pesquisar", "procure", "encontre", "investigue", "consulte", "fontes", "evidencias", "research", "search", "find", "investigate", "look up", "sources", "evidence"],
   web: ["site", "pagina", "web", "internet", "online", "website", "browser", "http://", "https://"],
-  comparison: ["compare", "comparar", "diferem", "versus", " vs ", "melhor", "mais usada", "mais usado", "mais popular", "mais forte", "maior adocao", "maior valor", "maior market share", "lidera", "ranking", "compare", "difference", "best", "most used", "most popular", "strongest", "largest market share", "strongest adoption", "leads"],
+  comparison: ["compare", "comparar", "diferem", "diferenca", "diferencas", "contraste", "versus", " vs ", "melhor", "mais usada", "mais usado", "mais popular", "mais forte", "maior adocao", "maior valor", "maior market share", "lidera", "ranking", "compare", "difference", "best", "most used", "most popular", "strongest", "largest market share", "strongest adoption", "leads"],
   citations: ["cite", "citacao", "citacoes", "fonte", "fontes", "source", "sources", "citation", "citations"],
   planning: ["plano", "planeje", "etapas", "roadmap", "plan", "steps", "strategy"],
   reasoning: ["explique por que", "analise", "raciocine", "trade-off", "compare", "why", "analyze", "reason", "tradeoff"],
@@ -38,7 +38,8 @@ export function analyzeGoalContract(input: string, type: IntelligenceTaskType): 
   // explicit external-evidence signal.
   const researchIntent = explicitResearch && (type === "research" || explicitWeb || currentEvidence || hasAny(searchable, SIGNALS.citations));
   const primaryIntent = detectIntent(searchable, type, comparison, researchIntent);
-  const evidenceRequirement = currentEvidence || researchIntent || explicitWeb ? "REQUIRED" : primaryIntent === "FACTUAL" || primaryIntent === "COMPARISON" ? "PREFERRED" : "NONE";
+  const requiresResearchExecution = researchIntent && (primaryIntent !== "PLANNING" || hasAny(searchable, SIGNALS.citations));
+  const evidenceRequirement = currentEvidence || requiresResearchExecution || explicitWeb ? "REQUIRED" : primaryIntent === "FACTUAL" || primaryIntent === "COMPARISON" ? "PREFERRED" : "NONE";
   const requiredCapabilities = capabilitiesFor({ searchable, type, primaryIntent, comparison, evidenceRequirement });
   const jsonOutput = /\b(?:somente|apenas|only|just)\s+(?:valid\s+)?json\b|\b(?:retorne|return|responda|respond|forneca|provide)\s+(?:(?:somente|apenas|only|just|em|in|valid)\s+)*json\b/.test(searchable);
   if (jsonOutput && !requiredCapabilities.includes("structured-output")) requiredCapabilities.push("structured-output");
@@ -62,12 +63,12 @@ export function analyzeGoalContract(input: string, type: IntelligenceTaskType): 
     successCriteria: [
       { id: "answer-objective", description: "The result directly answers the operator's objective.", required: true, kind: "CONTENT" },
       ...(evidenceRequirement === "REQUIRED" ? [{ id: "current-evidence", description: `Use at least ${minimumEvidenceSources} observed external source${minimumEvidenceSources === 1 ? "" : "s"}.`, required: true, kind: "EVIDENCE" as const }] : []),
-      ...(comparison ? [{ id: "explain-comparison", description: "Explain the comparison metric and material differences rather than presenting an unsupported winner.", required: true, kind: "CONTENT" as const }] : []),
+      ...(comparison ? [{ id: "explain-comparison", description: "Explain the comparison metric and material differences. Scope each winner to the observed metric: search interest, downloads and survey samples cannot prove universal usage or superiority.", required: true, kind: "CONTENT" as const }] : []),
       ...(primaryIntent === "CALCULATION" ? [{ id: "calculator-evidence", description: "Use deterministic calculator evidence.", required: true, kind: "CAPABILITY" as const }] : []),
       { id: "requested-format", description: "Respect the requested result format and language.", required: true, kind: "FORMAT" }
     ],
     expectedResultKind,
-    qualityTarget: currentEvidence || comparison || ["REASONING", "RESEARCH", "CODING"].includes(primaryIntent) ? "HIGH" : expectedResultKind === "SHORT_ANSWER" || expectedResultKind === "CALCULATION" ? "MINIMAL" : "STANDARD",
+    qualityTarget: currentEvidence || comparison || (type === "research" && primaryIntent === "PLANNING") || ["REASONING", "RESEARCH", "CODING"].includes(primaryIntent) ? "HIGH" : expectedResultKind === "SHORT_ANSWER" || expectedResultKind === "CALCULATION" ? "MINIMAL" : "STANDARD",
     minimumEvidenceSources,
     analysisMethod: "hybrid"
   };
@@ -87,9 +88,9 @@ function detectIntent(input: string, type: IntelligenceTaskType, comparison: boo
   if (hasAny(input, SIGNALS.coding) && /\b(?:implemente|refatore|escreva|write|implement|refactor|crie|create)\b/.test(input)) return "CODING";
   if (hasAny(input, SIGNALS.calculation) || /\b\d+(?:[.,]\d+)?\s*(?:\*|x|×|\/|\+|-)\s*\d+(?:[.,]\d+)?\b/.test(input)) return "CALCULATION";
   if (comparison) return "COMPARISON";
+  if (type === "planning" || hasAny(input, SIGNALS.planning)) return "PLANNING";
   if (research || type === "research") return "RESEARCH";
   if (type === "browser") return "FACTUAL";
-  if (type === "planning" || hasAny(input, SIGNALS.planning)) return "PLANNING";
   if (type === "reasoning" || hasAny(input, SIGNALS.reasoning)) return "REASONING";
   if (type === "memory" || hasAny(input, SIGNALS.memory)) return "MEMORY";
   if (/^(?:qual|quais|quem|quando|onde|o que|explique o que|informe|what|which|who|when|where|how|explain what)\b/.test(input) || input.includes("?")) return "FACTUAL";

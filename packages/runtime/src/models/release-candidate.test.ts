@@ -6,6 +6,7 @@ import { AutopilotStateStore } from "@beyonder/compute";
 import { createRuntime } from "../runtime.js";
 import { loadConfig } from "../config/env.js";
 import { httpFailure, parseRetryAfter, runCandidates, type InferenceAttempt } from "./inference.js";
+import { ModelRouter } from "./model-router.js";
 import { OperationalHealthStore, operationalCooldown } from "./operational-health.js";
 import { AutopilotQuotaSource, parseReset } from "./quota.js";
 import { inferenceAttemptPolicy } from "./router-config.js";
@@ -38,6 +39,70 @@ describe("H1 persistent scoped operational health", () => {
       await r.modelRouter.recordAttempt(attempt({ id: "quota", responseBody: "daily quota" }));
       await r.modelRouter.operationalHealth.credentialValidated("p");
       expect(await r.modelRouter.canAttempt(candidate("p"))).toBe(false);
+    } finally { r.sqlite.close(); }
+  });
+  it.each(["PAID_MODEL_AUTH_REQUIRED", "paid_model_auth_required", "upstream_provider_shared_pool"]) ("scopes a model-specific authentication refusal (%s) to that model", async body => {
+    const r = runtime();
+    try {
+      const error = httpFailure(401, body);
+      await r.modelRouter.recordAttempt(attempt({ failureClass: error.failureClass, failureScope: error.failureScope, responseBody: error.responseBody }));
+      expect(await r.modelRouter.canAttempt(candidate("p"))).toBe(false);
+      expect(await r.modelRouter.canAttempt(candidate("p", "sibling"))).toBe(true);
+    } finally { r.sqlite.close(); }
+  });
+  it.each(["newer", "older", "missing", "future", "quota"] as const)("recovers keyless auth only with newer real inference, preserving quota (%s)", async condition => {
+    const r = runtime();
+    const failedAt = Date.now() - 10_000;
+    const proof = condition === "missing" ? null : { model: "different-model", observedAt: new Date(condition === "older" ? failedAt - 1 : condition === "future" ? Date.now() + 60_000 : failedAt + 1).toISOString() };
+    const router = new ModelRouter(loadConfig({ BEYONDER_MODEL_PROVIDER: "auto" }).model, { state: r.state, capabilitySource: { getCapability: async () => null, getCapabilityScore: async () => null, getLastSuccessfulRequest: async () => proof } });
+    try {
+      await router.recordAttempt(attempt({ provider: "kilo-gateway", failureClass: condition === "quota" ? "RATE_LIMITED" : "AUTH_REQUIRED", responseBody: condition === "quota" ? "daily quota" : "invalid key", completedAt: new Date(failedAt).toISOString() }));
+      expect(await router.canAttempt(candidate("kilo-gateway"))).toBe(condition === "newer");
+      expect((await router.operationalHealth.get("kilo-gateway")).failures).toBe(1);
+    } finally { r.sqlite.close(); }
+  });
+  it.each(["upstream_provider_account", "upstream_provider_shared_pool"])("isolates upstream rate limits from gateway quota (%s)", async limitSource => {
+    const r = runtime();
+    const responseBody = JSON.stringify({ error: { metadata: { limit_source: limitSource, remedy_hint: "Check your provider account", raw: "server overload" } } });
+    try {
+      const error = httpFailure(429, responseBody);
+      const failed = attempt({ failureClass: error.failureClass, failureScope: error.failureScope, responseBody });
+      await r.modelRouter.recordAttempt(failed);
+      expect(operationalCooldown(failed)).toMatchObject({ scope: "model", reason: "RATE_LIMITED" });
+      expect(await r.modelRouter.canAttempt(candidate("p"))).toBe(false);
+      expect(await r.modelRouter.canAttempt(candidate("p", "sibling"))).toBe(true);
+    } finally { r.sqlite.close(); }
+  });
+  it.each(["rpd", "rpm", "tpm"])("retains a shared upstream model's %s limit without disabling siblings", async dimension => {
+    const r = runtime();
+    const responseBody = JSON.stringify({ error: { message: `Rate limit exceeded: limit_${dimension}/vendor/model-20260730/account-id. Daily limit reached for vendor/model:free.`, metadata: { limit_source: "openrouter_shared_capacity" } } });
+    const until = new Date(Date.now() + 86_400_000).toISOString();
+    const failed = attempt({ responseBody });
+    try {
+      expect(httpFailure(429, responseBody).failureScope).toBe("model");
+      await r.state.set("task-attempts:t", [failed]);
+      await r.state.set("provider-health:p", { samples: 1, failures: 1, latencyMs: 10, lastFailureAt: failed.completedAt, cooldown: { scope: "provider", reason: "QUOTA_EXHAUSTED", until } });
+      expect(await r.modelRouter.canAttempt(candidate("p", "sibling"))).toBe(true);
+      expect(await r.modelRouter.canAttempt(candidate("p"))).toBe(false);
+      expect((await r.modelRouter.operationalHealth.get("p", "m")).cooldown?.until).toBe(until);
+    } finally { r.sqlite.close(); }
+  });
+  it("does not reinterpret an unscoped shared-capacity daily gateway cap", () => {
+    const responseBody = JSON.stringify({ error: { message: "Daily account limit exceeded", metadata: { limit_source: "openrouter_shared_capacity" } } });
+    expect(httpFailure(429, responseBody).failureScope).toBeUndefined();
+    expect(operationalCooldown(attempt({ responseBody }))).toMatchObject({ scope: "provider", reason: "QUOTA_EXHAUSTED" });
+  });
+  it.each(["upstream_provider_account", "upstream_provider_shared_pool", "gateway_daily_quota"])("reclassifies retained legacy health only with original upstream evidence (%s)", async limitSource => {
+    const r = runtime();
+    const failed = attempt({ responseBody: JSON.stringify({ error: { metadata: { limit_source: limitSource } } }) });
+    const until = new Date(Date.now() + 86_400_000).toISOString();
+    try {
+      await r.state.set("task-attempts:t", [failed]);
+      await r.state.set("provider-health:p", { samples: 1, failures: 1, latencyMs: 10, lastFailureAt: failed.completedAt, cooldown: { scope: "provider", reason: "QUOTA_EXHAUSTED", until } });
+      expect(await r.modelRouter.canAttempt(candidate("p", "sibling"))).toBe(limitSource !== "gateway_daily_quota");
+      expect(await r.modelRouter.canAttempt(candidate("p"))).toBe(false);
+      expect((await r.modelRouter.operationalHealth.get("p")).failures).toBe(1);
+      if (limitSource !== "gateway_daily_quota") expect((await r.modelRouter.operationalHealth.get("p", "m")).cooldown?.until).toBe(until);
     } finally { r.sqlite.close(); }
   });
   it.each([

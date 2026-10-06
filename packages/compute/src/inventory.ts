@@ -1,5 +1,5 @@
 import { providers } from "./catalog.js";
-import { eligibleModelsForWorkload, modelsWithMetadata } from "./model-capabilities.js";
+import { isModelMetadataEligibleForWorkload, modelsWithMetadata } from "./model-capabilities.js";
 import type { AutopilotStateFile, ComputeInventoryEntry, ProviderCatalogEntry } from "./types.js";
 
 export function buildComputeInventory(state: AutopilotStateFile): ComputeInventoryEntry[] {
@@ -16,7 +16,7 @@ function buildInventoryEntry(provider: ProviderCatalogEntry, state: AutopilotSta
   const models = provider.id === "nvidia-nim"
     ? validatedModels ?? []
     : validatedModels ?? provider.knownFreeModels;
-  const modelMetadata = modelsWithMetadata(provider, models);
+  const modelMetadata = modelsWithMetadata(provider, models).map(model => progress?.validation?.modelMetadata?.find(observed => observed.id === model.id) ?? model);
   return {
     providerId: provider.id,
     providerName: provider.name,
@@ -30,7 +30,7 @@ function buildInventoryEntry(provider: ProviderCatalogEntry, state: AutopilotSta
     cost: provider.billingRisk || provider.classification === "PAID_ONLY" ? "billing-risk" : modelMetadata.some((model) => !["FREE_CONFIRMED", "FREE_TIER_ELIGIBLE"].includes(model.costClass ?? "UNKNOWN_COST")) ? "unknown" : "$0",
     models,
     modelMetadata,
-    eligibleChatModels: eligibleModelsForWorkload(provider, models, "general_chat"),
+    eligibleChatModels: modelMetadata.filter(model => isModelMetadataEligibleForWorkload(model, "general_chat")).map(model => model.id),
     rpm: provider.freeTierLimits?.rpm,
     tpm: provider.freeTierLimits?.tpm,
     contextWindow: provider.freeTierLimits?.contextWindow,

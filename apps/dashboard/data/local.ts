@@ -34,6 +34,25 @@ interface LedgerRow { type: string; amount_usd: number; created_at: string; }
 const CONTROL_STATE_KEY = "control-center:state";
 const TASK_INDEX_KEY = "control-center:tasks:index";
 
+// Preserve the mission index's authority and checkpoint fallback, but page and
+// aggregate in SQLite before parsing/redacting large historical browser traces.
+const MISSION_ROWS_SQL = `WITH candidate_missions AS (
+  SELECT s.value, CAST(i.key AS INTEGER) AS priority FROM state s
+    JOIN json_each(COALESCE((SELECT value FROM state WHERE key = '${TASK_INDEX_KEY}'), '[]')) i
+    ON s.key = 'control-center:task:' || i.value WHERE json_valid(s.value)
+  UNION ALL
+  SELECT COALESCE(CASE WHEN json_valid(saved.value) THEN saved.value END,
+    CASE WHEN json_valid(cp.value) THEN CASE WHEN json_extract(cp.value, '$.version') = 1
+      AND json_type(cp.value, '$.execution') = 'object' THEN json_extract(cp.value, '$.execution') END END) AS value,
+    1000000000 AS priority FROM state cp LEFT JOIN state saved
+    ON saved.key = 'control-center:task:' || substr(cp.key, length('task-checkpoint:') + 1)
+    WHERE cp.key GLOB 'task-checkpoint:*'
+), ranked_missions AS (
+  SELECT value, ROW_NUMBER() OVER (
+    PARTITION BY COALESCE(json_extract(value, '$.task.id'), json_extract(value, '$.id'))
+    ORDER BY priority ASC) AS ordinal FROM candidate_missions WHERE value IS NOT NULL
+), missions AS (SELECT value FROM ranked_missions WHERE ordinal = 1)`;
+
 export class LocalDashboardDataSource implements DashboardDataSource {
   readonly provenance = "local" as const;
 
@@ -55,6 +74,9 @@ export class LocalDashboardDataSource implements DashboardDataSource {
     ]);
     const activeTask = tasks.find((task) => task.status === "running" || task.status === "planning" || task.status === "queued") ?? null;
     const todayPrefix = new Date().toISOString().slice(0, 10);
+    const db = this.open();
+    let completedToday = 0;
+    try { completedToday = (db.prepare(`${MISSION_ROWS_SQL} SELECT COUNT(*) AS total FROM missions WHERE json_extract(value, '$.state') = 'COMPLETED' AND json_extract(value, '$.objectiveStatus') = 'SUCCEEDED' AND substr(json_extract(value, '$.completedAt'), 1, 10) = ?`).get(todayPrefix) as { total: number }).total; } finally { db.close(); }
     return {
       status,
       healthChecks: await this.getHealthChecks(status),
@@ -62,7 +84,7 @@ export class LocalDashboardDataSource implements DashboardDataSource {
       activeTask,
       recentMissions: tasks.slice(0, 5),
       today: {
-        completedTasks: tasks.filter((task) => task.status === "succeeded" && task.completedAt?.startsWith(todayPrefix)).length,
+        completedTasks: completedToday,
         realMoneySpentUsd: economy.realMoneySpentUsd,
         realRevenueUsd: economy.realRevenueUsd,
         simulatedRevenueUsd: economy.simulatedRevenueUsd
@@ -91,13 +113,13 @@ export class LocalDashboardDataSource implements DashboardDataSource {
     if (approvals.some((approval) => approval.status === "PENDING")) {
       return { global: "WAITING_FOR_YOU", heartbeat, label: "Esperando voce", detail: "Existe uma decisao aguardando aprovacao.", lastHeartbeatAt: state.lastHeartbeatAt, currentActivity: state.currentActivity };
     }
-    if (tasks.some((task) => task.status === "waiting")) return { global: "WAITING_FOR_YOU", heartbeat, label: "Esperando você", detail: "Uma tarefa aguarda retomada.", lastHeartbeatAt: state.lastHeartbeatAt, currentActivity: state.currentActivity };
-    const blockedTask = tasks.find((task) => task.status === "blocked");
-    if (blockedTask) return { global: "ATTENTION_REQUIRED", heartbeat, label: "Precisa de atenção", detail: blockedTask.humanStatus, lastHeartbeatAt: state.lastHeartbeatAt, currentActivity: state.currentActivity };
     if (activeTask) {
       return { global: "WORKING", heartbeat, label: "Trabalhando", detail: activeTask.humanStatus, lastHeartbeatAt: state.lastHeartbeatAt, currentActivity: state.currentActivity ?? activeTask.title };
     }
-    if (latestError) {
+    if (tasks.some((task) => task.status === "waiting")) return { global: "WAITING_FOR_YOU", heartbeat, label: "Esperando você", detail: "Uma tarefa aguarda retomada.", lastHeartbeatAt: state.lastHeartbeatAt, currentActivity: state.currentActivity };
+    const blockedTask = tasks[0]?.status === "blocked" ? tasks[0] : undefined;
+    if (blockedTask) return { global: "ATTENTION_REQUIRED", heartbeat, label: "Precisa de atenção", detail: blockedTask.humanStatus, lastHeartbeatAt: state.lastHeartbeatAt, currentActivity: state.currentActivity };
+    if (latestError && (!tasks[0]?.completedAt || Date.parse(latestError.createdAt) > Date.parse(tasks[0].completedAt))) {
       return { global: "ATTENTION_REQUIRED", heartbeat, label: "Precisa de atencao", detail: latestError.humanEvent, lastHeartbeatAt: state.lastHeartbeatAt, currentActivity: state.currentActivity };
     }
     return { global: "READY", heartbeat, label: "Pronto", detail: "Beyonder esta livre. Nenhuma tarefa em execucao.", lastHeartbeatAt: state.lastHeartbeatAt, currentActivity: state.currentActivity };
@@ -122,28 +144,33 @@ export class LocalDashboardDataSource implements DashboardDataSource {
     if (!this.isAvailable()) return [];
     const db = this.open();
     try {
-      const ids = readState<string[]>(db, TASK_INDEX_KEY, []);
-      const checkpoints = (db.prepare("SELECT key, value FROM state WHERE key LIKE 'task-checkpoint:%'").all() as Array<{ key: string; value: string }>).map((row) => ({ id: row.key.slice("task-checkpoint:".length), execution: checkpointExecution(row.value) }));
-      const allIds = [...new Set([...ids, ...checkpoints.map((row) => row.id)])];
-      const seenTasks = new Set<string>();
-      const rows = allIds.flatMap((id) => {
-        const execution = readState<Record<string, unknown> | undefined>(db, `control-center:task:${id}`, undefined);
-        const value = execution ?? checkpoints.find((row) => row.id === id)?.execution;
-        if (!value) return [];
-        const taskId = stringField(objectField(value, "task"), "id") || id;
-        if (seenTasks.has(taskId)) return [];
-        seenTasks.add(taskId);
-        return [taskView({ ...value, attempts: readState(db, `task-attempts:${taskId}`, value.attempts ?? []) }, this.provenance)];
+      const { limit, offset } = pageArgs(query);
+      const rows = db.prepare(`${MISSION_ROWS_SQL} SELECT value FROM missions ORDER BY json_extract(value, '$.startedAt') DESC LIMIT ? OFFSET ?`).all(limit, offset) as Array<{ value: string }>;
+      return rows.map(row => {
+        const value = JSON.parse(row.value) as Record<string, unknown>;
+        const taskId = stringField(objectField(value, "task"), "id") || stringField(value, "id");
+        return taskView({ ...value, attempts: readState(db, `task-attempts:${taskId}`, value.attempts ?? []) }, this.provenance);
       });
-      return page(rows.sort((a, b) => (b.startedAt ?? "").localeCompare(a.startedAt ?? "")), query);
     } finally {
       db.close();
     }
   }
 
   async getTask(taskId: string): Promise<TaskView | null> {
-    const tasks = await this.getTasks({ limit: 200 });
-    return tasks.find((task) => task.taskId === taskId || task.technicalId === taskId || task.resumeTaskId === taskId || task.id === taskId) ?? null;
+    if (!this.isAvailable()) return null;
+    const db = this.open();
+    try {
+      const row = db.prepare("SELECT value FROM state WHERE key LIKE 'control-center:task:%' AND (key = ? OR json_extract(value, '$.task.id') = ?) ORDER BY updated_at DESC LIMIT 1")
+        .get(`control-center:task:${taskId}`, taskId) as { value: string } | undefined;
+      const checkpoint = db.prepare("SELECT value FROM state WHERE key = ?").get(`task-checkpoint:${taskId}`) as { value: string } | undefined;
+      const value = row ? JSON.parse(row.value) as Record<string, unknown> : checkpoint ? checkpointExecution(checkpoint.value) : undefined;
+      if (value) {
+        const identity = stringField(objectField(value, "task"), "id") || taskId;
+        return taskView({ ...value, attempts: readState(db, `task-attempts:${identity}`, value.attempts ?? []) }, this.provenance);
+      }
+    } finally { db.close(); }
+    // Legacy display IDs are supported by the list projection.
+    return (await this.getTasks()).find(task => task.id === taskId) ?? null;
   }
 
   async getOpportunities(query: PageQuery = {}) {
@@ -191,7 +218,8 @@ export class LocalDashboardDataSource implements DashboardDataSource {
       const configured = provider.authType === "keyless" || (provider.credentialEnvVars.some((name) => !name.endsWith("ACCOUNT_ID") && Boolean(process.env[name])) && (!provider.credentialEnvVars.includes("CLOUDFLARE_ACCOUNT_ID") || Boolean(process.env.CLOUDFLARE_ACCOUNT_ID)));
       const catalogStatus = providerStatus(item?.status);
       const status: ProviderView["status"] = cooldown ? /RATE|QUOTA/.test(cooldown.reason) ? "RATE_LIMITED" : "UNHEALTHY" : !configured && catalogStatus === "READY" ? "HUMAN_GATE" : catalogStatus;
-      const verified = Boolean((observed.samples && (observed.failures ?? 0) < observed.samples) || state.providers[provider.id]?.validation?.status === "validated");
+      // A responding model catalog proves discovery, not usable inference.
+      const verified = Boolean(observed.samples && (observed.failures ?? 0) < observed.samples);
       return {
         id: provider.id,
         name: provider.name,
@@ -279,6 +307,7 @@ export class LocalDashboardDataSource implements DashboardDataSource {
       const { limit, offset } = pageArgs(query);
       const where: string[] = [];
       const args: Array<string | number> = [];
+      if (query.event) { where.push("event = ?"); args.push(query.event); }
       if (query.level && query.level !== "all") {
         where.push("level = ?");
         args.push(query.level);
@@ -316,7 +345,7 @@ export class LocalDashboardDataSource implements DashboardDataSource {
       const simulatedRevenueUsd = runs.reduce((sum, run) => sum + numberField(run, "simulatedRewardUsd"), 0);
       const realRevenueUsd = revenue + runs.filter((run) => !isFixtureRun(run) && objectField(run, "settlement").evidence).reduce((sum, run) => sum + numberField(run, "realizedRewardUsd"), 0);
       const shadowCostUsd = runs.reduce((sum, run) => sum + numberField(run, "shadowCostUsd"), 0);
-      const taskShadow = (await this.getTasks({ limit: 200 })).reduce((sum, task) => sum + task.shadowCostUsd, 0);
+      const taskShadow = (db.prepare(`${MISSION_ROWS_SQL} SELECT COALESCE(SUM(json_extract(value, '$.usage.shadowCostUsd')), 0) AS total FROM missions`).get() as { total: number }).total;
       return {
         estimatedRevenueUsd: runs.filter((run) => !isFixtureRun(run) && !objectField(run, "settlement").evidence).reduce((sum, run) => sum + numberField(run, "estimatedRewardUsd"), 0),
         realMoneySpentUsd: expenses,
@@ -382,6 +411,12 @@ export function resolveProviderStatePath(): string {
   return path.isAbsolute(configured) ? configured : path.resolve(/*turbopackIgnore: true*/ repoRoot, configured);
 }
 
+export function resolveBenchmarkDbPath(): string {
+  const repoRoot = process.env.BEYONDER_REPO_ROOT ?? path.resolve(process.cwd(), "../..");
+  const configured = process.env.BEYONDER_BENCHMARK_DB_PATH ?? "./data/beyonder-benchmark.sqlite";
+  return path.isAbsolute(configured) ? configured : path.resolve(/*turbopackIgnore: true*/ repoRoot, configured);
+}
+
 export function defaultControlState(): ControlCenterState {
   return { paused: false, developerMode: false, firstRunComplete: false, lastHeartbeatAt: null, currentActivity: null };
 }
@@ -421,6 +456,8 @@ function taskView(execution: Record<string, unknown>, provenance: "local"): Task
   const latestStep = stepExecutions.at(-1);
   const verification = objectField(execution, "objectiveVerification");
   const objectiveStatus = stringField(execution, "objectiveStatus");
+  const verificationReason = redactText(stringField(verification, "reason") || stringField(execution, "error"));
+  const capacitySummary = objectiveStatus === "NEEDS_CAPABILITY" ? capacityExplanation(verificationReason) : undefined;
   const verifying = Boolean(execution.executionPhase) && !objectiveStatus && !execution.interruptionReason
     && ["FAILED", "BLOCKED", "CANCELLED", "EXECUTION_FINISHED"].includes(state);
   const evidenceSources = browserSources(stepExecutions);
@@ -436,7 +473,7 @@ function taskView(execution: Record<string, unknown>, provenance: "local"): Task
   return {
     canResume: state === "WAITING" && execution.interruptionReason === "PROCESS_RESTART",
     resumeTaskId: state === "WAITING" && execution.interruptionReason === "PROCESS_RESTART" ? stringField(task, "id") : undefined,
-    failureSummary: state === "FAILED" ? failureAttempt?.failureClass ? `${failureAttempt.provider} ${failureLabels[failureAttempt.failureClass] ?? "falhou"} durante a ${phaseLabels[failureAttempt.phase] ?? "execução"}. As tentativas permitidas foram encerradas.` : "Não consegui concluir esta tarefa." : undefined,
+    failureSummary: capacitySummary ?? (state === "FAILED" ? failureAttempt?.failureClass ? `${failureAttempt.provider} ${failureLabels[failureAttempt.failureClass] ?? "falhou"} durante a ${phaseLabels[failureAttempt.phase] ?? "execução"}. As tentativas permitidas foram encerradas.` : "Não consegui concluir esta tarefa." : undefined),
     attempts: attempts.map((attempt) => ({ ...attempt, error: attempt.error ? redactText(attempt.error) : undefined })),
     id: humanTaskId(stringField(execution, "id")),
     taskId: stringField(task, "id") || undefined,
@@ -465,7 +502,7 @@ function taskView(execution: Record<string, unknown>, provenance: "local"): Task
       detail: stringField(step, "expectedOutcome") || undefined,
       state: stepState(stringField(step, "status"))
     })),
-    why: latestStep ? modelWhy(latestStep) : ["Execucao ainda nao selecionou um modelo."],
+    why: [...(verificationReason && objectiveStatus !== "SUCCEEDED" ? [`Motivo registrado: ${verificationReason}`] : []), ...(latestStep ? modelWhy(latestStep) : ["Execucao ainda nao selecionou um modelo."])],
     technicalId: stringField(execution, "id"),
     provenance
   };
@@ -652,6 +689,16 @@ function normalizeTaskStatus(state: string): TaskView["status"] {
   if (state === "CANCELLED") return "cancelled";
   if (state === "CREATED") return "queued";
   return "unknown";
+}
+
+function capacityExplanation(reason: string): string | undefined {
+  if (/No independent.*verifier/i.test(reason)) return "Não há um verificador independente com a qualidade exigida. O resultado continua sem confirmação.";
+  if (/Independent objective verification failed/i.test(reason)) return "A verificação independente não concluiu. O resultado continua sem confirmação; o motivo está nos detalhes técnicos.";
+  if (/external evidence.*(?:incomplete|missing)|source.*unavailable/i.test(reason)) return "A evidência externa exigida está incompleta. Confira as fontes observadas e os detalhes técnicos.";
+  if (/AUTH_REQUIRED|credential|authentication/i.test(reason)) return "O acesso ao provider precisa de credenciais válidas.";
+  if (/RATE_LIMITED|QUOTA_EXHAUSTED|quota exhausted/i.test(reason)) return "A capacidade disponível atingiu um limite de uso. Nenhum fallback adequado foi confirmado.";
+  if (/No quality-qualified|No acceptable compute|quality floor/i.test(reason)) return "Não há modelo disponível que atinja a qualidade exigida para produzir este resultado.";
+  return undefined;
 }
 
 function humanTaskStatus(state: string, observation?: string) {

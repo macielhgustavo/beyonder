@@ -93,6 +93,7 @@ export interface CandidateExplanation {
 }
 
 export interface ModelCandidate {
+  metadataQuality?: number;
   local?: boolean;
   externalQuotaConsumption?: boolean;
   costClass?: "FREE_CONFIRMED" | "FREE_TIER_ELIGIBLE" | "UNKNOWN_COST" | "PAID";

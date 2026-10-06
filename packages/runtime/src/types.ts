@@ -20,6 +20,7 @@ export interface ModelResponse {
   provider: string;
   model: string;
   estimatedCostUsd: number;
+  attribution?: { requestedModel: string; reportedModel?: string; upstreamProvider?: string; upstreamAttemptCount?: number };
   raw?: unknown;
 }
 

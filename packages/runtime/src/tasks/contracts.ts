@@ -29,6 +29,7 @@ export type CompletionStatus = Extract<
 export type PlanStepStatus = "PENDING" | "RUNNING" | "COMPLETED" | "FAILED" | "BLOCKED" | "SKIPPED";
 
 export interface PlanStep {
+  evidenceRole?: "DISCOVERY" | "SOURCE";
   kind?: "TOOL" | "DIRECT_RESPONSE";
   id: string;
   description: string;
@@ -38,6 +39,9 @@ export interface PlanStep {
   dependencies?: string[];
   action?: ToolCall;
   actionStrategy?: "DISCOVERED_BROWSER_LINK";
+  alternativeUrls?: string[];
+  sourceDomain?: string;
+  sourceTopic?: string;
 }
 
 export interface Plan {
@@ -90,6 +94,7 @@ export interface TaskBudgetUsage {
 }
 
 export interface StepExecution {
+  evidenceRole?: "DISCOVERY" | "SOURCE";
   toolCapabilities?: string[];
   toolSideEffects?: ToolSideEffect[];
   id: string;

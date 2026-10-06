@@ -147,7 +147,7 @@ export class MockDashboardDataSource implements DashboardDataSource {
   async getProviders(query?: PageQuery) { return paginate(providers, query); }
   async getModelDecisions(query?: PageQuery) { return paginate(decisions, query); }
   async getMemories(query?: MemoryQuery) { return paginate(memories.filter((memory) => !query?.kind || query.kind === "all" || memory.kind === query.kind), query); }
-  async getAuditEvents(query?: AuditQuery) { return paginate(audit.filter((event) => !query?.level || query.level === "all" || event.level === query.level), query); }
+  async getAuditEvents(query?: AuditQuery) { return paginate(audit.filter(event => (!query?.event || event.event === query.event) && (!query?.level || query.level === "all" || event.level === query.level)), query); }
   async getEconomySummary() { return { realMoneySpentUsd: 0, realRevenueUsd: 0, simulatedRevenueUsd: 3, shadowCostUsd: 0.04, computeConsumed: "fixture", monetaryCostTodayUsd: 0 }; }
 }
 

@@ -138,6 +138,42 @@ describe("bounded real executor inference pipeline", () => {
 });
 
 describe("parsing, budgets and local discovery", () => {
+  it.each([
+    [503, "Upstream error from Nvidia: Service temporarily overloaded", "PROVIDER_UNAVAILABLE", undefined],
+    [429, "Rate limit exceeded for free models. Please try again later.", "RATE_LIMITED", "provider"],
+    [401, "paid_model_auth_required", "AUTH_REQUIRED", "model"]
+  ])("preserves actual HTTP 200 and classifies upstream %s operational failure", async (code, message, failureClass, failureScope) => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: { code, message } }))));
+    const runtime = createRuntime(loadConfig({ BEYONDER_DB_PATH: ":memory:", BEYONDER_MODEL_PROVIDER: "auto" }));
+    try {
+      const attempts: import("../models/inference.js").InferenceAttempt[] = [];
+      await expect(runCandidates({ taskId: "upstream-envelope", phase: "DIRECT_RESPONSE", candidates: [{ ...candidate("physical-model"), provider: "kilo-gateway" }], maxMonetaryCostUsd: 0, maxShadowCostUsd: 1, maxDurationMs: 1000,
+        messages: [{ role: "user", content: "answer" }], complete: (messages, model) => runtime.modelRouter.completeForPlanningCandidate(messages, model), validate: response => response.content,
+        record: async attempt => { if (attempt.status !== "STARTED") { attempts.push({ ...attempt }); await runtime.modelRouter.recordAttempt(attempt); } }
+      })).rejects.toMatchObject({ failureClass, httpStatus: 200, upstreamHttpStatus: code });
+      expect(attempts).toHaveLength(1);
+      expect(attempts[0]).toMatchObject({ status: "FAILED", httpStatus: 200, upstreamHttpStatus: code, failureClass, failureScope });
+      expect((await runtime.modelRouter.operationalHealth.get("kilo-gateway", "physical-model")).failures).toBe(1);
+      expect(await runtime.modelRouter.canAttempt({ ...candidate("physical-model"), provider: "kilo-gateway" })).toBe(false);
+    } finally { runtime.sqlite.close(); }
+  });
+  it.each([
+    { error: { message: "Upstream unavailable", apiKey: "SENSITIVE" } },
+    { model: "observed-model", choices: [{ message: { content: "" }, finish_reason: "stop" }] },
+    { model: "observed-model", choices: [{ message: { content: "partial", reasoning: "PRIVATE_CHAIN" }, finish_reason: "length" }], usage: { total_tokens: 2400, cost: 0 } }
+  ])("retains redacted diagnostics for unusable HTTP 200 completions", async envelope => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(envelope))));
+    const runtime = createRuntime(loadConfig({ BEYONDER_DB_PATH: ":memory:", BEYONDER_MODEL_PROVIDER: "auto" }));
+    try {
+      let failure: unknown;
+      try { await runtime.modelRouter.completeForPlanningCandidate([{ role: "user", content: "answer" }], { ...candidate("physical-model"), provider: "kilo-gateway" }); } catch (error) { failure = error; }
+      expect(failure).toMatchObject({ failureClass: "INVALID_OUTPUT", httpStatus: 200 });
+      const diagnostic = (failure as InferenceError).responseBody!;
+      expect(diagnostic).not.toContain("SENSITIVE"); expect(diagnostic).not.toContain("PRIVATE_CHAIN");
+      expect(diagnostic.length).toBeLessThanOrEqual(1500);
+      expect(JSON.parse(diagnostic)).toMatchObject("error" in envelope ? { error: { message: "Upstream unavailable" } } : { model: "observed-model", finishReason: envelope.choices[0]!.finish_reason });
+    } finally { runtime.sqlite.close(); }
+  });
   it("resolves Cloudflare account separately from its bearer token", async () => {
     vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "fixture-account");
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "fixture-token");
@@ -149,16 +185,31 @@ describe("parsing, budgets and local discovery", () => {
       expect(fetch).toHaveBeenCalledWith("https://api.cloudflare.com/client/v4/accounts/fixture-account/ai/v1/chat/completions", expect.objectContaining({ headers: expect.objectContaining({ authorization: "Bearer fixture-token" }) }));
     } finally { runtime.sqlite.close(); }
   });
-  it("requests provider-native JSON mode for remote structured verification", async () => {
+  it.each(["physical-research", "physical-planning", "physical-code"])("keeps the observed BIB JSON profile for %s instead of unmeasured native mode", async model => {
+    const fetch = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({ model, choices: [{ message: { content: '{"satisfied":true}' } }] })));
+    vi.stubGlobal("fetch", fetch);
+    const runtime = createRuntime(loadConfig({ BEYONDER_DB_PATH: ":memory:", BEYONDER_MODEL_PROVIDER: "auto" }));
+    try {
+      await runtime.modelRouter.completeForStructuredCandidate([{ role: "user", content: "verify" }], { ...candidate(model), provider: "kilo-gateway", structuredOutput: "native", benchmarkCapability: { source: "BIB", score: 1, samples: 2, structuredOutputMode: "prompted" } });
+      const body = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body));
+      expect(body.response_format).toBeUndefined();
+      expect(body.max_tokens).toBe(2400);
+    } finally { runtime.sqlite.close(); }
+  });
+
+  it.each(["native", "prompted", "unknown"] as const)("uses only declared JSON mode for remote verification (%s)", async structuredOutput => {
     vi.stubEnv("CLOUDFLARE_ACCOUNT_ID", "fixture-account");
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "fixture-token");
     const fetch = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({ choices: [{ message: { content: '{"satisfied":true}' } }] })));
     vi.stubGlobal("fetch", fetch);
     const runtime = createRuntime(loadConfig({ BEYONDER_DB_PATH: ":memory:", BEYONDER_MODEL_PROVIDER: "auto" }));
     try {
-      await runtime.modelRouter.completeForStructuredCandidate([{ role: "user", content: "verify" }], { ...candidate("fixture-model"), provider: "cloudflare-workers-ai" });
+      await runtime.modelRouter.completeForStructuredCandidate([{ role: "user", content: "verify" }], { ...candidate("fixture-model"), provider: "cloudflare-workers-ai", structuredOutput });
       const body = JSON.parse(String((fetch.mock.calls[0]?.[1] as RequestInit | undefined)?.body));
-      expect(body).toMatchObject({ model: "fixture-model", response_format: { type: "json_object" }, max_tokens: 300, stream: false });
+      expect(body).toMatchObject({ model: "fixture-model", stream: false });
+      expect(body.response_format).toEqual(structuredOutput === "native" ? { type: "json_object" } : undefined);
+      expect(body.max_tokens).toBeGreaterThanOrEqual(1024);
+      expect(body.max_tokens).toBeLessThanOrEqual(2400);
     } finally { runtime.sqlite.close(); }
   });
   it.each([400, 401, 403, 404, 429, 500])("classifies HTTP %s without exposing credentials", (status) => {

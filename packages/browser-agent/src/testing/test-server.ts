@@ -3,15 +3,32 @@ import { createServer, type Server } from "node:http";
 export interface BrowserTestServer {
   baseUrl: string;
   getPostCount(): number;
+  getPostBodies(): string[];
   close(): Promise<void>;
 }
 
 export async function startBrowserTestServer(): Promise<BrowserTestServer> {
   let postCount = 0;
+  const postBodies: string[] = [];
   const server = createServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    if (url.pathname.startsWith("/grant-hijack-")) {
+      const code = url.pathname.endsWith("fetch") ? "fetch('/save',{method:'POST',body:'unapproved'})" : url.pathname.endsWith("xhr") ? "const x=new XMLHttpRequest();x.open('POST','/save');x.send('unapproved')" : "navigator.sendBeacon('/save','unapproved')";
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(page("Approved form boundary", `<form action="/save" method="POST"><input name="data" value="approved"><button onclick="event.preventDefault();${code}">Save changes</button></form>`));
+      return;
+    }
+    if (url.pathname.startsWith("/script-write-")) {
+      const code = url.pathname.endsWith("fetch") ? "fetch('/save',{method:'POST',body:'unapproved'})" : url.pathname.endsWith("xhr") ? "const x=new XMLHttpRequest();x.open('POST','/save');x.send('unapproved')" : "navigator.sendBeacon('/save','unapproved')";
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(page("Read-only source", `<h1>Read-only source</h1><script>${code}</script>`));
+      return;
+    }
     if (request.method === "POST" && url.pathname === "/save") {
       postCount += 1;
+      let body = "";
+      request.on("data", chunk => { body += chunk.toString(); });
+      request.on("end", () => { postBodies.push(body); });
       response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       response.end(page("Saved", "<h1>Saved</h1>"));
       return;
@@ -26,6 +43,12 @@ export async function startBrowserTestServer(): Promise<BrowserTestServer> {
       response.end();
       return;
     }
+    if (url.pathname === "/duplicate-header") {
+      response.setHeader("vary", ["User-Agent", "Accept-Encoding"]);
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8", "report-to": ['{"group":"one","max_age":1,"endpoints":[]}', '{"group":"two","max_age":1,"endpoints":[]}'], "set-cookie": ["one=present; Path=/", "two=present; Path=/"] });
+      response.end(page("Repeated headers", "<h1>The complete public document was observed.</h1>"));
+      return;
+    }
     if (url.pathname === "/cookie-check") {
       const present = request.headers.cookie?.includes("beyonder_session=present") === true;
       response.writeHead(present ? 200 : 401, { "content-type": "text/html; charset=utf-8" });
@@ -35,6 +58,12 @@ export async function startBrowserTestServer(): Promise<BrowserTestServer> {
     if (url.pathname === "/docs") {
       response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
       response.end(page("Documentation", '<h1>Documentation</h1><p id="docs-copy">Deterministic browser documentation page.</p>'));
+      return;
+    }
+    if (url.pathname === "/superseded-s" || url.pathname === "/superseded-del" || url.pathname === "/superseded-update") {
+      const tag = url.pathname === "/superseded-del" ? "del" : "s";
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end(page("Updated documentation", `<h1>Current documentation</h1><p><${tag}>Large transactions may fail in the obsolete release.</${tag}> Current releases support large transactions efficiently.</p>`));
       return;
     }
     if (url.pathname === "/final") {
@@ -101,6 +130,7 @@ export async function startBrowserTestServer(): Promise<BrowserTestServer> {
   return {
     baseUrl,
     getPostCount: () => postCount,
+    getPostBodies: () => [...postBodies],
     close: () => closeServer(server)
   };
 }

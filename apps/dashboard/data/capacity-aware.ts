@@ -36,8 +36,9 @@ export class CapacityAwareDashboardDataSource implements DashboardDataSource {
     ]);
     const recentMissions = home.recentMissions.map((task) => decorateTaskCapacity(task, audit));
     const activeTask = home.activeTask ? decorateTaskCapacity(home.activeTask, audit) : null;
-    const capabilityBlocked = [activeTask, ...recentMissions].find((task) => task?.objectiveStatus === "NEEDS_CAPABILITY");
-    const capacityReduced = [activeTask, ...recentMissions].find((task) => task && hasCapacityEvent(task, audit, "router.capacity_reduced"));
+    const current = activeTask ?? recentMissions[0];
+    const capabilityBlocked = current?.objectiveStatus === "NEEDS_CAPABILITY" && current.status === "blocked";
+    const capacityReduced = current && hasCapacityEvent(current, audit, "router.capacity_reduced") ? current : undefined;
     return {
       ...home,
       activeTask,
@@ -51,16 +52,18 @@ export class CapacityAwareDashboardDataSource implements DashboardDataSource {
   }
 
   async getRuntimeStatus(): Promise<RuntimeStatusView> {
-    const [status, tasks, audit] = await Promise.all([
+    const [status, tasks] = await Promise.all([
       this.inner.getRuntimeStatus(),
-      this.inner.getTasks({ limit: 100 }),
-      this.inner.getAuditEvents({ limit: 200 })
+      this.inner.getTasks({ limit: 20 })
     ]);
-    const decorated = tasks.map((task) => decorateTaskCapacity(task, audit));
-    if (decorated.some((task) => task.objectiveStatus === "NEEDS_CAPABILITY" && task.status === "blocked")) {
+    // Health polling must not render Home's historical evidence or accounting.
+    const selected = tasks.find(task => ["running", "planning", "queued"].includes(task.status)) ?? tasks[0];
+    const audit = selected ? await this.inner.getAuditEvents({ event: "router.capacity_reduced", search: selected.taskId ?? selected.technicalId ?? selected.id, limit: 200 }) : [];
+    const current = selected ? decorateTaskCapacity(selected, audit) : undefined;
+    if (current?.objectiveStatus === "NEEDS_CAPABILITY" && current.status === "blocked") {
       return capacityStatus(status, "NEEDS_CAPABILITY");
     }
-    if (decorated.some((task) => task.status === "running" && hasCapacityEvent(task, audit, "router.capacity_reduced"))) {
+    if (current?.status === "running" && hasCapacityEvent(current, audit, "router.capacity_reduced")) {
       return capacityStatus(status, "CAPACITY_REDUCED");
     }
     return status;
@@ -78,11 +81,10 @@ export class CapacityAwareDashboardDataSource implements DashboardDataSource {
   }
 
   async getTask(taskId: string): Promise<TaskView | null> {
-    const [task, audit] = await Promise.all([
-      this.inner.getTask(taskId),
-      this.inner.getAuditEvents({ limit: 300 })
-    ]);
-    return task ? decorateTaskCapacity(task, audit) : null;
+    const task = await this.inner.getTask(taskId);
+    if (!task) return null;
+    const audit = await this.inner.getAuditEvents({ limit: 300, search: task.taskId ?? task.technicalId ?? taskId });
+    return decorateTaskCapacity(task, audit);
   }
 
   getOpportunities(query?: PageQuery) { return this.inner.getOpportunities(query); }
@@ -111,9 +113,9 @@ export function decorateTaskCapacity(task: TaskView, audit: AuditEventView[]): T
     return {
       ...task,
       status: "blocked",
-      humanStatus: NEEDS_CAPABILITY_MESSAGE,
-      failureSummary: NEEDS_CAPABILITY_MESSAGE,
-      why: unique([NEEDS_CAPABILITY_MESSAGE, ...task.why])
+      humanStatus: task.failureSummary ?? NEEDS_CAPABILITY_MESSAGE,
+      failureSummary: task.failureSummary ?? NEEDS_CAPABILITY_MESSAGE,
+      why: unique([task.failureSummary ?? NEEDS_CAPABILITY_MESSAGE, ...task.why])
     };
   }
 

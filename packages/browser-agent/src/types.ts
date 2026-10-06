@@ -31,6 +31,8 @@ export type BrowserAction =
   | { type: "close" };
 
 export interface BrowserPolicy {
+  /** Static read sessions can disable scripts; network pinning is unchanged. */
+  javaScriptEnabled?: boolean;
   allowDomains: string[];
   denyDomains: string[];
   allowNavigation: boolean;
@@ -162,7 +164,7 @@ export interface BrowserSession {
   observe(limits: BrowserObservationLimits): Promise<BrowserObservation>;
   extractText(target: BrowserTarget | undefined, maxChars: number): Promise<string>;
   inspect(target: BrowserTarget): Promise<BrowserElementInfo>;
-  click(target: BrowserTarget): Promise<void>;
+  click(target: BrowserTarget, approvedSubmission?: { url: string; method: string }): Promise<void>;
   fill(target: BrowserTarget, value: string): Promise<void>;
   scroll(direction: "up" | "down", amount: number): Promise<void>;
   waitFor(target: BrowserTarget, state: "attached" | "visible" | "hidden", timeoutMs: number): Promise<void>;

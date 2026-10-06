@@ -30,6 +30,8 @@ jobs:
       - run: pnpm control-center:smoke
       - run: pnpm control-center:security-smoke
       - run: pnpm --filter @beyonder/browser-agent exec playwright install --with-deps chromium
+      - name: Protected browser redirects and rebinding in real Chromium
+        run: pnpm test:browser:e2e
       - run: pnpm control-center:supervisor-smoke
       - name: Controlled product acceptance through the real Control Center
         run: pnpm --filter @beyonder/browser-agent exec node scripts/control-center-controlled-acceptance.mjs

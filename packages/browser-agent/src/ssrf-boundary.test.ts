@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { gzipSync } from "node:zlib";
-import { BrowserPolicyEngine, mergeBrowserPolicy, type AddressResolver } from "./policy.js";
+import { BrowserPolicyEngine, SystemAddressResolver, mergeBrowserPolicy, type AddressResolver } from "./policy.js";
 import { proxyBrowserRequest } from "./playwright-session.js";
-import { decodeBrowserResponse, pinnedRequestOptions, type BrowserNetworkTransport } from "./pinned-transport.js";
+import { decodeBrowserResponse, pinnedRequestOptions, type BrowserNetworkTransport, type BrowserNetworkResponse } from "./pinned-transport.js";
 
 class AlternatingResolver implements AddressResolver {
   readonly calls: string[] = [];
@@ -23,6 +23,36 @@ function route() {
 }
 
 describe("socket-bound SSRF enforcement", () => {
+  it.each(["POST", "PUT", "DELETE"])("rejects an unapproved %s before making any network request", async method => {
+    const engine = new BrowserPolicyEngine(mergeBrowserPolicy(), new AlternatingResolver({}));
+    const transport: BrowserNetworkTransport = { fetch: vi.fn() };
+    const intercepted = route();
+    await proxyBrowserRequest(intercepted, { ...request("https://public.test/write"), method: () => method }, engine, transport);
+    expect(transport.fetch).not.toHaveBeenCalled();
+    expect(intercepted.abort).toHaveBeenCalledWith("blockedbyclient");
+  });
+  it.each([307, 308])("never replays an approved mutation through HTTP %s", async status => {
+    const engine = new BrowserPolicyEngine(mergeBrowserPolicy(), new AlternatingResolver({}));
+    const transport: BrowserNetworkTransport = { fetch: vi.fn(async () => ({ status, headers: { location: "https://other.test/write" }, body: Buffer.alloc(0) })) };
+    const intercepted = route();
+    await proxyBrowserRequest(intercepted, { ...request("https://public.test/write"), method: () => "POST" }, engine, transport, undefined, () => true);
+    expect(transport.fetch).toHaveBeenCalledTimes(1);
+    expect(intercepted.abort).toHaveBeenCalledWith("blockedbyclient");
+  });
+  it("resolves both address families concurrently and rejects a private AAAA alongside public IPv4", async () => {
+    const resolver = new SystemAddressResolver({ resolve4: vi.fn(async () => ["93.184.216.34"]), resolve6: vi.fn(async () => ["::1"]) } as never);
+    const engine = new BrowserPolicyEngine(mergeBrowserPolicy(), resolver);
+    expect(await engine.resolveConnection("https://dual-stack.test/")).toMatchObject({ decision: { allowed: false, reason: "internal-network-blocked" } });
+  });
+
+  it("accepts genuine IPv4-only hosts without silently discarding a DNS timeout", async () => {
+    const missing = Object.assign(new Error("no IPv6"), { code: "ENODATA" });
+    const resolve6 = vi.fn().mockRejectedValueOnce(missing).mockRejectedValueOnce(Object.assign(new Error("DNS timed out"), { code: "ETIMEOUT" }));
+    const resolver = new SystemAddressResolver({ resolve4: vi.fn(async () => ["93.184.216.34"]), resolve6 } as never);
+    const engine = new BrowserPolicyEngine(mergeBrowserPolicy(), resolver);
+    expect(await engine.resolveConnection("https://ipv4-only.test/")).toMatchObject({ target: { address: "93.184.216.34" } });
+    expect(await engine.resolveConnection("https://ipv4-only.test/next")).toMatchObject({ decision: { allowed: false, reason: "dns-resolution-failed" } });
+  });
   it("pins the socket to the validated public address even if DNS later rebinds", async () => {
     const resolver = new AlternatingResolver({ "attacker.test": [["93.184.216.34"], ["127.0.0.1"]] });
     const engine = new BrowserPolicyEngine(mergeBrowserPolicy(), resolver);
@@ -72,7 +102,7 @@ describe("socket-bound SSRF enforcement", () => {
   });
 
   it("preserves original Host and TLS SNI while using the pinned address", async () => {
-    const engine = new BrowserPolicyEngine(mergeBrowserPolicy(), new AlternatingResolver({ "secure.test": [["203.0.113.10"]] }));
+    const engine = new BrowserPolicyEngine(mergeBrowserPolicy(), new AlternatingResolver({ "secure.test": [["93.184.216.34"]] }));
     const resolved = await engine.resolveConnection("https://secure.test:8443/path");
     if (!resolved.target) throw new Error("target missing");
     const options = pinnedRequestOptions(resolved.target);
@@ -88,5 +118,41 @@ describe("socket-bound SSRF enforcement", () => {
 
   it("fails closed for unsupported response encodings", () => {
     expect(() => decodeBrowserResponse({ status: 200, headers: { "content-encoding": "zstd" }, body: Buffer.from("opaque") }, 1_024)).toThrow(/Unsupported/);
+  });
+
+  it.each(["http://127.0.0.1/admin", "http://[::ffff:7f00:1]/", "http://169.254.169.254/latest/"])("never fulfills an HTTP redirect to a private target: %s", async location => {
+    const engine = new BrowserPolicyEngine(mergeBrowserPolicy(), new AlternatingResolver({}));
+    const transport: BrowserNetworkTransport = { fetch: vi.fn(async () => ({ status: 307, headers: { location }, body: Buffer.alloc(0) })) };
+    const intercepted = route();
+    await proxyBrowserRequest(intercepted, request("https://public.test/"), engine, transport);
+    expect(intercepted.abort).toHaveBeenCalledWith("blockedbyclient");
+    expect(intercepted.fulfill).not.toHaveBeenCalled();
+    expect(transport.fetch).toHaveBeenCalledOnce();
+  });
+
+  it("resolves and pins every hop of a subresource redirect chain", async () => {
+    const engine = new BrowserPolicyEngine(mergeBrowserPolicy(), new AlternatingResolver({ "public.test": [["93.184.216.34"]], "cdn.test": [["93.184.216.35"]] }));
+    const targets: string[] = [];
+    const transport: BrowserNetworkTransport = { fetch: vi.fn(async (input, target): Promise<BrowserNetworkResponse> => {
+      targets.push(target.address!);
+      if (input.url.includes("public.test")) return { status: 302, headers: { location: "https://cdn.test/image" }, body: Buffer.alloc(0) };
+      return { status: 200, headers: { "content-type": "image/png" }, body: Buffer.from("observed") };
+    }) };
+    const intercepted = route();
+    await proxyBrowserRequest(intercepted, request("https://public.test/image"), engine, transport);
+    expect(targets).toEqual(["93.184.216.34", "93.184.216.35"]);
+    expect(intercepted.fulfill).toHaveBeenCalledWith(expect.objectContaining({ status: 200 }));
+    expect(intercepted.continue).not.toHaveBeenCalled();
+  });
+
+  it("stages main-frame redirects as a new intercepted navigation", async () => {
+    const engine = new BrowserPolicyEngine(mergeBrowserPolicy(), new AlternatingResolver({}));
+    const transport: BrowserNetworkTransport = { fetch: vi.fn(async () => ({ status: 307, headers: { location: "/docs", "set-cookie": "locale=en" }, body: Buffer.alloc(0) })) };
+    const intercepted = route();
+    const navigate = vi.fn();
+    await proxyBrowserRequest(intercepted, request("https://public.test/"), engine, transport, navigate);
+    expect(navigate).toHaveBeenCalledWith("https://public.test/docs");
+    expect(intercepted.fulfill).toHaveBeenCalledWith(expect.objectContaining({ status: 200, headers: expect.not.objectContaining({ location: expect.anything() }) }));
+    expect(intercepted.continue).not.toHaveBeenCalled();
   });
 });

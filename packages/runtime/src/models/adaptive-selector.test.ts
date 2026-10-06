@@ -157,6 +157,7 @@ describe("AdaptiveModelSelector", () => {
     const path = await providerStatePath();
     const selector = new AdaptiveModelSelector(path, {
       quotaSource: new FixedQuotaSource(),
+      allowExploration: true,
       random: new SequenceRandom([0, 0])
     });
     const route = await selector.route(task(), "normal");
@@ -164,6 +165,14 @@ describe("AdaptiveModelSelector", () => {
     expect(route.explored).toBe(true);
     expect(route.selected).not.toBe(route.candidates[0]);
     expect(route.selected?.monetaryCostUsd).toBe(0);
+  });
+
+  it("uses the best qualified candidate in normal product routing even when randomness would explore", async () => {
+    const selector = new AdaptiveModelSelector(await providerStatePath(), { quotaSource: new FixedQuotaSource(), random: new SequenceRandom([0, 0]) });
+    const route = await selector.route(task(), "normal");
+    expect(route.candidates.length).toBeGreaterThan(1);
+    expect(route.explored).toBe(false);
+    expect(route.selected).toBe(route.candidates[0]);
   });
 
   it("uses BIB prior when no real outcomes exist", async () => {

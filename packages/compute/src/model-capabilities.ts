@@ -30,6 +30,9 @@ export function isModelEligibleForWorkload(
 }
 
 export function isModelMetadataEligibleForWorkload(metadata: ModelCatalogEntry, workload: ModelWorkload): boolean {
+  // A dynamic router alias is not a physical model. It cannot supply calibrated
+  // capability or an independently identifiable producer/verifier pair.
+  if (/^(?:auto|free|kilo-auto(?:\/free)?|openrouter\/(?:auto|free))$/i.test(metadata.id)) return false;
   if (metadata.billingRisk || metadata.status === "PAID_ONLY" || metadata.status === "BILLING_REQUIRED") return false;
   if (metadata.status === "MODEL_UNAVAILABLE" || metadata.status === "UNSUPPORTED") return false;
   if (metadata.role === "classification-only") return workload === "classification";

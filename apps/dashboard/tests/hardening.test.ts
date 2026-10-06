@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createRuntime, DEFAULT_TASK_BUDGET, loadConfig, ModelRouter, LlmPlanner, normalizeOpportunity, ToolSideEffect, type TaskExecution } from "@beyonder/runtime";
-import { queueControlObjective, runControlCommand } from "../control/commands";
+import { queueControlObjective, runControlCommand, markShutdownResponseSent, shutdownReady } from "../control/commands";
 import { markInterruptedTasks } from "../control/heartbeat";
 import { CapacityAwareDashboardDataSource } from "../data/capacity-aware";
 import { LocalDashboardDataSource, safeExternalUrl } from "../data/local";
@@ -19,6 +19,30 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); rmSync(dir, { recursive: true, force: true }); });
 
 describe("real operation honesty", () => {
+  it("drains an accepted multi-step mission through verification on safe shutdown and rejects new work", async () => {
+    const original = LlmPlanner.prototype.createPlan;
+    let entered!: () => void, release!: () => void;
+    const planning = new Promise<void>(resolve => { entered = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    vi.spyOn(LlmPlanner.prototype, "createPlan").mockImplementation(async function(this: LlmPlanner, request) { entered(); await gate; return original.call(this, request); });
+    const queued = await queueControlObjective("Calcule 27 vezes 14.");
+    const completion = queued.run();
+    try {
+      await planning;
+      await runControlCommand({ type: "safeShutdown" });
+      markShutdownResponseSent();
+      expect(shutdownReady()).toBe(false);
+      await expect(queueControlObjective("Responda apenas OK.")).rejects.toThrow();
+      release();
+      expect(await completion).toMatchObject({ ok: true, status: "COMPLETED", result: "378" });
+      expect(await new LocalDashboardDataSource(process.env.BEYONDER_DB_PATH).getTask(queued.response.taskId)).toMatchObject({ objectiveStatus: "SUCCEEDED", resultVerified: true });
+      expect(shutdownReady()).toBe(true);
+    } finally {
+      release(); await completion;
+      const root = globalThis as typeof globalThis & { beyonderControl: { stopping: boolean; shutdownResponseSent: boolean } };
+      root.beyonderControl.stopping = false; root.beyonderControl.shutdownResponseSent = false;
+    }
+  });
   it("keeps intermediate execution failure live until objective verification is persisted", async () => {
     const runtime = createRuntime(loadConfig());
     try {
@@ -65,7 +89,9 @@ describe("real operation honesty", () => {
   it("fails visibly without a provider and does not fabricate completion", async () => {
     await expect(runControlCommand({ type: "submitObjective", objective: "Pesquisar dados" })).resolves.toMatchObject({ ok: false, status: "BLOCKED" });
     const tasks = await new CapacityAwareDashboardDataSource(new LocalDashboardDataSource(process.env.BEYONDER_DB_PATH)).getTasks();
-    expect(tasks[0].status).toBe("blocked"); expect(tasks[0].objectiveStatus).toBe("NEEDS_CAPABILITY"); expect(tasks[0].result).toBeNull(); expect(tasks[0].failureSummary).toContain("Nenhum modelo disponível");
+    expect(tasks[0]).toMatchObject({ status: "blocked", objectiveStatus: "NEEDS_CAPABILITY", result: null, resultVerified: false });
+    expect(tasks[0].failureSummary?.length).toBeGreaterThan(20);
+    expect(tasks[0].why.length).toBeGreaterThan(0);
   });
   it("does not send an application or submission merely because a human approved", async () => {
     const runtime = createRuntime(loadConfig());

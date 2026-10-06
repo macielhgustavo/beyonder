@@ -1,18 +1,70 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import Database from "better-sqlite3";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { EmptyDashboardDataSource } from "../data/empty";
-import { LocalDashboardDataSource } from "../data/local";
+import { LocalDashboardDataSource, resolveBenchmarkDbPath } from "../data/local";
 
 let dir: string | undefined;
 afterEach(() => {
+  vi.unstubAllEnvs();
   if (dir) rmSync(dir, { recursive: true, force: true });
   dir = undefined;
 });
 
 describe("Control Center data source", () => {
+  it("aggregates all durable missions beyond the display page without deriving historical evidence or double-counting checkpoints", async () => {
+    dir = mkdtempSync(path.join(tmpdir(), "beyonder-mission-aggregates-"));
+    const dbPath = path.join(dir, "runtime.sqlite"), db = new Database(dbPath), today = new Date().toISOString();
+    db.exec("CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL)");
+    const ids: string[] = [];
+    for (let i = 0; i < 230; i++) {
+      const id = `exec_${i}`; ids.push(id);
+      const execution = { id, task: { id: `task_${i}` }, state: "COMPLETED", objectiveStatus: "SUCCEEDED", startedAt: today, completedAt: today, usage: { shadowCostUsd: 0.01 }, plan: { steps: [] } };
+      insertState(db, `control-center:task:${id}`, execution);
+      if (i > 200) insertState(db, `task-checkpoint:task_${i}`, { version: 1, execution });
+    }
+    insertState(db, "control-center:tasks:index", ids);
+    db.close();
+    const source = new LocalDashboardDataSource(dbPath, path.join(dir, "absent-providers.json"));
+    const projection = vi.spyOn(source, "getTasks").mockRejectedValue(new Error("Accounting must not render historical browser evidence"));
+    expect((await source.getEconomySummary()).shadowCostUsd).toBeCloseTo(2.3);
+    projection.mockRestore();
+    expect((await source.getHome()).today.completedTasks).toBe(230);
+    expect(await source.getTasks({ offset: 225, limit: 20 })).toHaveLength(5);
+  });
+  it("keeps inference health unknown when only a public model catalog was validated", async () => {
+    dir = mkdtempSync(path.join(tmpdir(), "beyonder-catalog-only-"));
+    const providerPath = path.join(dir, "providers.json"), now = new Date().toISOString();
+    writeFileSync(providerPath, JSON.stringify({ version: 1, updatedAt: now, providers: { "kilo-gateway": { providerId: "kilo-gateway", state: "READY", classification: "KEYLESS", attempts: 1, lastUpdatedAt: now, validation: { status: "validated", models: ["stepfun/step-3.7-flash:free"] } } } }));
+    const provider = (await new LocalDashboardDataSource(path.join(dir, "absent.sqlite"), providerPath).getProviders()).find(provider => provider.id === "kilo-gateway");
+    expect(provider).toMatchObject({ configured: true, verified: false, health: null, runway: { state: "UNKNOWN" } });
+  });
+  it("uses the installation BIB from both dashboard and CLI working directories", () => {
+    vi.stubEnv("BEYONDER_REPO_ROOT", "/installation/beyonder");
+    vi.stubEnv("BEYONDER_BENCHMARK_DB_PATH", "./data/observed.sqlite");
+    expect(resolveBenchmarkDbPath()).toBe("/installation/beyonder/data/observed.sqlite");
+    vi.stubEnv("BEYONDER_BENCHMARK_DB_PATH", "/evidence/observed.sqlite");
+    expect(resolveBenchmarkDbPath()).toBe("/evidence/observed.sqlite");
+  });
+
+  it("retrieves a persisted mission beyond the first 200 without projecting history or a stale queued identity", async () => {
+    dir = mkdtempSync(path.join(tmpdir(), "beyonder-mission-history-"));
+    const dbPath = path.join(dir, "runtime.sqlite"), db = new Database(dbPath);
+    db.exec("CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL)");
+    const ids = [];
+    for (let i = 0; i < 215; i++) {
+      const id = `exec_${i}`; ids.push(id);
+      insertState(db, `control-center:task:${id}`, { id, task: { id: `task_${i}` }, state: "COMPLETED", objectiveStatus: "SUCCEEDED", result: `answer ${i}`, startedAt: new Date(1000 + i).toISOString(), completedAt: new Date(2000 + i).toISOString(), usage: {}, plan: { steps: [] } });
+    }
+    insertState(db, "control-center:tasks:index", ids);
+    db.prepare("INSERT INTO state VALUES (?, ?, ?)").run("control-center:task:task_0", JSON.stringify({ id: "task_0", task: { id: "task_0" }, state: "PLANNING", startedAt: new Date(1000).toISOString() }), "2000-01-01T00:00:00Z");
+    db.close();
+    const source = new LocalDashboardDataSource(dbPath);
+    expect((await source.getTasks({ limit: 1 }))[0].taskId).toBe("task_214");
+    expect(await source.getTask("task_0")).toMatchObject({ taskId: "task_0", result: "answer 0", resultVerified: true, objectiveStatus: "SUCCEEDED" });
+  });
   it("renders useful empty state without runtime data", async () => {
     const source = new EmptyDashboardDataSource();
     const home = await source.getHome();

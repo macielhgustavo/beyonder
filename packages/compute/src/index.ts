@@ -1,4 +1,5 @@
 export { providers, getProvider } from "./catalog.js";
+export { providerFetch } from "./http.js";
 export { CredentialBroker } from "./broker.js";
 export { Vault } from "./vault.js";
 export { getStatuses, getProviderStatus } from "./status.js";

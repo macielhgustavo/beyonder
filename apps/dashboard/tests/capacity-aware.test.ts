@@ -58,6 +58,15 @@ function decision(): ModelDecisionView {
 }
 
 describe("capacity-aware Control Center", () => {
+  it("answers supervisor health from current missions without rendering Home and historical evidence", async () => {
+    const inner: DashboardDataSource = new MockDashboardDataSource();
+    const expected = await inner.getRuntimeStatus();
+    inner.getRuntimeStatus = async () => expected;
+    inner.getHome = async () => { throw new Error("Health must not render Home"); };
+    inner.getTasks = async () => [task({ status: "running", objectiveStatus: undefined })];
+    inner.getAuditEvents = async () => [];
+    expect(await new CapacityAwareDashboardDataSource(inner).getRuntimeStatus()).toEqual(expected);
+  });
   it.each(["PAUSED", "OFFLINE", "DEGRADED"] as const)("preserves runtime %s even when a past mission needs capability", async (mode) => {
     const inner: DashboardDataSource = new MockDashboardDataSource();
     const home = await inner.getHome();
@@ -69,6 +78,16 @@ describe("capacity-aware Control Center", () => {
     const source = new CapacityAwareDashboardDataSource(inner);
     expect((await source.getHome()).status).toEqual(status);
     expect(await source.getRuntimeStatus()).toEqual(status);
+  });
+  it.each(["running", "queued", "succeeded"] as const)("does not let past capacity blocks mislabel current %s", async state => {
+    const inner: DashboardDataSource = new MockDashboardDataSource(); const home = await inner.getHome();
+    const old = task(); const current = task({id: "new", taskId: "new", status: state, objectiveStatus: state === "succeeded" ? "SUCCEEDED" : undefined, resultVerified: state === "succeeded"});
+    const status = {...home.status, global: "READY" as const, heartbeat: "ONLINE" as const};
+    inner.getHome = async () => ({...home, status, activeTask: state === "succeeded" ? null : current, recentMissions: [current, old]});
+    inner.getRuntimeStatus = async () => status; inner.getTasks = async () => [current, old]; inner.getAuditEvents = async () => [audit("router.needs_capability", {taskId: old.taskId})];
+    const source = new CapacityAwareDashboardDataSource(inner);
+    expect((await source.getHome()).status).toEqual(status); expect(await source.getRuntimeStatus()).toEqual(status);
+    expect((await source.getTasks())[1]?.objectiveStatus).toBe("NEEDS_CAPABILITY");
   });
   it("does not turn an in-flight route rejection into a terminal mission or hide a recovered verified result", () => {
     const events = [audit("router.needs_capability", { taskId: "task-1" })];

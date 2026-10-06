@@ -1,8 +1,11 @@
-import type { IntelligenceTaskType, ModelCapabilityEvidence, ModelCapabilityRequest, ModelCapabilitySource } from "@beyonder/runtime";
+import type { IntelligenceTaskType, ModelCapabilityEvidence, ModelCapabilityRequest, ModelCapabilitySource, CapabilityDimension } from "@beyonder/runtime";
 import { BenchmarkStore } from "../persistence/store.js";
 import type { BenchmarkCategory, BenchmarkSummary } from "../types.js";
 
 const TASK_TO_BENCHMARK_CATEGORY: Partial<Record<IntelligenceTaskType, BenchmarkCategory>> = {
+  chat: "synthesis",
+  research: "research",
+  browser: "research",
   reasoning: "reasoning",
   coding: "coding",
   planning: "planning",
@@ -11,6 +14,8 @@ const TASK_TO_BENCHMARK_CATEGORY: Partial<Record<IntelligenceTaskType, Benchmark
   compression: "compression",
   classification: "structured-output"
 };
+
+const DIMENSION_CATEGORIES: Record<CapabilityDimension, BenchmarkCategory> = { reasoning: "reasoning", planning: "planning", coding: "coding", research: "research", synthesis: "synthesis", toolUse: "tool-use", structuredOutput: "structured-output", verification: "verification", freshnessEvidence: "evidence-grounding" };
 
 export class BibModelCapabilitySource implements ModelCapabilitySource {
   private readonly summaries: BenchmarkSummary[];
@@ -25,20 +30,43 @@ export class BibModelCapabilitySource implements ModelCapabilitySource {
 
   async getCapability(input: ModelCapabilityRequest): Promise<ModelCapabilityEvidence | null> {
     const category = TASK_TO_BENCHMARK_CATEGORY[input.taskType];
-    if (!category) return null;
-    const summary = this.summaries.find(
-      (entry) => entry.provider === input.provider && entry.model === input.model && entry.category === category
-    );
+    const all = this.summaries.filter(entry => entry.provider === input.provider && entry.model === input.model && (!input.inferenceProfile || entry.inferenceProfile === input.inferenceProfile));
+    const matching = all.filter(entry => entry.avgQuality != null && entry.evaluatedSamples > 0);
+    const dimensions: NonNullable<ModelCapabilityEvidence["dimensions"]> = {};
+    for (const [dimension, category] of Object.entries(DIMENSION_CATEGORIES) as Array<[CapabilityDimension, BenchmarkCategory]>) {
+      const observed = matching.find(entry => entry.category === category);
+      if (observed && observed.evaluatedSamples >= 2 && (observed.distinctEvaluatedCases ?? 0) >= 2) dimensions[dimension] = { score: observed.avgQuality!, samples: observed.evaluatedSamples, updatedAt: observed.lastTestedAt.toISOString() };
+    }
+    const summary = matching.find(entry => entry.category === category);
     if (!summary || summary.avgQuality == null || summary.evaluatedSamples === 0) return null;
+    const required = (input.dimensions ?? []).flatMap(dimension => dimensions[dimension] ? [dimensions[dimension]!] : []);
     return {
-      score: summary.avgQuality,
+      score: Math.min(summary.avgQuality, ...required.map(entry => entry.score)),
       samples: summary.evaluatedSamples,
       source: "BIB",
-      updatedAt: summary.lastTestedAt.toISOString()
+      updatedAt: summary.lastTestedAt.toISOString(),
+      latencyMs: summary.medianLatency ?? undefined,
+      inferenceProfile: summary.inferenceProfile,
+      structuredOutputMode: dimensions.structuredOutput ? matching.find(entry => entry.category === "structured-output")?.structuredOutputMode : undefined,
+      operational: { samples: all.reduce((total, entry) => total + entry.evaluatedSamples + entry.operationalFailures, 0), failures: all.reduce((total, entry) => total + entry.operationalFailures, 0), lastSuccessfulRequestAt: matching.length ? new Date(Math.max(...matching.map(entry => entry.lastEvaluatedAt!.getTime()))).toISOString() : undefined },
+      dimensions
     };
   }
 
   async getCapabilityScore(input: ModelCapabilityRequest): Promise<number | null> {
     return (await this.getCapability(input))?.score ?? null;
+  }
+
+  async getLastSuccessfulRequest(provider: string): Promise<{ model: string; observedAt: string } | null> {
+    const latest = this.summaries.filter(entry => entry.provider === provider && entry.lastEvaluatedAt && entry.avgCost === 0)
+      .sort((a, b) => b.lastEvaluatedAt!.getTime() - a.lastEvaluatedAt!.getTime())[0];
+    return latest ? { model: latest.model, observedAt: latest.lastEvaluatedAt!.toISOString() } : null;
+  }
+
+  async getOperationalEvidence(input: Pick<ModelCapabilityRequest, "provider" | "model" | "inferenceProfile">): Promise<NonNullable<ModelCapabilityEvidence["operational"]> | null> {
+    const all = this.summaries.filter(entry => entry.provider === input.provider && entry.model === input.model && (!input.inferenceProfile || entry.inferenceProfile === input.inferenceProfile));
+    if (!all.length) return null;
+    const successful = all.filter(entry => entry.lastEvaluatedAt);
+    return { samples: all.reduce((sum, entry) => sum + entry.evaluatedSamples + entry.operationalFailures, 0), failures: all.reduce((sum, entry) => sum + entry.operationalFailures, 0), lastSuccessfulRequestAt: successful.length ? new Date(Math.max(...successful.map(entry => entry.lastEvaluatedAt!.getTime()))).toISOString() : undefined };
   }
 }

@@ -87,6 +87,10 @@ export type ModelOperationalStatus =
   | "UNKNOWN";
 
 export interface ModelCatalogEntry {
+  contextWindow?: number;
+  toolCalling?: "yes" | "no" | "unknown";
+  reasoningControl?: boolean;
+  costEvidence?: { source: "live-catalog"; observedAt: string };
   role?: "instruct" | "guard" | "embedding" | "reranker" | "classification-only" | "vision-only" | "speech-only" | "unknown";
   structuredOutput?: "native" | "prompted" | "unsupported" | "unknown";
   costClass?: "FREE_CONFIRMED" | "FREE_TIER_ELIGIBLE" | "UNKNOWN_COST" | "PAID";
@@ -181,6 +185,7 @@ export interface AutopilotProviderProgress {
     latencyMs?: number;
     modelCount?: number;
     models?: string[];
+    modelMetadata?: ModelCatalogEntry[];
     rateLimitHeaders?: Record<string, string>;
   };
   freeLlmApi?: {

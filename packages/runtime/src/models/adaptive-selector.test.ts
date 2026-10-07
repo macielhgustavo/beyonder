@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
@@ -341,3 +341,13 @@ function performance(
     avgAttempts: samples === 0 ? 0 : 1
   };
 }
+
+
+it("keeps capability history while excluding currently inaccessible credentials",async()=>{
+ const path=await providerStatePathFor({groq:["llama-3.3-70b-versatile"]});
+ const before=await readFile(path,'utf8');
+ const selector=new AdaptiveModelSelector(path,{quotaSource:new FixedQuotaSource(),credentialAccess:async()=>({identity:'credential://provider/groq',provider:'groq',expected:true,configured:true,present:true,accessible:false,valid:'UNKNOWN',source:'BEYONDER_VAULT',scope:['inference'],status:'VAULT_LOCKED',lastValidated:null})});
+ const route=await selector.route(task({type:'chat',complexity:0.1,requirements:{directResponse:true}}),'normal');
+ expect(route.selected).toBeUndefined();expect(route.capacityStatus).toBe('NEEDS_CAPABILITY');expect(route.rejectedCandidates?.some(c=>c.reasons.some(r=>r.includes('VAULT_LOCKED')&&r.includes('history retained')))).toBe(true);
+ expect(await readFile(path,'utf8')).toBe(before);
+});

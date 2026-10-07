@@ -1,7 +1,7 @@
 import type { AppConfig } from "../config/env.js";
 import type { IntelligenceTask, TaskOutcome } from "../intelligence/contracts.js";
 import type { EconomicState, ModelMessage, ModelResponse } from "../types.js";
-import { getProvider, providerFetch as fetch } from "@beyonder/compute";
+import { getProvider, CredentialBroker, providerFetch as fetch } from "@beyonder/compute";
 import { redactSecrets } from "@beyonder/tools";
 import { AdaptiveModelSelector, type AdaptiveSelectorOptions } from "./adaptive-selector.js";
 import type { ModelCandidate, RouteDecision, RouterTelemetry } from "./adaptive-types.js";
@@ -11,12 +11,14 @@ import type { StateStore } from "../memory/state-store.js";
 import { OperationalHealthStore } from "./operational-health.js";
 
 export interface ModelRouterOptions extends AdaptiveSelectorOptions {
+  credentials?: CredentialBroker;
   state?: StateStore;
   performanceRepository?: PerformanceRepository;
   telemetry?: RouterTelemetry;
 }
 
 export class ModelRouter {
+  private readonly credentials: CredentialBroker;
   private readonly selector: AdaptiveModelSelector;
   private readonly performance: PerformanceRepository;
   readonly operationalHealth: OperationalHealthStore;
@@ -25,9 +27,10 @@ export class ModelRouter {
     private readonly config: AppConfig["model"],
     private readonly options: ModelRouterOptions = {}
   ) {
+    this.credentials = options.credentials ?? new CredentialBroker({}, { ...process.env, ...(config.openAiCompatApiKey ? { OPENAI_COMPAT_API_KEY: config.openAiCompatApiKey } : {}) }, { providerStatePath: config.providerStatePath });
     this.performance = options.performanceRepository ?? new EmptyPerformanceRepository();
     this.operationalHealth = new OperationalHealthStore(options.state);
-    this.selector = new AdaptiveModelSelector(config.providerStatePath, { ...options, operationalHealth: (provider, model) => this.operationalHealth.get(provider, model), canAttempt: (candidate) => this.canAttempt(candidate), ollamaBaseUrl: config.ollamaBaseUrl, performanceRepository: this.performance });
+    this.selector = new AdaptiveModelSelector(config.providerStatePath, { ...options, credentialAccess: async provider => getProvider(provider) ? (await this.credentials.resolve(provider)).descriptor : undefined, operationalHealth: (provider, model) => this.operationalHealth.get(provider, model), canAttempt: (candidate) => this.canAttempt(candidate), ollamaBaseUrl: config.ollamaBaseUrl, performanceRepository: this.performance });
   }
 
   async recordAttempt(attempt: InferenceAttempt): Promise<void> {
@@ -45,6 +48,7 @@ export class ModelRouter {
   }
 
   async canAttempt(candidate: Pick<ModelCandidate, "provider" | "model">): Promise<boolean> {
+    if (getProvider(candidate.provider)) { const credential = (await this.credentials.resolve(candidate.provider)).descriptor; if (!credential.accessible || credential.valid === false) return false; }
     const repaired = await this.operationalHealth.reclassifyLegacyProviderCooldown(candidate.provider);
     if (repaired) await this.options.telemetry?.record("info", "router.cooldown_scope_repaired", { provider: candidate.provider, ...repaired, evidenceSource: "persisted-original-provider-response" });
     const deadline = await this.operationalHealth.reclassifyLegacyModelDeadline(candidate.provider, candidate.model);
@@ -164,26 +168,28 @@ export class ModelRouter {
   }
 
   private async completeWithOpenAiCompatible(messages: ModelMessage[]): Promise<ModelResponse> {
-    if (!this.config.openAiCompatBaseUrl || !this.config.openAiCompatApiKey) {
+    const credential = (await this.credentials.resolve("openai-compatible")).require();
+    if (!this.config.openAiCompatBaseUrl) {
       throw new Error("OpenAI-compatible provider requires base URL and API key.");
     }
     const response = await fetch(`${this.config.openAiCompatBaseUrl.replace(/\/$/, "")}/chat/completions`, {
       method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${this.config.openAiCompatApiKey}` },
+      headers: { "content-type": "application/json", authorization: `Bearer ${credential.apiKey()}` },
       body: JSON.stringify({ model: this.config.name, messages })
-    });
-    if (!response.ok) throw new Error(`OpenAI-compatible request failed: ${response.status} ${await response.text()}`);
+    }).catch(() => { throw new Error("OpenAI-compatible network request failed."); });
+    if (!response.ok) throw new Error(`OpenAI-compatible request failed: HTTP ${response.status}`);
     const json = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
-    return { content: json.choices?.[0]?.message?.content ?? "", provider: "openai-compatible", model: this.config.name, estimatedCostUsd: 0, raw: json };
+    return { content: credential.redact(json.choices?.[0]?.message?.content ?? ""), provider: "openai-compatible", model: this.config.name, estimatedCostUsd: 0 };
   }
 
   private async completeAutoCandidate(messages: ModelMessage[], candidate: ModelCandidate, signal?: AbortSignal, structured = false): Promise<ModelResponse> {
     if (candidate.provider === "ollama") return this.completeWithOllama(messages, candidate.model, signal);
     const provider = getProvider(candidate.provider);
     if (!provider?.openAiCompatibleEndpoint) throw new Error(`Provider ${candidate.provider} has no compatible completion endpoint.`);
-    const apiKey = provider.credentialEnvVars.filter((name) => !name.endsWith("ACCOUNT_ID")).map((name) => process.env[name]).find((value) => Boolean(value));
-    if (provider.authType !== "keyless" && !apiKey) throw new InferenceError(`Provider ${candidate.provider} credential is unavailable.`, "AUTH_REQUIRED");
-    const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+    const credential = await this.credentials.resolve(provider.id);
+    if (!credential.descriptor.accessible || credential.descriptor.valid === false) throw new InferenceError(credential.descriptor.status, 'AUTH_REQUIRED');
+    const apiKey = credential.apiKey();
+    const accountId = credential.get('CLOUDFLARE_ACCOUNT_ID');
     if (provider.openAiCompatibleEndpoint.includes("{account_id}") && !accountId) throw new InferenceError("Provider account configuration is unavailable.", "AUTH_REQUIRED");
     const endpoint = provider.openAiCompatibleEndpoint.replace("{account_id}", encodeURIComponent(accountId ?? ""));
     const controller = new AbortController();
@@ -216,13 +222,16 @@ export class ModelRouter {
       if (!completion?.message || typeof completion.message.content !== "string" || !completion.message.content.trim()) throw new InferenceError("Provider returned an empty or invalid completion envelope.", "INVALID_OUTPUT", response.status, diagnostic());
       if (json.choices?.[0]?.message?.tool_calls?.length || json.choices?.[0]?.message?.function_call) throw new InferenceError("Model returned unsolicited native tool calls while tools are disabled; no tool was executed.", "INVALID_OUTPUT");
       return {
-        content: json.choices?.[0]?.message?.content ?? "",
+        content: credential.redact(json.choices?.[0]?.message?.content ?? ""),
         provider: candidate.provider,
         model: candidate.model,
         estimatedCostUsd: json.usage?.cost === undefined ? 0 : Number(json.usage.cost),
         attribution: { requestedModel: candidate.model, reportedModel: json.model, upstreamProvider: json.provider ?? json.choices?.[0]?.message?.provider_metadata?.gateway?.routing?.resolvedProvider, upstreamAttemptCount: json.choices?.[0]?.message?.provider_metadata?.gateway?.routing?.totalProviderAttemptCount },
         raw: { usage: json.usage }
       };
+    } catch (error) {
+      if (error instanceof InferenceError) throw new InferenceError(credential.redact(error.message), error.failureClass, error.httpStatus, error.responseBody ? credential.redact(error.responseBody) : undefined, error.retryAfterAt, error.failureScope, error.upstreamHttpStatus);
+      throw new InferenceError('Provider request failed (network, timeout or malformed response).', signal?.aborted || controller.signal.aborted ? 'TIMEOUT' : 'NETWORK_ERROR');
     } finally {
       clearTimeout(timer);
     }

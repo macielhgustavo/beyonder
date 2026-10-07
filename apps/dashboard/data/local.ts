@@ -2,7 +2,7 @@ import type { WorkRun, SourceReliability, StepExecution } from "@beyonder/runtim
 import { browserEvidence, discoverOllama } from "@beyonder/runtime";
 import type { WorkRunView } from "./types";
 import Database from "better-sqlite3";
-import { AutopilotStateStore, buildComputeInventory, providers as catalogProviders } from "@beyonder/compute";
+import { CredentialBroker, AutopilotStateStore, buildComputeInventory, providers as catalogProviders } from "@beyonder/compute";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { emptyHealthChecks } from "./empty";
@@ -211,13 +211,16 @@ export class LocalDashboardDataSource implements DashboardDataSource {
     const db = this.isAvailable() ? this.open() : undefined;
     const healthById = new Map([...catalogProviders, { id: "ollama" }].map((provider) => [provider.id, db ? readState<{ samples?: number; failures?: number; latencyMs?: number; lastSuccessAt?: string; lastFailureAt?: string; cooldown?: { reason: string; until: string } }>(db, `provider-health:${provider.id}`, {}) : {}]));
     db?.close();
+    const broker = new CredentialBroker({}, process.env, { providerStatePath: this.providerStatePath });
+    const credentials = new Map(await Promise.all(catalogProviders.map(async provider => [provider.id, (await broker.resolve(provider.id)).descriptor] as const)));
     const views: ProviderView[] = catalogProviders.map((provider) => {
       const item = byId.get(provider.id);
       const observed = healthById.get(provider.id)!;
       const cooldown = observed.cooldown && Date.parse(observed.cooldown.until) > Date.now() ? observed.cooldown : undefined;
-      const configured = provider.authType === "keyless" || (provider.credentialEnvVars.some((name) => !name.endsWith("ACCOUNT_ID") && Boolean(process.env[name])) && (!provider.credentialEnvVars.includes("CLOUDFLARE_ACCOUNT_ID") || Boolean(process.env.CLOUDFLARE_ACCOUNT_ID)));
+      const credential = credentials.get(provider.id)!;
+      const configured = provider.authType === 'keyless' ? true : credential.configured;
       const catalogStatus = providerStatus(item?.status);
-      const status: ProviderView["status"] = cooldown ? /RATE|QUOTA/.test(cooldown.reason) ? "RATE_LIMITED" : "UNHEALTHY" : !configured && catalogStatus === "READY" ? "HUMAN_GATE" : catalogStatus;
+      const status: ProviderView["status"] = cooldown ? /RATE|QUOTA/.test(cooldown.reason) ? "RATE_LIMITED" : "UNHEALTHY" : (!credential.accessible || credential.valid === false) && catalogStatus === "READY" ? "HUMAN_GATE" : catalogStatus;
       // A responding model catalog proves discovery, not usable inference.
       const verified = Boolean(observed.samples && (observed.failures ?? 0) < observed.samples);
       return {
@@ -229,10 +232,11 @@ export class LocalDashboardDataSource implements DashboardDataSource {
         latencyMs: typeof observed.latencyMs === "number" ? observed.latencyMs : null,
         health: observed.samples ? Math.max(0, 1 - (observed.failures ?? 0) / observed.samples) : null,
         configured,
+        credential,
         verified,
         setupEnvVar: provider.credentialEnvVars[0],
         lastCheckAt: observed.lastFailureAt && (!observed.lastSuccessAt || observed.lastFailureAt > observed.lastSuccessAt) ? observed.lastFailureAt : observed.lastSuccessAt ?? item?.lastCheckedAt ?? null,
-        note: cooldown ? `Temporariamente indisponível (${cooldown.reason}) até ${cooldown.until}.` : !configured && catalogStatus === "READY" ? "Credencial não está disponível neste processo; configure/desbloqueie antes de usar." : !verified && (status === "READY" || status === "KEYLESS") ? "Configuração conhecida; inferência ainda não verificada. Quota desconhecida." : humanProviderNote(status),
+        note: cooldown ? `Temporariamente indisponível (${cooldown.reason}) até ${cooldown.until}.` : (!credential.accessible || credential.valid === false) && catalogStatus === "READY" ? `Credencial ${credential.status}; origem ${credential.source}. Histórico preservado.` : !verified && (status === "READY" || status === "KEYLESS") ? "Configuração conhecida; inferência ainda não verificada. Quota desconhecida." : humanProviderNote(status),
         provenance: this.provenance
       };
     });

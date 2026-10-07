@@ -160,3 +160,56 @@ Preservação solicitada — 2026-10-07T10:51:03.332273+00:00
 - Evidência negativa portátil: checkpoint-evidence/v05-verifier-safety-evidence.json contém as18 adjudicações reais que sustentam o gate e o registro do reset doInkling. Não contém credenciais ou banco binário. O arquivo é evidência documental: não auto-importa observações nem ativa fixtures em produção.
 - Evidências completas e bases continuam em /workspace/beyonder-p1-evidence. Caminhos relativos de evidência nas seções acima referem-se a esse diretório; estes artefatos completos não estão incluídos noGit.
 - Este commit é um CHECKPOINT NÃO QUALIFICADO. O corpo da mensagem contém[skip ci] para evitar iniciar workflows automáticos durante a preservação solicitada. Sem merge. Parar depois do push.
+
+## P1-C portable credentials — 2026-10-07
+
+START_HEAD / CURRENT_HEAD anterior a este novo commit:
+a12309d1469ca84a2969e943e01097238ba03039.
+Branch permanece feat/v05-final-integration; sem merge/nova branch/v0.6.
+
+Implementado resolver central credential://provider/id com prioridade explícita
+session → vault AES-256-GCM existente → adapters de backend/keyring → env.
+Adaptação de vault/redaction/broker duplicados do compute, consumidores de
+inferência/validação/CLI/Resources/NVIDIA smoke, compatibilidade benchmark e
+endpoint explícito. Scopes, erros tipados, metadata segura e import opt-in do env
+verificado sem apagar/modificar .env. Master key nunca persistida. Resources só
+recebe metadata; keyless/credencial/provider/model/quota/capability independentes.
+Detalhes e comandos: docs/portable-credentials.md.
+
+Medição somente das fontes autorizadas existentes:29 providers,26 exigem
+credencial,0 credenciais acessíveis,0 reclassificados por histórico auth,0
+recuperados. Não há vault/manifest instalado aqui; histórico local disponível
+contém Kilo e OVH keyless. Isto NÃO comprova ausência de credenciais históricas
+na workstation. Não inventar configuração passada para Gemini/Groq/etc.
+Sem classificação material alterada, sem inference smoke live adicional e sem
+reinício de audit29/38. Custo monetário novo0.
+
+P1-A continua aberto: par gratuito adequado producer/verifier não recuperado.
+P1-B mantém findings/provas anteriores; não repetido audit de browser. Read
+transport qualificado anteriormente não implica golden research verificado.
+Inkling reset observado permanece2026-10-08T00:00:00Z; sem antecipar retry.
+18 adjudicações de false approvals e gate BIB do checkpoint preservados; não
+relaxar nem reabilitar juízes por alias/profile/médias. Controlled21/24 anterior
+não foi promovido a PASS.
+
+Próximos passos exatos:
+1. Se operador portar legitimamente vault+manifest, injetar master separadamente
+   e medir só providers cuja acessibilidade mudou; validar custo/risco antes de
+   qualquer inference live. Não pedir/token nem master no chat.
+2. Após reset real Inkling, contraprovas originais+2análogos e positivos coding,
+   planning/current research/multi-source; só depois subset representativo.
+3.38 somente com progresso material de producer E verifier seguro independente.
+   P1-C não remove shortage de compute nem problemas de produto anteriores.
+
+PRODUCT_CORE_READY=false
+LIVE_COMPUTE_READY=false
+BROWSER_RESEARCH_READY=false
+HUMAN_ACCEPTANCE_CANDIDATE=false
+V0_5_CANDIDATE_READY_FOR_GUSTAVO=false
+
+Validação P1-C local:resolver/redaction14 PASS;compute34 PASS;pnpm test completo709
+PASS;Control Center49 PASS;root e dashboard typecheck/build PASS;security smoke7
+PASS custo0. Registros externos p1c-*.log em /workspace/beyonder-p1-evidence.
+P1C_REPORT.md documenta A–L, causas, migração e medição0 recuperados.
+PORTABLE_CREDENTIAL_RESOLUTION_READY=true (arquitetura/regressões; não capacidade
+live nem produto qualificado). Sem CI_GREEN,sem38,semVisualQA neste P1-C.

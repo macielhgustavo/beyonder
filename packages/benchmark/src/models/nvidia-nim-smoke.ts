@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { getProvider, eligibleModelsForWorkload } from "@beyonder/compute";
+import { getProvider, CredentialBroker, eligibleModelsForWorkload } from "@beyonder/compute";
 
 export const NVIDIA_NIM_SMOKE_PROMPT = "Return exactly: BEYONDER_NVIDIA_OK";
 export const NVIDIA_NIM_SMOKE_EXPECTED = "BEYONDER_NVIDIA_OK";
@@ -242,9 +242,10 @@ function emptyFailure(failure: Omit<NvidiaNimSmokeAttempt, "model">): NvidiaNimS
 }
 
 async function main(): Promise<void> {
-  const apiKey = process.env.NVIDIA_NIM_API_KEY;
+  const credential = await new CredentialBroker().resolve('nvidia-nim');
+  const apiKey = credential.apiKey();
   if (!apiKey) {
-    console.error(JSON.stringify({ ok: false, errorCode: "MISSING_NVIDIA_NIM_API_KEY", monetaryCostUsd: 0 }));
+    console.error(JSON.stringify({ ok: false, errorCode: credential.descriptor.status, monetaryCostUsd: 0 }));
     process.exitCode = 2;
     return;
   }

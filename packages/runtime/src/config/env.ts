@@ -47,7 +47,7 @@ export function loadConfig(overrides: Partial<Record<string, string>> = {}) {
     ? parsed.BEYONDER_SIMULATED_CAPITAL_USD
     : parsed.BEYONDER_INITIAL_CAPITAL_USD;
 
-  return {
+  const config = {
     dbPath: parsed.BEYONDER_DB_PATH,
     agentName: parsed.BEYONDER_AGENT_NAME,
     startingCapitalUsd,
@@ -70,4 +70,6 @@ export function loadConfig(overrides: Partial<Record<string, string>> = {}) {
       openAiCompatApiKey: parsed.OPENAI_COMPAT_API_KEY
     }
   };
+  Object.defineProperty(config.model, "openAiCompatApiKey", { value: parsed.OPENAI_COMPAT_API_KEY, enumerable: false });
+  return config;
 }

@@ -23,7 +23,8 @@ export class Vault {
     try {
       await readFile(this.filePath, "utf8");
       return true;
-    } catch {
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new Error("Credential vault source is unavailable.");
       return false;
     }
   }
@@ -79,8 +80,8 @@ export class Vault {
       envVar,
       createdAt: data.__meta[key]?.createdAt ?? now,
       updatedAt: now,
-      lastValidatedAt: data.__meta[key]?.lastValidatedAt,
-      validationStatus: data.__meta[key]?.validationStatus
+      lastValidatedAt: undefined,
+      validationStatus: "not-run"
     };
     await this.write(password, data);
   }

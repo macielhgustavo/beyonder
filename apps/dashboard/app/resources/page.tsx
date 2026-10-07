@@ -36,8 +36,20 @@ export default async function ResourcesPage() {
             const tone = (provider.status === "READY" || provider.status === "KEYLESS") && provider.verified ? "good" : ["UNHEALTHY", "RATE_LIMITED", "DISABLED"].includes(provider.status) ? "bad" : provider.status === "UNKNOWN" ? "neutral" : "warn";
             return <article className="resource-row" key={provider.id}>
               <div className="resource-provider">
-                <div><strong>{provider.name}</strong><span>{provider.note ?? (provider.configured ? "Configured" : "Not configured")}</span></div>
+                <div><strong>{provider.name}</strong><span>{provider.note ?? (provider.configured === "UNKNOWN" ? "Configuration UNKNOWN" : provider.configured ? "Configured" : "Not configured")}</span></div>
                 <StatusBadge status={tone}>{provider.status}</StatusBadge>
+                {provider.credential && <details data-testid="credential-access">
+                  <summary>Credential access</summary>
+                  <dl>
+                    <dt>Configured</dt><dd>{String(provider.credential.configured)}</dd>
+                    <dt>Accessible here</dt><dd>{String(provider.credential.accessible)}</dd>
+                    <dt>Source</dt><dd>{provider.credential.source}</dd>
+                    <dt>Status</dt><dd>{provider.credential.status}</dd>
+                    <dt>Valid now</dt><dd>{String(provider.credential.valid)}</dd>
+                    <dt>Last validated</dt><dd>{provider.credential.lastValidated ?? "UNKNOWN"}</dd>
+                    <dt>Scope</dt><dd>{provider.credential.scope.join(", ")}</dd>
+                  </dl>
+                </details>}
               </div>
               <div data-label="Health"><strong>{provider.health == null ? "UNKNOWN" : formatPercent(provider.health)}</strong><span>{provider.verified ? "verified" : "not verified"}</span></div>
               <div data-label="Runway / quota"><strong className={provider.runway.state === "UNKNOWN" ? "unknown-value" : ""}>{provider.runway.state}</strong><span>{provider.runway.label}</span></div>

@@ -31,7 +31,7 @@ function targetsForEntry(entry: ComputeInventoryEntry, broker: CredentialBroker,
     })
     .filter(model => selection.reasoningMode !== "disabled" || entry.modelMetadata.find(row => row.id === model)?.reasoningControl)
     .slice(0, selection.models ? selection.models.length : 2)
-    .map((model) => ({
+    .map((model) => protectTarget({
       provider: entry.providerId,
       providerName: entry.providerName,
       model,
@@ -65,4 +65,10 @@ function rateLimitDelay(entry: ComputeInventoryEntry): number {
   if (entry.rpm === "unknown" || entry.rpm == null) return 750;
   if (entry.rpm <= 0) return 2_000;
   return Math.max(250, Math.ceil(60_000 / entry.rpm));
+}
+
+/** Keep server-only credential material out of JSON snapshots and telemetry. */
+function protectTarget(target: ModelTarget): ModelTarget {
+  for (const key of ["apiKey", "accountId"] as const) Object.defineProperty(target, key, { value: target[key], writable: false, enumerable: false });
+  return target;
 }

@@ -21,6 +21,7 @@ export interface AdaptiveSelectorOptions {
   /** Explicit experimental opt-in; normal product routing chooses the best fit. */
   allowExploration?: boolean;
   canAttempt?: (candidate: Pick<ModelCandidate, "provider" | "model">) => Promise<boolean>;
+  credentialAccess?: (provider: string) => Promise<import("@beyonder/credentials").CredentialDescriptor | undefined>;
   operationalHealth?: (provider: string, model: string) => Promise<{ samples: number; failures: number; latencyMs: number } | undefined>;
   ollamaBaseUrl?: string;
   performanceRepository?: PerformanceRepository;
@@ -99,6 +100,11 @@ export class AdaptiveModelSelector {
     }
 
     for (const pair of profiledPairs) {
+      const access = await this.options.credentialAccess?.(pair.entry.providerId);
+      if (access && (!access.accessible || access.valid === false)) {
+        const rejected: RejectedCandidate = { provider: pair.entry.providerId, model: pair.model, inferenceProfile: pair.inferenceProfile, computeTier: pair.entry.providerId === 'ollama' ? 'LOCAL_EMERGENCY' : 'OTHER_FREE_CLOUD', reasons: [`credential:${access.status}; configured=${access.configured}; source=${access.source}; capability history retained`] };
+        rejectedCandidates.push(rejected); await this.telemetry('debug', 'router.candidate_rejected', { taskId: task.id, ...rejected }); continue;
+      }
       const unsafeVerdicts = task.inferencePhase === "OBJECTIVE_VERIFICATION"
         ? await this.capabilitySource.getVerificationSafetyEvidence?.(pair.model) : undefined;
       if (unsafeVerdicts?.falseApprovals) {

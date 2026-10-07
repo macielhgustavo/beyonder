@@ -560,11 +560,7 @@ providers
   });
 
 async function credentialBroker(): Promise<CredentialBroker> {
-  const vault = new Vault();
-  if (!(await vault.exists())) return new CredentialBroker();
-  const password = process.env.PROVIDER_BOOTSTRAPPER_MASTER_PASSWORD;
-  if (!password) return new CredentialBroker();
-  return new CredentialBroker(await vault.read(password));
+  return new CredentialBroker().prepare();
 }
 
 function createBeyonderRuntime(config: ReturnType<typeof loadConfig>) {

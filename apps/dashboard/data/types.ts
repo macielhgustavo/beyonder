@@ -144,6 +144,7 @@ export interface ApprovalView {
 }
 
 export interface ProviderView {
+  credential?: import("@beyonder/compute").CredentialDescriptor;
   placement?: "CLOUD" | "LOCAL";
   id: string;
   name: string;
@@ -151,7 +152,7 @@ export interface ProviderView {
   runway: { state: "KNOWN" | "ESTIMATED" | "UNKNOWN"; label: string };
   latencyMs: number | null;
   health: number | null;
-  configured: boolean;
+  configured: boolean | "UNKNOWN";
   verified: boolean;
   setupEnvVar?: string;
   lastCheckAt: string | null;

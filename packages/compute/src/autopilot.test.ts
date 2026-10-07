@@ -46,3 +46,17 @@ test("priority providers are classified for autopilot", () => {
   assert.equal(byId.get("sambanova")?.classification, "RETIRED");
   assert.equal(byId.get("modelscope")?.classification, "MANUAL_REQUIRED");
 });
+
+test("inaccessible historical credential preserves observed catalog and capability metadata",async()=>{
+ const dir=await mkdtemp(join(tmpdir(),'credential-history-')); const path=join(dir,'state.json');const store=new AutopilotStateStore(path);
+ try {
+  const provider=providers.find(p=>p.id==='groq')!;
+  await store.update(provider,'READY',{validation:{status:'validated',models:['historical-qualified-model'],modelCount:1}});
+  const before=(await store.read()).providers.groq.validation;
+  const broker=new CredentialBroker({}, {}, {providerStatePath:path,manifestPath:join(dir,'manifest.json')});
+  const descriptor=(await broker.resolve('groq')).descriptor;
+  assert.equal(descriptor.configured,true);assert.equal(descriptor.accessible,false);assert.equal(descriptor.status,'CREDENTIAL_SOURCE_UNAVAILABLE');
+  await new ProviderAutopilotOrchestrator(broker,store).run({providerId:'groq',dryRun:true});
+  const after=(await store.read()).providers.groq;assert.deepEqual(after.validation,before);assert.equal(after.state,'HUMAN_GATE');
+ } finally {await rm(dir,{recursive:true,force:true});}
+});

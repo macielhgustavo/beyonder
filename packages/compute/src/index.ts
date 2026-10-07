@@ -22,3 +22,6 @@ export { NoopEmailVerificationBroker } from "./email-broker.js";
 export { FreeLlmApiIntegrator } from "./freellmapi.js";
 export { redact, fingerprint } from "./redaction.js";
 export type { ModelCapability, ModelCatalogEntry, ModelOperationalStatus, ProviderCatalogEntry, ProviderStatus, SecretRecord } from "./types.js";
+
+export { CredentialResolver, CredentialError, ResolvedCredential, injectSessionCredential, clearSessionCredential } from '@beyonder/credentials';
+export type { CredentialDescriptor, ResolverOptions, SecretBackend, CredentialScope } from '@beyonder/credentials';

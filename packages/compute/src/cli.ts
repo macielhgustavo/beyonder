@@ -6,7 +6,7 @@ import { getProvider, providers } from "./catalog.js";
 import { CredentialBroker } from "./broker.js";
 import { getStatuses } from "./status.js";
 import { validateProvider } from "./validation.js";
-import { Vault, type VaultData } from "./vault.js";
+import { Vault } from "./vault.js";
 import { ProviderAutopilotOrchestrator } from "./autopilot.js";
 import { AutopilotStateStore } from "./state-store.js";
 import { discoverProviders } from "./discovery.js";
@@ -15,16 +15,21 @@ import { redact } from "./redaction.js";
 
 async function main(): Promise<void> {
   const [command = "status", maybeProvider] = process.argv.slice(2);
-  const vault = new Vault();
-  const vaultData = await loadVaultIfConfigured(vault);
-  const broker = new CredentialBroker(vaultData);
+  const broker = await new CredentialBroker().prepare();
+  const vault = broker.vault;
 
   switch (command) {
     case "catalog":
       printCatalog();
       break;
     case "status":
-      await printStatuses(getStatuses(broker));
+      const statuses = getStatuses(broker);
+      for (const status of statuses) {
+        status.credential = await broker.describe(status.provider.id);
+        if (!status.credential.accessible) status.credentialStatus = status.credential.status === "VAULT_LOCKED" ? "vault-locked" : status.credential.configured === true || status.credential.configured === "UNKNOWN" ? "configured-unavailable" : "missing";
+        else if (status.credential.valid === false) status.credentialStatus = "invalid-credential";
+      }
+      await printStatuses(statuses);
       break;
     case "autopilot":
       await autopilot(maybeProvider, broker, { resumeOnly: false });
@@ -40,6 +45,19 @@ async function main(): Promise<void> {
       break;
     case "vault:set":
       await vaultSet(maybeProvider, vault);
+      break;
+    case "credentials:import-env":
+      if (!maybeProvider) throw new Error("Provider logical identity required.");
+      await broker.importEnvironment(maybeProvider, await getVaultPassword(true));
+      console.log("Imported and verified encrypted credential; environment unchanged.");
+      break;
+    case "credentials:remember-configured":
+      if (!maybeProvider) throw new Error("Provider logical identity required.");
+      await broker.rememberConfigured(maybeProvider, "LOCAL_ONLY");
+      console.log("Historical configuration recorded; accessibility and validity remain unproved.");
+      break;
+    case "credentials:status":
+      console.log(JSON.stringify(await Promise.all(providers.map(p => broker.describe(p.id))), null, 2));
       break;
     case "discover":
       await discover();
@@ -167,22 +185,12 @@ async function vaultSet(providerId: string | undefined, vault: Vault): Promise<v
   const password = await getVaultPassword(true);
   const value = await readSecret(`Enter ${envVar} for ${provider.id}: `);
   await vault.set(provider.id, envVar, value, password);
+  await new CredentialBroker().rememberConfigured(provider.id, "BEYONDER_VAULT");
   console.log(`Stored ${envVar} for ${provider.id} in encrypted local vault.`);
 }
 
-async function loadVaultIfConfigured(vault: Vault): Promise<VaultData> {
-  if (!(await vault.exists())) {
-    return {};
-  }
-  const password = process.env.PROVIDER_BOOTSTRAPPER_MASTER_PASSWORD;
-  if (!password) {
-    return {};
-  }
-  return vault.read(password);
-}
-
 async function getVaultPassword(required: boolean): Promise<string> {
-  const password = process.env.PROVIDER_BOOTSTRAPPER_MASTER_PASSWORD;
+  const password = process.env.BEYONDER_CREDENTIAL_MASTER_KEY ?? process.env.PROVIDER_BOOTSTRAPPER_MASTER_PASSWORD;
   if (password) {
     return password;
   }
@@ -261,6 +269,9 @@ Commands:
   pnpm providers:discover
   pnpm providers:inventory
   pnpm providers:vault:set <provider-id> [ENV_VAR]
+  tsx packages/compute/src/cli.ts credentials:import-env <provider-id>
+  tsx packages/compute/src/cli.ts credentials:status
+  tsx packages/compute/src/cli.ts credentials:remember-configured <provider-id>
 
 Set PROVIDER_BOOTSTRAPPER_MASTER_PASSWORD to read/write the encrypted local vault non-interactively.
 Set PROVIDER_BOOTSTRAPPER_OPEN_BROWSER=1 to let setup open provider pages.`);

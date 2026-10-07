@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createRuntime, loadConfig } from "@beyonder/runtime";
-import { AutopilotStateStore } from "@beyonder/compute";
+import { injectSessionCredential, clearSessionCredential, AutopilotStateStore } from "@beyonder/compute";
 import { LocalDashboardDataSource } from "../data/local";
 
 let dir: string | undefined;
@@ -12,7 +12,7 @@ async function setup() {
   dir = mkdtempSync(join(tmpdir(), "control-rc-"));
   const dbPath = join(dir, "runtime.sqlite"), providerPath = join(dir, "providers.json");
   const runtime = createRuntime(loadConfig({ BEYONDER_DB_PATH: dbPath, BEYONDER_MODEL_PROVIDER: "none" }));
-  await new AutopilotStateStore(providerPath).write({ version: 1, updatedAt: new Date().toISOString(), providers: { groq: { providerId: "groq", state: "READY", classification: "AUTO_WITH_HUMAN_GATE", attempts: 1, lastUpdatedAt: new Date().toISOString() } } });
+  await new AutopilotStateStore(providerPath).write({ version: 1, updatedAt: new Date().toISOString(), providers: { groq: { providerId: "groq", state: "READY", classification: "AUTO_WITH_HUMAN_GATE", attempts: 1, lastUpdatedAt: new Date().toISOString(), validation: { status: "validated", models: ["historical-model"] } } } });
   return { runtime, source: new LocalDashboardDataSource(dbPath, providerPath) };
 }
 describe("release candidate provider truth", () => {
@@ -54,13 +54,13 @@ describe("release candidate provider truth", () => {
       expect(JSON.stringify(provider)).not.toContain("fixture");
     } finally { runtime.sqlite.close(); }
   });
-  it("exposes missing process credentials after restart without reading raw vault data", async () => {
+  it("preserves historical configuration while reporting inaccessible credentials after restart", async () => {
     vi.stubEnv("GROQ_API_KEY", "");
     const { runtime, source } = await setup();
     try {
       const provider = (await source.getProviders()).find((p) => p.id === "groq")!;
-      expect(provider).toMatchObject({ configured: false, status: "HUMAN_GATE" });
-      expect(provider.note).toContain("Credencial não está disponível");
+      expect(provider).toMatchObject({ configured: true, status: "HUMAN_GATE", credential: { configured: true, accessible: false, source: "LOCAL_ONLY", valid: "UNKNOWN" } });
+      expect(provider.note).toContain("CREDENTIAL_SOURCE_UNAVAILABLE");
     } finally { runtime.sqlite.close(); }
   });
   it("shows actual failure metrics and active provider cooldown", async () => {
@@ -73,4 +73,10 @@ describe("release candidate provider truth", () => {
       expect(provider.note).toContain("QUOTA_EXHAUSTED");
     } finally { runtime.sqlite.close(); }
   });
+});
+
+it("provider API data exposes session metadata without credential or master key",async()=>{
+ const token='opaque-session-ui-material';injectSessionCredential('groq',{GROQ_API_KEY:token});const {runtime,source}=await setup();
+ try {const providers=await source.getProviders();const groq=providers.find(p=>p.id==='groq')!;expect(groq.credential).toMatchObject({source:'SESSION',configured:true,accessible:true,valid:'UNKNOWN'});expect(JSON.stringify(providers)).not.toContain(token);}
+ finally {clearSessionCredential('groq');runtime.sqlite.close();}
 });

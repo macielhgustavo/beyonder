@@ -1,4 +1,4 @@
-import { Vault, providers, CredentialBroker, validateProviderDetailed, AutopilotStateStore } from "@beyonder/compute";
+import { injectSessionCredential, providers, CredentialBroker, validateProviderDetailed, AutopilotStateStore } from "@beyonder/compute";
 import { BenchmarkStore, BibModelCapabilitySource } from "@beyonder/benchmark";
 import {
   createRuntime,
@@ -358,15 +358,17 @@ async function setSecret(command: Extract<ControlCommand, { type: "setSecret" }>
   if (!providers.find((provider) => provider.id === command.providerId)?.credentialEnvVars.includes(command.envVar)) throw new Error("Credencial incompatível com o provider.");
   if (!command.value.trim()) throw new Error("Secret value is required.");
   const repoRoot = process.env.BEYONDER_REPO_ROOT ?? resolve(process.cwd(), "../..");
-  const vault = new Vault(resolve(repoRoot, ".providers-vault/vault.json"));
+  const sourceEnv = { ...process.env, BEYONDER_REPO_ROOT: repoRoot };
+  const vault = new CredentialBroker({}, sourceEnv).vault;
   await vault.set(command.providerId, command.envVar, command.value, command.vaultPassword);
   const provider = providers.find((provider) => provider.id === command.providerId)!;
-  const broker = new CredentialBroker(await vault.read(command.vaultPassword), { ...process.env, [command.envVar]: command.value });
+  const broker = new CredentialBroker(await vault.read(command.vaultPassword), sourceEnv);
   const report = process.env.BEYONDER_CONTROL_FIXTURE === "1" ? null : await validateProviderDetailed(provider, broker);
   const validated = report?.status;
   await vault.markValidation(command.providerId, command.envVar, validated?.validationStatus ?? "skipped", command.vaultPassword);
   const ready = validated?.validationStatus === "validated";
-  if (ready) for (const record of broker.getProviderSecrets(provider.id)) process.env[record.envVar] = record.value;
+  await broker.rememberConfigured(provider.id, 'BEYONDER_VAULT');
+  if (ready) injectSessionCredential(provider.id, Object.fromEntries(broker.getProviderSecrets(provider.id).map(record => [record.envVar, record.value])));
   const stateStore = new AutopilotStateStore(loadControlConfig().model.providerStatePath);
   await stateStore.update(provider, ready ? "READY" : "HUMAN_GATE", { validation: { status: validated?.validationStatus ?? "skipped", models: report?.models, modelMetadata: report?.modelMetadata, modelCount: report?.modelCount, latencyMs: report?.latencyMs, rateLimitHeaders: report?.rateLimitHeaders, message: ready ? "Credencial validada." : "Credencial não validada. Verifique a chave e a conexão." } });
   const runtime = controlRuntime();

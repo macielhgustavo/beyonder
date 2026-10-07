@@ -21,25 +21,33 @@ export interface ProviderValidationReport {
 
 export async function validateProviderDetailed(provider: ProviderCatalogEntry, broker: CredentialBroker): Promise<ProviderValidationReport> {
   const started = Date.now();
-  const baseStatus = getProviderStatus(provider, broker);
+  const credential = await broker.resolve(provider.id);
+  const baseStatus = { ...getProviderStatus(provider, broker), credential: credential.descriptor };
+  if (credential.descriptor.accessible && provider.authType !== 'keyless') baseStatus.credentialStatus = credential.descriptor.source === 'ENV_COMPATIBILITY' ? 'present-env' : 'present-vault';
+  else if (!credential.descriptor.accessible) baseStatus.credentialStatus = credential.descriptor.status === 'VAULT_LOCKED' ? 'vault-locked' : credential.descriptor.configured === true || credential.descriptor.configured === 'UNKNOWN' ? 'configured-unavailable' : 'missing';
   const report = (status: ProviderStatus, models: string[] = [], rateLimitHeaders: Record<string, string> = {}): ProviderValidationReport => ({ status, models, modelCount: models.length, rateLimitHeaders, latencyMs: Date.now() - started });
   if (provider.validation?.method === "none" || (provider.authType === "keyless" && provider.validation?.method !== "keyless-models")) {
     return report({ ...baseStatus, validationStatus: "skipped", validationMessage: "No API key validation required." });
   }
-  if (baseStatus.credentialStatus === "missing") {
-    return report({ ...baseStatus, validationStatus: "skipped", validationMessage: "Missing credential." });
+  if (!credential.descriptor.accessible) {
+    return report({ ...baseStatus, validationStatus: "skipped", validationMessage: credential.descriptor.status });
   }
 
+  await broker.validationStarted(credential);
   try {
-    const response = await callValidationEndpoint(provider, broker);
+    const response = await callValidationEndpoint(provider, credential);
     if (response.ok) {
       const catalog = await extractModels(response, provider);
+      const serialized = JSON.stringify(catalog);
+      if (credential.redact(serialized) !== serialized) throw new Error("Unsafe provider catalog.");
+      if (provider.authType !== "keyless") await broker.markValidation(credential, true);
       return { ...report({ ...baseStatus, validationStatus: "validated", validationMessage: `HTTP ${response.status}` }, catalog.models, extractRateLimitHeaders(response.headers)), modelMetadata: catalog.metadata };
     }
+    if ([401, 403].includes(response.status)) { await broker.markValidation(credential, false, "PROVIDER_AUTH_FAILED"); baseStatus.credentialStatus = "invalid-credential"; }
     return report({
       ...baseStatus,
       validationStatus: "failed",
-      validationMessage: `HTTP ${response.status} ${response.statusText}`.trim()
+      validationMessage: `HTTP ${response.status}`
     }, [], extractRateLimitHeaders(response.headers));
   } catch (error) {
     // Network errors may contain URLs with query credentials. Never persist them.
@@ -47,26 +55,26 @@ export async function validateProviderDetailed(provider: ProviderCatalogEntry, b
   }
 }
 
-async function callValidationEndpoint(provider: ProviderCatalogEntry, broker: CredentialBroker): Promise<Response> {
+async function callValidationEndpoint(provider: ProviderCatalogEntry, credential: import("@beyonder/credentials").ResolvedCredential): Promise<Response> {
   // The deadline remains attached while extractModels consumes the body.
   const signal = AbortSignal.timeout(TIMEOUT_MS);
     switch (provider.validation?.method) {
       case "gemini-models": {
-        const key = broker.getSecret(provider.id, "GEMINI_API_KEY") ?? broker.getSecret(provider.id, "GOOGLE_API_KEY");
+        const key = credential.get("GEMINI_API_KEY") ?? credential.get("GOOGLE_API_KEY");
         return await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(key ?? "")}`, {
           signal
         });
       }
       case "cloudflare-models": {
-        const accountId = broker.getSecret(provider.id, "CLOUDFLARE_ACCOUNT_ID");
-        const token = broker.getSecret(provider.id, "CLOUDFLARE_API_TOKEN");
+        const accountId = credential.get("CLOUDFLARE_ACCOUNT_ID");
+        const token = credential.get("CLOUDFLARE_API_TOKEN");
         return await fetch(`https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/models/search`, {
           headers: { Authorization: `Bearer ${token}` },
           signal
         });
       }
       case "models": {
-        const token = broker.getProviderSecrets(provider.id)[0]?.value;
+        const token = credential.apiKey();
         return await fetch(provider.validation.url ?? `${provider.openAiCompatibleEndpoint}/models`, {
           headers: { Authorization: `Bearer ${token}` },
           signal

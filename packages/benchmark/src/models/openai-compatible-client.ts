@@ -25,9 +25,9 @@ export class OpenAiCompatibleBenchmarkClient implements BenchmarkModelClient {
         })
       });
       if (!response.ok) {
-        throw new BenchmarkRequestError(`HTTP ${response.status} ${await response.text()}`, {
+        throw new BenchmarkRequestError(`HTTP ${response.status}`, {
           httpStatus: response.status,
-          errorCode: response.statusText || `HTTP_${response.status}`
+          errorCode: `HTTP_${response.status}`
         });
       }
       const json = (await response.json()) as {
@@ -54,7 +54,7 @@ export class OpenAiCompatibleBenchmarkClient implements BenchmarkModelClient {
       if (error instanceof Error && error.name === "AbortError") {
         throw new BenchmarkRequestError("Request timed out.", { errorCode: "TIMEOUT" });
       }
-      throw error;
+      throw new BenchmarkRequestError("Provider network request failed.", { errorCode: "NETWORK" });
     } finally {
       clearTimeout(timer);
     }
@@ -80,9 +80,9 @@ async function completeCloudflareWorkersAi(
       body: JSON.stringify({ messages, temperature: 0, max_tokens: 256 })
     });
     if (!response.ok) {
-      throw new BenchmarkRequestError(`HTTP ${response.status} ${await response.text()}`, {
+      throw new BenchmarkRequestError(`HTTP ${response.status}`, {
         httpStatus: response.status,
-        errorCode: response.statusText || `HTTP_${response.status}`
+        errorCode: `HTTP_${response.status}`
       });
     }
     const json = (await response.json()) as {
@@ -106,7 +106,7 @@ async function completeCloudflareWorkersAi(
     if (error instanceof Error && error.name === "AbortError") {
       throw new BenchmarkRequestError("Request timed out.", { errorCode: "TIMEOUT" });
     }
-    throw error;
+    throw new BenchmarkRequestError("Provider network request failed.", { errorCode: "NETWORK" });
   } finally {
     clearTimeout(timer);
   }

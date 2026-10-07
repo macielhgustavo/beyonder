@@ -1,12 +1,15 @@
 import { mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createRuntime, loadConfig } from "@beyonder/runtime";
 import { AutopilotStateStore, buildComputeInventory } from "@beyonder/compute";
 
+afterEach(() => vi.unstubAllEnvs());
+
 describe("Beyonder adaptive intelligence flow", () => {
   it("retrieves memory, ranks multiple candidates, executes safely, evaluates, persists outcome, and updates performance at zero monetary cost", async () => {
+    vi.stubEnv("GROQ_API_KEY", "test-only-integration-auth-material");
     const dir = await mkdtemp(join(tmpdir(), "beyonder-flow-"));
     const providerStatePath = join(dir, "autopilot-state.json");
     const dbPath = join(dir, "beyonder.sqlite");

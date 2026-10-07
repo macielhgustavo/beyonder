@@ -21,6 +21,7 @@ describe("H1 persistent scoped operational health", () => {
   it("excludes cooldowns in the actual adaptive route, not only in candidate execution", async () => {
     const path = join(await mkdtemp(join(tmpdir(), "beyonder-route-")), "providers.json");
     await new AutopilotStateStore(path).write({ version: 1, updatedAt: new Date().toISOString(), providers: { groq: { providerId: "groq", state: "READY", classification: "AUTO_WITH_HUMAN_GATE", attempts: 1, lastUpdatedAt: new Date().toISOString(), validation: { status: "validated", models: ["llama-3.3-70b-versatile"] } } } });
+    vi.stubEnv("GROQ_API_KEY", "test-only-auth-material");
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("local discovery offline")));
     const r = createRuntime(loadConfig({ BEYONDER_DB_PATH: ":memory:", BEYONDER_MODEL_PROVIDER: "auto", BEYONDER_PROVIDER_STATE_PATH: path }));
     try {

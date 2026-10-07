@@ -54,7 +54,10 @@ export type CredentialStatus =
   | "keyless"
   | "present-env"
   | "present-vault"
-  | "missing";
+  | "missing"
+  | "configured-unavailable"
+  | "vault-locked"
+  | "invalid-credential";
 
 export type ValidationStatus =
   | "not-run"
@@ -158,6 +161,7 @@ export interface SecretRecord {
 }
 
 export interface ProviderStatus {
+  credential?: import("@beyonder/credentials").CredentialDescriptor;
   provider: ProviderCatalogEntry;
   credentialStatus: CredentialStatus;
   validationStatus: ValidationStatus;
@@ -167,6 +171,7 @@ export interface ProviderStatus {
 }
 
 export interface AutopilotProviderProgress {
+  credential?: import("@beyonder/credentials").CredentialDescriptor;
   providerId: string;
   state: ProviderState;
   classification: ProviderClassification;

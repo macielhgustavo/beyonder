@@ -97,3 +97,8 @@ describe("free model target selection", () => {
     ]);
   });
 });
+
+it('never serializes credential material on selected benchmark targets',()=>{
+ const secret='opaque-target-only-material';const targets=selectFreeModelTargets({version:1,updatedAt:new Date().toISOString(),providers:{groq:{providerId:'groq',state:'READY',classification:'FULL_AUTO',attempts:1,lastUpdatedAt:new Date().toISOString()}}},new CredentialBroker({}, {GROQ_API_KEY:secret}));
+ expect(targets.length).toBeGreaterThan(0);expect(targets[0].apiKey).toBe(secret);expect(JSON.stringify(targets)).not.toContain(secret);
+});

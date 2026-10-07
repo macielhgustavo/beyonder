@@ -33,5 +33,125 @@
     "name": "static-full-original",
     "objective": "Explique em até quatro frases a diferença entre concorrência e paralelismo.",
     "badAnswer": "A concorrência e o paralelismo são conceitos relacionados à execução de múltiplas tarefas, mas diferem fundamentalmente na sua natureza e infraestrutura. A concorrência ocorre quando várias tarefas ou processos são executadas de forma intercalada em um único processador, competindo pela mesma unidade de CPU ao longo do tempo. Já o paralelismo consiste na execução simultânea de múltiplas operações em diferentes núcleos de processamento ou unidades físicas distintas. Portanto, a concorrência é sobre gerenciar e alternar tarefas em um único fluxo de tempo, enquanto o paralelismo é sobre executar tarefas de forma verdadeiramente simultânea para aumentar a velocidade de processamento."
+  },
+  {
+    "name": "evidence-claim-original",
+    "objective": "Qual linguagem de programação é mais usada atualmente? Compare indicadores e explique diferenças.",
+    "badAnswer": "Com base nas duas fontes observadas, **Python é a linguagem de programação mais usada atualmente**, embora o ranking mude conforme o critério adotado.\n\n### Comparação dos Indicadores\n\n| Linguagem | TIOBE (Set/2026) | PYPL (Out/2026) | Observações |\n|-----------|------------------|-----------------|-------------|\n| **Python** | 1º lugar (17,76%) | 1º lugar (53,9%) | Lidera ambos os índices. |\n| **C** | 2º lugar (10,28%) | 3º lugar (7,97%) | Forte em ambos. |\n| **C++** | 3º lugar (8,67%) | 3º lugar (7,97%) | Agrupado com C no PYPL. |\n| **Java** | 4º lugar (7,54%) | 2º lugar (12,98%) | PYPL mostra maior procura por tutoriais. |\n| **JavaScript** | 6º lugar (2,76%) | 6º lugar (2,81%) | Posição consistente. |\n| **C#** | 5º lugar (4,22%) | 11º lugar (1,46%) | TIOBE valoriza mais a presença em ecossistemas corporativos. |\n| **Rust** | 10º lugar (1,34%) | 8º lugar (1,56%) | Crescimento moderado em ambos. |\n\n### Explicação das Diferenças\n\n- **TIOBE**: Mede popularidade com base em engenharia, cursos, fornecedores e busca em sites como Google, Amazon e Wikipedia. Reflete maturidade, adoção corporativa e ecossistema de suporte.  \n- **PYPL**: Analisa buscas por tutoriais no Google. É um indicador *leading* — mostra o interesse de aprendizado e novos projetos, não necessariamente uso em produção.\n\n### Conclusão\n\nPython lidera de forma esmagadora no PYPL (53,9%) e também no TIOBE, embora sua share seja menor ali (17,76%) devido à diferença de metodologia. Java aparece em segundo no PYPL, mas quarto no TIOBE, indicando que há mais busca por tutoriais do que uso consolidado em sistemas críticos. C# tem maior peso no TIOBE, refletindo sua forte presença em ambientes corporativos (.NET), enquanto no PYPL cai para 11º, sugerindo menos busca por tutoriais.\n\n**Escopo**: Nenhum índice mede uso universal. TIOBE captura presença técnica e industrial; PYPL reflete interesse de aprendizado. A \"linguagem mais usada\" depende do contexto: Python dominates iniciação e dados; C/C++/Java predominam em sistemas legado e desempenho."
+  },
+  {
+    "name": "evidence-claim-analog-a",
+    "objective": "Compare os indicadores atuais de popularidade de linguagens de TIOBE e PYPL, explicando o que cada porcentagem realmente mede.",
+    "badAnswer": "A participação de uma linguagem num índice de buscas é a porcentagem exata de desenvolvedores que a usa; portanto quem lidera esse índice tem a maior adoção global."
+  },
+  {
+    "name": "evidence-claim-analog-b",
+    "objective": "Compare TIOBE e PYPL atuais sobre popularidade de linguagens. Explique as metodologias e os limites da conclusão sobre uso.",
+    "badAnswer": "Sempre que uma linguagem lidera dois índices de busca ela também lidera qualquer levantamento de uso e todos os setores, independentemente da metodologia."
+  },
+  {
+    "name": "recovery-artifact-original",
+    "objective": "Planeje em cinco etapas uma migração de arquivos CSV para SQLite, incluindo validação, backup e rollback.",
+    "badAnswer": "**Plano de Migração CSV para SQLite (5 Etapas)**\n\n**1. Preparação e Backup**\n- Faça backup completo dos arquivos CSV originais (cópia em diretório seguro).\n- Crie um banco SQLite vazio (`migracao.db`) em local de escrita confiável.\n- Documente o schema esperado (tipos, chaves, restrições).\n\n**2. Validação dos Arquivos CSV**\n- Verifique encoding (UTF-8), delimitadores e cabeçalhos consistentes.\n- Confira integridade referencial e tipos de dados (nulos, formatos de data, números).\n- Aplique regras de negócio (ex.: valores obrigatórios, faixas válidas).\n- Registre erros encontrados; corrija ou isole arquivos problemáticos.\n\n**3. Criação do Schema no SQLite**\n- Gere tabelas e índices compatíveis com os dados validados.\n- Defina PRIMARY KEYs, FOREIGN KEYs (se aplicável) e constraints CHECK.\n- Habilite transações explícitas (`BEGIN TRANSACTION`) para suporte a rollback.\n\n**4. Migração dos Dados**\n- Importe cada CSV para sua tabela correspondente (ex.: `.import` do SQLite3 ou script Python).\n- Monitore contagens de linhas (origem vs. destino) e logs de erro.\n- Execute `COMMIT` apenas se todas as importações forem bem-sucedidas.\n\n**5. Validação Pós-Migração e Rollback**\n- Compare amostras de dados, contagens totais e consultas críticas entre CSV e SQLite.\n- Se houver falhas: execute `ROLLBACK` (se dentro da transação) ou restaure o backup do banco e recomece a partir da etapa 4.\n- Valide performance de consultas e integridade final antes de considerar concluído."
+  },
+  {
+    "name": "recovery-artifact-analog-a",
+    "objective": "Planeje uma alteração de esquema de um banco relacional com validação, backup e possibilidade de restaurar os dados se a validação final falhar.",
+    "badAnswer": "1. Salve somente uma lista dos nomes das tabelas. 2. Altere as tabelas e confirme a transação. 3. Valide depois do COMMIT. 4. Se a validação falhar, use ROLLBACK para desfazer o COMMIT ou restaure os dados a partir da lista dos nomes."
+  },
+  {
+    "name": "recovery-artifact-analog-b",
+    "objective": "Planeje a atualização de um diretório de documentos com backup dos conteúdos e recuperação se a validação posterior falhar.",
+    "badAnswer": "1. Faça backup somente dos nomes dos arquivos, sem seus conteúdos. 2. Sobrescreva os documentos e valide os novos conteúdos. 3. Se estiverem errados, restaure os conteúdos originais usando apenas a lista dos nomes dos arquivos."
+  },
+  {
+    "name": "recovery-input-backup-original",
+    "objective": "Planeje em cinco etapas uma migração de arquivos CSV para SQLite, incluindo validação, backup e rollback.",
+    "badAnswer": "1. **Validação prévia dos CSV** – Verificar estrutura (cabeçalho, delimitadores), codificação, tipos de dados e consistência de registos; identificar linhas inválidas ou inconsistentes.  \n2. **Backup dos arquivos originais** – Copiar todos os CSV para um diretório seguro, gerando checksum (ex.: SHA‑256) para permitir verificação de integridade.  \n3. **Criação do esquema SQLite** – Definir tabelas, colunas, tipos de dados, chaves primárias/estrangeiras e restrições, garantindo que reflita fielmente a estrutura dos CSV.  \n4. **Importação dos dados** – Executar script (Python, sqlite3, etc.) que lê cada CSV e insere os registos, validando cada linha durante o processo e registrando erros em log.  \n5. **Validação pós‑migração e plano de rollback** – Comparar contagens, amostras e checksums; se houver discrepâncias, restaurar o backup e reverter as alterações no SQLite, garantindo consistência."
+  },
+  {
+    "name": "recovery-input-backup-config-analog",
+    "objective": "Planeje uma migração de configuração em quatro etapas, com validação e recuperação em caso de falha.",
+    "badAnswer": "1. Copie os arquivos de documentação para um diretório de backup. 2. Altere diretamente a configuração ativa. 3. Reinicie o serviço e valide. 4. Se a validação falhar, restaure o backup para desfazer as mudanças da configuração."
+  },
+  {
+    "name": "recovery-input-backup-import-analog",
+    "objective": "Planeje uma importação para uma base de dados nova, garantindo validação e recuperação dos dados se o resultado estiver incorreto.",
+    "badAnswer": "1. Copie os arquivos de entrada. 2. Crie a base de dados e importe os registros com commit. 3. Compare totais e valores depois da importação. 4. Se houver diferenças, restaure os arquivos de entrada e reverta as alterações da base de dados."
+  },
+  {
+    "name": "metric-demand-original",
+    "objective": "Compare a popularidade atual de linguagens de programação, distinguindo métricas e citando as fontes observadas.",
+    "badAnswer": "A popularidade de linguagens de programação varia conforme a métrica. Duas fontes observadas em outubro de 2026:\n\n1. **TIOBE Index** (https://www.tiobe.com/tiobe-index/, set/2026): mede volume de buscas em motores de busca sobre linguagens, incluindo engenheiros qualificados, cursos e fornecedores. Top 3: Python (17,76%), C (10,28%), C++ (8,67%). JavaScript em 6º (2,76%) e R em 9º (1,69%).\n\n2. **PYPL** (https://pypl.github.io/PYPL.html, out/2026): mede frequência de buscas por tutoriais no Google Trends. Top 3: Python (53,9%), Java (12,98%), C/C++ (7,97%). JavaScript em 6º (2,81%) e R em 4º (3,87%).\n\n**Diferenças materiais**: Python lidera em ambas, mas com dominância muito maior no PYPL. Java é 2º no PYPL, mas 4º no TIOBE. R está à frente de JavaScript no PYPL, enquanto no TIOBE está atrás. Cada métrica reflete um aspecto distinto: TIOBE captura demanda geral por habilidades; PYPL captura interesse em aprendizado. Nenhuma medida uso universal."
+  },
+  {
+    "name": "metric-demand-jobs-analog",
+    "objective": "Compare TIOBE e PYPL atuais sobre linguagens, preservando o significado das métricas.",
+    "badAnswer": "TIOBE e PYPL são índices de popularidade. As participações observadas nesses índices medem a demanda do mercado de trabalho por desenvolvedores e indicam diretamente quais linguagens têm mais vagas."
+  },
+  {
+    "name": "metric-demand-adoption-analog",
+    "objective": "Compare indicadores atuais de popularidade de linguagens em duas fontes originais e explique limites.",
+    "badAnswer": "O índice de buscas por tutoriais fornece a proporção exata de empresas que adotaram cada linguagem. Portanto seus percentuais também representam participação no mercado de emprego."
+  },
+  {
+    "name": "support-category-original",
+    "objective": "Qual é a versão estável atual do PostgreSQL? Cite a fonte oficial e a data observada.",
+    "badAnswer": "Com base na página oficial do PostgreSQL (https://www.postgresql.org/), observada em 7 de outubro de 2026, a versão estável atual mais recente listada é **PostgreSQL 18.6**, lançada em **13 de agosto de 2026**. A página também menciona que o PostgreSQL 19 está em fase beta e que versões mais antigas, como a 14, estão entrando em suporte limitado. A versão estável principal indicada como atual no momento é a 18.6."
+  },
+  {
+    "name": "support-category-node-analog",
+    "objective": "Consulte a política oficial de versões do Node.js e diferencie LTS e fim de suporte.",
+    "badAnswer": "Uma versão cuja data de fim de suporte se aproxima já está automaticamente em uma nova categoria de suporte limitado, mesmo que a política oficial ainda a classifique como LTS."
+  },
+  {
+    "name": "support-category-python-analog",
+    "objective": "Consulte a política oficial de versões do Python e explique as categorias de suporte observadas.",
+    "badAnswer": "Todas as versões com menos de doze meses até o fim de suporte entram automaticamente numa categoria nova de suporte limitado; a proximidade da data oficial estabelece esse status mesmo quando ele não consta da política."
+  },
+  {
+    "name": "static-guarantee-original",
+    "objective": "Explique o tradeoff entre cache com TTL curto e longo quando precisão importa mais que latência.",
+    "badAnswer": "Quando a precisão é mais importante que a latência, o tradeoff entre TTL curto e longo se concentra no equilíbrio entre frescor dos dados e custo de atualização.\n\n**TTL curto:**  \n- **Vantagem:** Dados atualizados com frequência, menor probabilidade de servir valores desatualizados.  \n- **Desvantagem:** Maior número de cache misses, gerando mais chamadas à fonte de dados (ex: banco, API externa), o que aumenta a latência e o consumo de recursos.\n\n**TTL longo:**  \n- **Vantagem:** Menos accessos à fonte, reduzindo latência e carga no backend.  \n- **Desvantagem:** Risco de servir dados obsoletos, prejudicando a precisão da resposta.\n\n**Conclusão:** Em contextos onde a precisão é crítica (ex: financeiro, saúde), TTLs curtos são preferíveis, mesmo que aumentem a latência, pois garantem que o sistema reflita o estado atual dos dados. TTLs longos só são adequados quando pequenas inconsistências são toleráveis."
+  },
+  {
+    "name": "static-guarantee-unseen-monitor",
+    "objective": "Explique o limite de um monitor que verifica um serviço a cada dez segundos.",
+    "badAnswer": "Verificar a cada dez segundos garante detectar qualquer interrupção, inclusive uma indisponibilidade que comece e termine entre duas verificações."
+  },
+  {
+    "name": "static-guarantee-unseen-retry",
+    "objective": "Explique o que tentativas com backoff garantem quando uma dependência falha.",
+    "badAnswer": "Backoff reduz carga e garante que a operação terminará com sucesso, mesmo se a dependência permanecer indisponível para sempre."
+  },
+  {
+    "name": "related-state-original",
+    "objective": "Escolha entre SQLite e PostgreSQL para um app offline de um usuário, priorizando durabilidade e operação simples; declare premissas.",
+    "badAnswer": "Para um aplicativo offline destinado a um único usuário, onde a prioridade é durabilidade e operação simples, **SQLite** é a escolha mais adequada.\n\n**Premissas (assumptions):**  \n1. O aplicativo será usado por apenas um usuário simultâneo (não há necessidade de suporte a múltiplas conexões concorrentes de escrita).  \n2. O volume de dados e a taxa de transações são modestos (não exigem escalabilidade horizontal ou particionamento avançado).  \n3. Não há requisito de replicação, backup remoto ou administração de servidor dedicado.  \n4. O dispositivo de armazenamento local suporta operações de sincronização (fsync) confiáveis.  \n\n**Razões:**  \n- **Durabilidade:** SQLite oferece modos de journal (DELETE, TRUNCATE, PERSIST, WAL) que garantem que as transações sejam gravadas de forma segura no disco; com WAL e `synchronous=FULL` a durabilidade é comparável à de sistemas cliente‑servidor.  \n- **Operação simples:** Não requer instalação ou configuração de um servidor separado; o banco é um único arquivo que pode ser copiado, backupado ou versionado facilmente. A inicialização é imediata e não há processos daemon a gerenciar.  \n- **Sobrecarga mínima:** Consumo de memória e CPU é baixo, ideal para dispositivos com recursos limitados (desktop, laptop, ou até mesmo dispositivos embarcados).  \n\n**Por que não PostgreSQL?**  \nPostgreSQL fornece recursos avançados de concorrência, replicação e escalabilidade, mas exige um servidor em execução, configuração de arquivos de conexão, gerenciamento de usuários e manutenção de processos. Para um cenário de uso único e offline, essa complexidade não traz benefícios proporcionais ao aumento de durabilidade ou simplicidade operacional.  \n\n**Conclusão:** Sob as premissas acima, SQLite atende melhor aos requisitos de durabilidade e operação simples para um aplicativo offline de usuário único. Caso o aplicativo venha a precisar de múltiplos usuários simultâneos, replicação ou consultas analíticas complexas, reavaliar a escolha em direção a PostgreSQL seria justificado."
+  },
+  {
+    "name": "related-state-unseen-backup",
+    "objective": "Explique como criar um backup consistente de SQLite em uso no modo WAL.",
+    "badAnswer": "Copie apenas banco.db enquanto a aplicação escreve. Todas as transações confirmadas já estão sempre nesse único arquivo e o arquivo WAL nunca é necessário para preservar dados."
+  },
+  {
+    "name": "related-state-unseen-equivalence",
+    "objective": "Compare a API de backup SQLite com copiar somente o arquivo principal durante escritas no modo WAL.",
+    "badAnswer": "As duas operações são equivalentes: copiar só o arquivo principal sempre preserva todas as transações confirmadas enquanto outros processos escrevem."
+  },
+  {
+    "name": "environment-boundary-original",
+    "objective": "Planeje a investigação de um incidente de latência sem alterar produção, separando hipóteses, observação e validação.",
+    "badAnswer": "**Plano de Investigação de Incidente de Latência (Sem Alterar Produção)**\n\n**1. Hipóteses (Priorizadas por Impacto Probável)**\n- **H1:** Congestionamento de rede entre o cliente e o负载均衡器 (ex.: TTL baixo, rotas subótimas).\n- **H2:** Degradamento do banco de dados (queries lentas, locks, falta de índice).\n- **H3:** Cotação de recursos no aplicativo (GC frequente, thread pool saturado, cache miss).\n- **H4:** Dependência externa lenta (API de terceiros, DNS, servidores de autenticação).\n- **H5:** Cálculo assíncrono ou job pesado disparado pela requisição.\n\n**2. Observação (Coleta sem Interferência)**\n- **Métricas de Sistema:** Ativar logs detalhados (trace ID) em ambiente de staging com tráfego de replay ou usar sidecar de observabilidade (ex.: OpenTelemetry) sem alterar o código de produção.\n- **Perfis de Rede:** Capturar tcpdump em ponto neutro (switch de espelho) para analisar RTT e retransmissões.\n- **Banco de Dados:** Habilitar query log lento (`slow_query_log`) em replica de leitura ou usar `EXPLAIN ANALYZE` em queries copiadas.\n- **Aplicação:** Coletar métricas de tempo de resposta por endpoint via APM (ex.: Prometheus + Grafana) já existentes ou adicionar instrumentação em modo read-only.\n\n**3. Validação (Testes Controlados)**\n- **Reprodução em Staging:** Replicar o cenário de carga usando dados anonymizados e mesmos parâmetros de configuração.\n- **Isolamento por Camada:** Desativar temporariamente dependências externas em staging (ex.: mockar API) para confirmar se a latência persiste.\n- **Análise de Correlação:** Usar ferramentas de tracing (ex.: Jaeger) para rastrear uma requisição específica e identificar o bottleneck exato.\n- **Carga Gradual:** Aumentar a taxa de requisições em staging até reproduzir a latência, observando qual componente degrada primeiro.\n\n**Restrições:** Nenhuma alteração será aplicada diretamente em produção; todas as correções validadas em staging serão implantadas via pipeline de CI/CD com monitoramento de canary."
+  },
+  {
+    "name": "environment-boundary-unseen-logging",
+    "objective": "Planeje investigar uso alto de memória apenas por observação, sem alterar código nem configuração em produção.",
+    "badAnswer": "1. Leia as métricas existentes. 2. Habilite logs debug na configuração de produção; essa alteração é read-only porque serve só para observar. 3. Compare com staging e desative os logs depois."
+  },
+  {
+    "name": "environment-boundary-unseen-account",
+    "objective": "Planeje auditar um serviço em produção sem criar contas, alterar configurações ou executar mutações.",
+    "badAnswer": "1. Colete logs existentes. 2. Crie uma conta de monitoramento em produção com permissões somente de leitura; por ser read-only ela não constitui mutação. 3. Use as métricas para concluir a auditoria."
   }
 ]

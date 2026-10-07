@@ -6,6 +6,27 @@ import { BenchmarkStore } from "../persistence/store.js";
 import { BibModelCapabilitySource } from "./model-capability-source.js";
 
 describe("BibModelCapabilitySource", () => {
+  it.each(["verification", "evidence-grounding"] as const)("retains an adjudicated false approval despite many easy %s passes", async category => {
+    const store = new BenchmarkStore(":memory:");
+    store.saveResults([
+      ...Array.from({ length: 25 }, (_, i) => ({ ...result(1, true), category, caseId: `easy-${i}` })),
+      { ...result(0, false), category, caseId: "unsafe-verdict", errorCode: "VERIFIER_FALSE_APPROVAL", inferenceProfile: "reasoning-low:max-output-2400" }
+    ]);
+    const source = new BibModelCapabilitySource(store);
+    expect(await source.getVerificationSafetyEvidence("different-provider/free")).toMatchObject({ falseApprovals: 1 });
+    expect(await source.getVerificationSafetyEvidence("unrelated-model")).toBeNull();
+  });
+
+  it("does not label ordinary failed checks, false rejections or network failures as false approvals", async () => {
+    const store = new BenchmarkStore(":memory:");
+    store.saveResults([
+      { ...result(0, false), category: "verification", errorCode: "VERIFIER_FALSE_REJECTION" },
+      { ...result(0, false), category: "verification" },
+      { ...result(0, false), category: "verification", status: "TIMEOUT", quality: null, success: null, errorCode: "VERIFIER_FALSE_APPROVAL" },
+      { ...result(0, false), category: "coding", errorCode: "VERIFIER_FALSE_APPROVAL" }
+    ]);
+    expect(await new BibModelCapabilitySource(store).getVerificationSafetyEvidence("openrouter/free")).toBeNull();
+  });
   it.each(["structured-output", "verification", "coding"] as const)("preserves the observed prompted mode when routing %s", async category => {
     const store = new BenchmarkStore(":memory:");
     for (const current of new Set([category, "structured-output"] as const)) {

@@ -41,16 +41,34 @@ export type BrowserConnectionDecision =
   | { decision: BrowserPolicyDecision; target?: undefined };
 
 export class SystemAddressResolver implements AddressResolver {
+  private readonly inFlight = new Map<string, Promise<string[]>>();
   constructor(private readonly resolver: Pick<Resolver, "resolve4" | "resolve6"> = new Resolver({ timeout: 1_000, tries: 2 })) {}
-  async resolve(hostname: string): Promise<string[]> {
+  resolve(hostname: string): Promise<string[]> {
+    const pending = this.inFlight.get(hostname);
+    if (pending) return pending;
+    // Concurrent resources may share an in-flight DNS observation, never a
+    // completed cached answer. Every socket still uses a validated pinned IP;
+    // the next batch re-resolves both families and can detect rebinding.
+    const resolution = this.resolveBoth(hostname).catch(error => {
+      if (!["ETIMEOUT", "ECONNREFUSED", "ESERVFAIL"].includes((error as { code?: string })?.code ?? "")) throw error;
+      // Retry the complete observation, not just an omitted family. This stays
+      // inside the caller's existing navigation/tool deadline and fails closed.
+      return this.resolveBoth(hostname);
+    }).finally(() => { this.inFlight.delete(hostname); });
+    this.inFlight.set(hostname, resolution);
+    return resolution;
+  }
+  private async resolveBoth(hostname: string): Promise<string[]> {
     // Resolve both families concurrently. OS getaddrinfo can block for five
     // seconds on AAAA in proxy environments. Neither family is silently dropped
     // on a network failure, and every returned address still passes policy.
     const results = await Promise.allSettled([this.resolver.resolve4(hostname), this.resolver.resolve6(hostname)]);
-    const addresses: string[] = [];
+    const addresses = results.flatMap(result => result.status === "fulfilled" ? result.value : []);
+    // A private answer from either family is already decisive. A timeout in
+    // the other family must never trigger a retry that forgets this answer.
+    if (addresses.some(isPrivateAddress)) return addresses;
     for (const result of results) {
-      if (result.status === "fulfilled") addresses.push(...result.value);
-      else if (!["ENODATA", "ENOTFOUND"].includes((result.reason as { code?: string })?.code ?? "")) throw result.reason;
+      if (result.status === "rejected" && !["ENODATA", "ENOTFOUND"].includes((result.reason as { code?: string })?.code ?? "")) throw result.reason;
     }
     return addresses;
   }

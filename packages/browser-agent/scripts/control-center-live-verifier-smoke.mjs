@@ -13,7 +13,7 @@ const Database = require("better-sqlite3");
 const output = path.resolve(process.env.LIVE_VERIFIER_DIR ?? "/tmp/beyonder-live-verifier");
 const port = process.env.LIVE_VERIFIER_PORT ?? "4196";
 const base = `http://127.0.0.1:${port}`;
-const cases = JSON.parse(await fs.readFile(new URL("live-verifier-cases.json", import.meta.url), "utf8"));
+const cases = JSON.parse(await fs.readFile(process.env.LIVE_VERIFIER_CASES ?? new URL("live-verifier-cases.json", import.meta.url), "utf8"));
 await fs.mkdir(output, { recursive: true });
 const dbPath = path.join(output, "runtime.sqlite");
 try {
@@ -24,6 +24,29 @@ const providerPath = path.resolve(process.env.BEYONDER_PROVIDER_STATE_PATH ?? pa
 const benchmarkPath = path.resolve(process.env.BEYONDER_BENCHMARK_DB_PATH ?? path.join(repo, "data/beyonder-benchmark.sqlite"));
 const isolatedProviders = path.join(output, "providers.json");
 await fs.copyFile(providerPath, isolatedProviders);
+// Isolation must not erase an observed upstream quota or authentication block.
+// Import only operational health and the failed attempts needed to interpret
+// legacy cooldowns; missions, outcomes and producer grades remain isolated.
+const healthSource = path.resolve(process.env.LIVE_VERIFIER_HEALTH_DB_PATH ?? process.env.BEYONDER_DB_PATH ?? path.join(repo, "data/beyonder.sqlite"));
+const healthImport = { source: healthSource, readonly: true, healthRows: 0, originAttemptRows: 0 };
+try {
+  await fs.access(healthSource);
+  const source = new Database(healthSource, { readonly: true });
+  const isolated = new Database(dbPath);
+  try {
+    isolated.exec("CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL, updated_at TEXT NOT NULL)");
+    const health = source.prepare("select key,value,updated_at from state where key like 'provider-health:%' or key like 'model-health:%'").all();
+    const failureTimes = new Set(health.map(row => JSON.parse(row.value).lastFailureAt).filter(Boolean));
+    const origins = source.prepare("select key,value,updated_at from state where key like 'task-attempts:%'").all().flatMap(row => {
+      const attempts = JSON.parse(row.value).filter(attempt => attempt.status === "FAILED" && failureTimes.has(attempt.completedAt));
+      return attempts.length ? [{ ...row, value: JSON.stringify(attempts) }] : [];
+    });
+    const insert = isolated.prepare("insert into state(key,value,updated_at) values(?,?,?)");
+    isolated.transaction(() => { for (const row of [...health, ...origins]) insert.run(row.key, row.value, row.updated_at); })();
+    healthImport.healthRows = health.length;
+    healthImport.originAttemptRows = origins.length;
+  } finally { source.close(); isolated.close(); }
+} catch (error) { if (error.code !== "ENOENT") throw error; }
 const scenario = path.join(output, "scenario.json");
 await fs.writeFile(scenario, JSON.stringify(cases[0]));
 const log = await fs.open(path.join(output, "supervisor.log"), "a");
@@ -41,7 +64,7 @@ const server = spawn(process.execPath, ["apps/dashboard/bin/launch-control-cente
 });
 const browser = await chromium.launch({ headless: true });
 const page = await browser.newPage();
-const report = { controlledProducer: true, syntheticProductionPerformance: false, realIndependentVerifier: true, fixture: false, cases: [] };
+const report = { controlledProducer: true, syntheticProductionPerformance: false, realIndependentVerifier: true, fixture: false, healthImport, cases: [] };
 const save = () => fs.writeFile(path.join(output, "report.json"), JSON.stringify(report, null, 2));
 function suppressControlledProducerGrades() {
   const db = new Database(dbPath);

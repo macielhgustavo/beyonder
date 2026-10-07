@@ -84,7 +84,20 @@ try {
       entry.uiText = await card.innerText();
       await page.screenshot({ path: path.join(output, `${category}.png`), fullPage: true });
       await page.reload();
-      entry.refreshPreserved = Boolean(await page.locator(`[data-mission-id="${queued.taskId}"]`).count());
+      await page.waitForFunction(({ id, status, objectiveStatus, verified }) => {
+        const card = document.querySelector(`.command-mission [data-mission-id="${id}"]`);
+        return card?.getAttribute("data-state") === status
+          && card.getAttribute("data-objective-status") === objectiveStatus
+          && card.getAttribute("data-result-verified") === String(verified);
+      }, { id: queued.taskId, status: entry.mission.status, objectiveStatus: entry.mission.objectiveStatus, verified: entry.mission.resultVerified });
+      const refreshed = (await (await page.request.get(`${base}/api/control/missions/${queued.taskId}`)).json()).mission;
+      entry.refreshPreserved = refreshed?.objectiveStatus === entry.mission.objectiveStatus
+        && refreshed.resultVerified === entry.mission.resultVerified && refreshed.result === entry.mission.result;
+      if (entry.mission.resultVerified) {
+        const visibleResult = await page.locator(`.command-mission [data-mission-id="${queued.taskId}"] .mission-result p`).textContent();
+        entry.refreshPreserved &&= visibleResult === entry.mission.result;
+      }
+      if (!entry.refreshPreserved) throw new Error("Persisted result or authoritative Home state changed across refresh");
     } catch (error) { entry.harnessError = String(error); }
     entry.timeToResultMs = Date.now() - started;
     report.cases.push(entry);

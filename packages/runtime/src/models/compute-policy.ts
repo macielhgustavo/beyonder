@@ -78,7 +78,7 @@ export function resolveQualityFloor(task: IntelligenceTask): QualityFloor {
     // be an eligible judge too incorrectly removed useful producers and left
     // the only eligible judge producing an answer it cannot certify itself.
     // Unphased mission assessments retain the full contract's requirements.
-    if (task.inferencePhase !== "DIRECT_RESPONSE" && ["EXPLANATION", "COMPARISON", "CODE", "PLAN"].includes(contract.expectedResultKind)) require("verification", Math.max(0.54, minimumOverall - 0.03));
+    if (task.inferencePhase === "OBJECTIVE_VERIFICATION" || (task.inferencePhase !== "DIRECT_RESPONSE" && ["EXPLANATION", "COMPARISON", "CODE", "PLAN"].includes(contract.expectedResultKind))) require("verification", Math.max(0.54, minimumOverall - 0.03));
     if (contract.freshness !== "STATIC" || contract.evidenceRequirement === "REQUIRED") {
       require("freshnessEvidence", Math.max(0.58, minimumOverall));
       reasons.push(`freshness=${contract.freshness}`, `evidence=${contract.evidenceRequirement}:${contract.minimumEvidenceSources}`);

@@ -59,6 +59,18 @@ describe("observed inference profiles", () => {
     expect(route.candidates.filter(c => c.provider === "kilo-gateway")).toHaveLength(0);
     expect(route.consideredCandidates?.filter(c => c.provider === "kilo-gateway")).toHaveLength(1);
   });
+  it("does not transfer an optional profile's observations to an unmeasured task category", async () => {
+    const measured = new Profiles(0.99, [disabled], 0.99);
+    const source: ModelCapabilitySource = {
+      listInferenceProfiles: measured.listInferenceProfiles.bind(measured),
+      getCapability: async input => input.inferenceProfile === disabled ? null : measured.getCapability(input),
+      getCapabilityScore: async input => input.inferenceProfile === disabled ? null : measured.getCapabilityScore(input)
+    };
+    const selector = new AdaptiveModelSelector(await statePath(), { capabilitySource: source });
+    const route = await selector.route(researchTask(), "normal");
+    expect(route.candidates.find(candidate => candidate.provider === "kilo-gateway")?.inferenceProfile).toBe("reasoning-low:max-output-2400");
+    expect(route.rejectedCandidates).toContainEqual(expect.objectContaining({ inferenceProfile: disabled, reasons: ["no observed task capability for the requested inference profile"] }));
+  });
   it.each([true, false])("executes only the independently measured bounded profile (matched=%s)", async matched => {
     const fetch = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({ model: "profile-model", choices: [{ finish_reason: "stop", message: { content: "Observed response" } }], usage: { cost: 0 } })));
     vi.stubGlobal("fetch", fetch);

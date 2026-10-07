@@ -79,7 +79,7 @@ describe("browser evidence and no-tool response boundary", () => {
         { kind: "TOOL", capabilities: ["browser", "browser:open"], dependencies: undefined },
         { kind: "DIRECT_RESPONSE", capabilities: undefined, dependencies: ["browser-source-1"] }
       ]);
-      expect(plan.steps[0]?.action).toMatchObject({ tool: "browser.open", arguments: { url: "https://nodejs.org/" } });
+      expect(plan.steps[0]?.action).toMatchObject({ tool: "browser.read", arguments: { url: "https://nodejs.org/" } });
       expect(runtime.planner.lastResult).toMatchObject({ provider: "deterministic", model: "browser-read-plan", usedFallback: false });
       expect(runtime.modelRouter.completeForPlanningCandidate).not.toHaveBeenCalled();
     } finally { await runtime.browser.closeAll(); runtime.sqlite.close(); }
@@ -90,7 +90,7 @@ describe("browser evidence and no-tool response boundary", () => {
       const { task } = await runtime.intelligence.inspect("Use o site oficial do Python para descobrir a versão estável atual.");
       const complete = vi.spyOn(runtime.modelRouter, "completeForPlanningCandidate").mockResolvedValue({ ...response, content: "not a plan" });
       const plan = await runtime.planner.createPlan({ task, objective: task.input, availableTools: await runtime.getAvailableTools(), memoryContext: [], budget: DEFAULT_TASK_BUDGET, economicState: "survival" });
-      expect(plan.steps[0]?.action).toMatchObject({ tool: "browser.open", arguments: { url: "https://www.python.org/downloads/" } });
+      expect(plan.steps[0]?.action).toMatchObject({ tool: "browser.read", arguments: { url: "https://www.python.org/downloads/" } });
       vi.spyOn(runtime.browser, "startSession").mockResolvedValue("fixture-session");
       const browser = vi.spyOn(runtime.browser, "execute").mockResolvedValue({ status: "ok", action: { type: "open", url: "https://www.python.org/downloads/" }, observation: { url: "https://www.python.org/downloads/", title: "Python fixture", visibleText: "Download Python 3.14.8", interactiveElements: [] } } as never);
       complete.mockRejectedValue(new InferenceError("Inference deadline exceeded.", "TIMEOUT"));
@@ -117,6 +117,42 @@ describe("browser evidence and no-tool response boundary", () => {
       expect(plan.steps.at(-1)).toMatchObject({ kind: "DIRECT_RESPONSE", dependencies: ["browser-source-1", "browser-source-2"] });
     } finally { await runtime.browser.closeAll(); runtime.sqlite.close(); }
   });
+  it.each(["browser.read", "browser.open"])("uses the next source after a failed %s read without planning inference or counting the failed source", async tool => {
+    const runtime = setup(true);
+    try {
+      const { task } = await runtime.intelligence.inspect("Leia https://first.example/doc; se falhar, tente https://second.example/doc e cite o texto observado.");
+      const plan = await runtime.planner.createPlan({ task, objective: task.input, availableTools: await runtime.getAvailableTools(), memoryContext: [], budget: DEFAULT_TASK_BUDGET, economicState: "survival" });
+      plan.steps[0]!.action!.tool = tool;
+      vi.spyOn(runtime.browser, "startSession").mockResolvedValue("fixture-session");
+      const browser = vi.spyOn(runtime.browser, "execute")
+        .mockResolvedValueOnce({ status: "error", error: { message: "HTTP 503 source unavailable" } } as never)
+        .mockResolvedValue({ status: "ok", action: "open", observation: { url: "https://second.example/doc", title: "Second source", visibleText: "Observed complete source document", interactiveElements: [], links: [] } } as never);
+      const complete = vi.spyOn(runtime.modelRouter, "completeForPlanningCandidate").mockResolvedValue({ ...response, content: "Observed complete source document. Source: https://second.example/doc" });
+      const outcome = await runtime.taskExecutor.execute({ task, plan, economicState: "survival", completionCriteria: { expectedText: "Observed complete source document" } });
+      expect(outcome.success).toBe(true);
+      expect(browser.mock.calls.map(call => call[1])).toEqual([{ type: "open", url: "https://first.example/doc" }, { type: "open", url: "https://second.example/doc" }]);
+      expect(outcome.execution.usage.retries).toBe(1);
+      expect(outcome.execution.steps.filter(step => step.toolResult?.success && step.status === "COMPLETED").map(step => step.toolCall?.arguments)).toContainEqual({ url: "https://second.example/doc" });
+      expect(outcome.execution.steps[0]?.status).toBe("FAILED");
+      expect(complete.mock.calls.every(call => call[0][0]?.content.includes("DIRECT_RESPONSE"))).toBe(true);
+    } finally { await runtime.browser.closeAll(); runtime.sqlite.close(); }
+  });
+  it("preserves a browser policy denial on the fallback without trying another source", async () => {
+    const runtime = setup(true);
+    try {
+      const { task } = await runtime.intelligence.inspect("Leia https://first.example/doc; se falhar, tente http://127.0.0.1/secret e cite a fonte.");
+      const plan = await runtime.planner.createPlan({ task, objective: task.input, availableTools: await runtime.getAvailableTools(), memoryContext: [], budget: DEFAULT_TASK_BUDGET, economicState: "normal" });
+      plan.steps[0]!.alternativeUrls!.push("https://third.example/doc");
+      vi.spyOn(runtime.browser, "startSession").mockResolvedValue("fixture-session");
+      const browser = vi.spyOn(runtime.browser, "execute").mockResolvedValueOnce({ status: "error", error: { message: "HTTP 503" } } as never).mockResolvedValue({ status: "blocked", policy: { reason: "private-address" } } as never);
+      const complete = vi.spyOn(runtime.modelRouter, "completeForPlanningCandidate");
+      const outcome = await runtime.taskExecutor.execute({ task, plan, economicState: "normal" });
+      expect(outcome.success).toBe(false);
+      expect(outcome.execution.steps.at(-1)?.status).toBe("BLOCKED");
+      expect(browser).toHaveBeenCalledTimes(2);
+      expect(complete).not.toHaveBeenCalled();
+    } finally { await runtime.browser.closeAll(); runtime.sqlite.close(); }
+  });
   it("uses stable domain source roots for a current software-development comparison", async () => {
     const runtime = setup(true);
     try {
@@ -138,7 +174,7 @@ describe("browser evidence and no-tool response boundary", () => {
     try {
       const { task } = await runtime.intelligence.inspect(objective);
       const plan = await runtime.planner.createPlan({ task, objective, availableTools: await runtime.getAvailableTools(), memoryContext: [], budget: DEFAULT_TASK_BUDGET, economicState: "survival" });
-      expect(plan.steps[0]?.action).toMatchObject({ tool: "browser.open", arguments: { url: expectedUrl } });
+      expect(plan.steps[0]?.action).toMatchObject({ tool: "browser.read", arguments: { url: expectedUrl } });
       expect(plan.steps.at(-1)).toMatchObject({ kind: "DIRECT_RESPONSE", dependencies: ["browser-source-1"] });
     } finally { await runtime.browser.closeAll(); runtime.sqlite.close(); }
   });
@@ -147,7 +183,7 @@ describe("browser evidence and no-tool response boundary", () => {
     try {
       const {task} = await runtime.intelligence.inspect(objective);
       const plan = await runtime.planner.createPlan({task, objective, availableTools: await runtime.getAvailableTools(), memoryContext: [], budget: DEFAULT_TASK_BUDGET, economicState: "normal"});
-      expect(plan.steps.filter(step => step.action?.tool === "browser.open").length).toBeGreaterThanOrEqual(2);
+      expect(plan.steps.filter(step => step.action?.tool === "browser.read").length).toBeGreaterThanOrEqual(2);
       expect(validatePlan(plan, {availableTools: await runtime.getAvailableTools(), budget: DEFAULT_TASK_BUDGET}).valid).toBe(true);
     } finally {await runtime.browser.closeAll(); runtime.sqlite.close();}
   });
@@ -159,7 +195,7 @@ describe("browser evidence and no-tool response boundary", () => {
       vi.mocked(runtime.modelRouter.route).mockImplementation(async (routedTask, economicState) => ({ task: routedTask, economicState, selected: remote(), candidates: [remote(), verifier], reason: "fixture", explored: false }));
       vi.spyOn(runtime.modelRouter, "completeForPlanningCandidate")
         .mockResolvedValueOnce({ ...response, content: "Segundo duas fontes observadas, SQLite lidera uma métrica de bancos de dados e PostgreSQL outra; a resposta depende da métrica." })
-        .mockResolvedValueOnce({ ...response, model: verifier.model, content: JSON.stringify({ satisfied: true, confidence: 0.9, relevance: true, completeness: true, consistentWithEvidence: true, reason: "The comparison is grounded in both observed metrics.", missingRequirements: [], recoveryRecommendation: "NONE" }) });
+        .mockResolvedValue({ ...response, model: verifier.model, content: JSON.stringify({ satisfied: true, confidence: 0.9, relevance: true, completeness: true, consistentWithEvidence: true, reason: "The comparison is grounded in both observed metrics.", missingRequirements: [], recoveryRecommendation: "NONE" }) });
       const plan = await runtime.planner.createPlan({ task, objective: task.input, availableTools: await runtime.getAvailableTools(), memoryContext: [], budget: DEFAULT_TASK_BUDGET, economicState: "survival" });
       vi.spyOn(runtime.browser, "startSession").mockResolvedValue("fixture-session");
       const browser = vi.spyOn(runtime.browser, "execute")
@@ -180,6 +216,7 @@ describe("browser evidence and no-tool response boundary", () => {
       ]);
       expect(JSON.stringify(browser.mock.calls)).not.toContain("127.0.0.1");
       expect(outcome.execution.attempts?.filter((attempt) => attempt.phase === "ACTION_PLANNING")).toEqual([]);
+      expect(outcome.execution.attempts?.filter(attempt => attempt.phase === "OBJECTIVE_VERIFICATION").map(attempt => attempt.stepId)).toEqual(["objective-verification", "objective-verification-claim-review"]);
     } finally { await runtime.browser.closeAll(); runtime.sqlite.close(); }
   });
   it("fails explicitly before inference when browser is unavailable", async () => {

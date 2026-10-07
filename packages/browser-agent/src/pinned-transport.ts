@@ -35,11 +35,13 @@ export interface PinnedHttpTransportOptions {
  */
 export class PinnedHttpTransport implements BrowserNetworkTransport {
   private readonly agents = new Map<string, HttpAgent | HttpsAgent>();
+  private closed = false;
   constructor(private readonly options: PinnedHttpTransportOptions = {}) {}
 
-  close(): void { for (const agent of this.agents.values()) agent.destroy(); this.agents.clear(); }
+  close(): void { this.closed = true; for (const agent of this.agents.values()) agent.destroy(); this.agents.clear(); }
 
   async fetch(input: BrowserNetworkRequest, target: BrowserConnectionTarget): Promise<BrowserNetworkResponse> {
+    if (this.closed) throw new Error("Browser transport is closed.");
     const url = target.url;
     const headers = sanitizeRequestHeaders(input.headers, url.host, input.body);
     const requestOptions: RequestOptions = {

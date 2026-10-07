@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ToolExecutor, ToolRegistry } from "@beyonder/tools";
+import { ToolExecutor, ToolRegistry, ToolSideEffect } from "@beyonder/tools";
 import type { IntelligenceTask, TaskOutcome } from "../intelligence/contracts.js";
 import { analyzeGoalContract } from "../intelligence/goal-contract.js";
 import type { ModelCandidate } from "../models/adaptive-types.js";
@@ -79,6 +79,92 @@ describe("objective verification truth", () => {
     const verdict = new ObjectiveVerifier().evaluate(execution(task, "Python 3.x is current."));
     expect(verdict).toMatchObject({ taskCompleted: false, objectiveStatus: "NEEDS_CAPABILITY", recoveryRecommendation: "ENABLE_CAPABILITY" });
   });
+  function observedCurrentExecution() {
+    const input = "Qual é a versão estável atual do Rust? Cite a fonte observada.";
+    const task: IntelligenceTask = { ...comparisonTask("claim-review"), input, type: "research", requirements: { browser: true, toolUse: true, tools: ["browser"] }, goalContract: analyzeGoalContract(input, "research") };
+    const ex = execution(task, "A versão estável observada é 1.99, conforme a página oficial citada.");
+    ex.steps.unshift({ ...ex.steps[0]!, toolCapabilities: ["browser"], toolCall: { id: "read", tool: "browser.read", arguments: {} }, toolResult: { success: true, durationMs: 1, sideEffects: [ToolSideEffect.READ], output: { result: { status: "ok", observation: { url: "https://www.rust-lang.org/", visibleText: "Current stable release: Rust 1.99." } } } } });
+    return ex;
+  }
+  const supportedVerdict = JSON.stringify({ satisfied: true, confidence: .95, relevance: true, completeness: true, consistentWithEvidence: true, reason: "The observed release supports the scoped answer.", missingRequirements: [], recoveryRecommendation: "NONE" });
+
+  it.each([
+    ["Explain the reliability tradeoff of a shorter update interval.", "A shorter interval guarantees that every observed value is current."],
+    ["Compare simple ways to copy a stateful local application safely.", "Copy its primary file at any time; related state files never matter."]
+  ])("cannot approve a material static guarantee rejected by separate counterexample review: %s", async (input, result) => {
+    const task = { ...comparisonTask("static-claims"), input, goalContract: analyzeGoalContract(input, "reasoning") };
+    const { router, complete, attempts } = fakeRouter(["verifier"], system => system.includes("STATIC CLAIM REVIEW")
+      ? JSON.stringify({ satisfied: false, confidence: .95, relevance: true, completeness: false, consistentWithEvidence: false, reason: "A valid state within the declared scope disproves the guarantee.", missingRequirements: ["correctly-scoped-guarantee"], recoveryRecommendation: "RETRY_SYNTHESIS" })
+      : supportedVerdict);
+    expect(await new ModelObjectiveVerifier(router).evaluate(execution(task, result))).toMatchObject({ taskCompleted: false, objectiveStatus: "FAILED", recoveryRecommendation: "RETRY_SYNTHESIS" });
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect([...attempts.values()].map(attempt => attempt.stepId)).toEqual(["objective-verification", "objective-verification-static-claim-review"]);
+    expect(JSON.parse(complete.mock.calls[1]![0][1]!.content).result).toBe(result);
+  });
+
+  it("cannot approve a plan when its separate recovery review rejects an uncreated restore artifact", async () => {
+    const input = "Plan a configuration migration with backup and rollback.";
+    const task = { ...comparisonTask("plan-recovery"), input, type: "planning" as const, goalContract: analyzeGoalContract(input, "planning") };
+    const ex = execution(task, "1. Back up source files. 2. Modify the deployed configuration. 3. Restore the configuration backup if validation fails.");
+    const { router, complete } = fakeRouter(["verifier"], system => system.includes("PLAN DEPENDENCY AND RECOVERY REVIEW")
+      ? JSON.stringify({ satisfied: false, confidence: .95, relevance: true, completeness: false, consistentWithEvidence: true, reason: "No backup of the changed configuration was created.", missingRequirements: ["usable-recovery-checkpoint"], recoveryRecommendation: "RETRY_SYNTHESIS" })
+      : supportedVerdict);
+    expect(await new ModelObjectiveVerifier(router).evaluate(ex)).toMatchObject({ taskCompleted: false, objectiveStatus: "FAILED", missingRequirements: ["usable-recovery-checkpoint"], recoveryRecommendation: "RETRY_SYNTHESIS" });
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(complete.mock.calls[1]![0][1]!.content).result).toBe(ex.result);
+    expect(ex.usage.shadowCostUsd).toBeCloseTo(.003);
+  });
+
+  it("keeps a supported rebuild plan verified only after the critical review finishes", async () => {
+    const input = "Plan an import into a new disposable database, including validation and recovery.";
+    const task = { ...comparisonTask("plan-rebuild"), input, type: "planning" as const, goalContract: analyzeGoalContract(input, "planning") };
+    const { router, complete } = fakeRouter(["verifier"], () => supportedVerdict);
+    const verdict = await new ModelObjectiveVerifier(router).evaluate(execution(task, "Preserve the original input. Import into a new temporary database. Validate it before publishing. On failure discard only that temporary database and rebuild from the preserved input."));
+    expect(verdict).toMatchObject({ taskCompleted: true, objectiveStatus: "SUCCEEDED", dimensions: expect.arrayContaining([expect.objectContaining({ name: "completeness", reason: expect.stringContaining("plan dependency and recovery") })]) });
+    expect(complete).toHaveBeenCalledTimes(2);
+  });
+
+  it("requires claim support even when the first independent judge approves current evidence", async () => {
+    const { router, complete, attempts } = fakeRouter(["verifier"], system => system.includes("EVIDENCE CLAIM REVIEW")
+      ? JSON.stringify({ satisfied: false, confidence: .95, relevance: true, completeness: false, consistentWithEvidence: false, reason: "The answer exceeds what the observed source supports.", missingRequirements: ["supported-claim"], recoveryRecommendation: "RETRY_SYNTHESIS" })
+      : supportedVerdict);
+    expect(await new ModelObjectiveVerifier(router).evaluate(observedCurrentExecution())).toMatchObject({ taskCompleted: false, objectiveStatus: "FAILED", recoveryRecommendation: "RETRY_SYNTHESIS" });
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect([...attempts.values()].map(attempt => attempt.stepId)).toEqual(["objective-verification", "objective-verification-claim-review"]);
+    expect(JSON.parse(complete.mock.calls[1]![0][1]!.content)).toMatchObject({ result: observedCurrentExecution().result, evidenceSources: ["https://www.rust-lang.org/"] });
+  });
+
+  it("accepts supported current evidence only after both independently attributed reviews finish", async () => {
+    const { router, complete } = fakeRouter(["verifier"], () => supportedVerdict);
+    const ex = observedCurrentExecution();
+    expect(await new ModelObjectiveVerifier(router).evaluate(ex)).toMatchObject({ taskCompleted: true, objectiveStatus: "SUCCEEDED", dimensions: expect.arrayContaining([expect.objectContaining({ name: "evidence", passed: true, reason: expect.stringContaining("claim review") })]) });
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(ex.usage.shadowCostUsd).toBeCloseTo(.003);
+  });
+
+  it("does not reset cloud-attempt or shadow budgets between the two reviews", async () => {
+    const { router, complete, attempts } = fakeRouter(["broken-a", "broken-b", "verifier"], (_system, model) => model === "verifier" ? supportedVerdict : "invalid envelope");
+    const ex = observedCurrentExecution();
+    expect(await new ModelObjectiveVerifier(router).evaluate(ex)).toMatchObject({ taskCompleted: false, objectiveStatus: "NEEDS_CAPABILITY", reason: expect.stringContaining("BUDGET_EXHAUSTED") });
+    expect(complete).toHaveBeenCalledTimes(3);
+    expect(attempts.size).toBe(3);
+    expect(ex.usage.shadowCostUsd).toBeCloseTo(.004);
+  });
+  it("allows both evidence reviews within survival's two-call cloud budget without resetting its legacy per-call cap", async () => {
+    const { router, complete } = fakeRouter(["verifier"], () => supportedVerdict);
+    const ex = { ...observedCurrentExecution(), economicState: "survival" as const };
+    expect(await new ModelObjectiveVerifier(router).evaluate(ex)).toMatchObject({ taskCompleted: true, objectiveStatus: "SUCCEEDED" });
+    expect(complete).toHaveBeenCalledTimes(2);
+    expect(ex.usage.shadowCostUsd).toBeCloseTo(.003);
+  });
+
+  it("rechecks the claim judge's actual physical identity and cannot self-certify through an alias", async () => {
+    const { router, complete, attempts } = fakeRouter(["gateway-alias", "real-verifier"], () => supportedVerdict);
+    complete.mockImplementation(async (messages, model) => ({ provider: model.provider, model: model.model, estimatedCostUsd: 0, content: supportedVerdict, attribution: { requestedModel: model.model, reportedModel: messages[0]!.content.includes("EVIDENCE CLAIM REVIEW") && model.model === "gateway-alias" ? "vendor/producer:free" : "independent-verifier" } }));
+    expect(await new ModelObjectiveVerifier(router).evaluate(observedCurrentExecution())).toMatchObject({ taskCompleted: true });
+    expect(complete).toHaveBeenCalledTimes(3);
+    expect([...attempts.values()].filter(attempt => attempt.stepId === "objective-verification-claim-review").map(attempt => attempt.status)).toEqual(["FAILED", "SUCCEEDED"]);
+  });
   it.each(["vendor/same-model:free", "same_model", "Same-Model"])("rechecks physical independence from the actual gateway response (%s)", async reportedModel => {
     const task = comparisonTask("resolved-alias");
     const verdict = JSON.stringify({ satisfied: true, confidence: 1, relevance: true, completeness: true, consistentWithEvidence: true, reason: "Satisfied", missingRequirements: [], recoveryRecommendation: "NONE" });
@@ -107,13 +193,13 @@ describe("objective verification truth", () => {
     const request = JSON.parse(complete.mock.calls[0]![0][1]!.content);
     expect(request.toolEvidence).toContainEqual(expect.objectContaining({tool: "calculator", observedOutput: JSON.stringify({value})}));
   });
-  it("sends the complete coding result and fails closed above the review limit", async () => {
+  it("sends the complete bounded artifact to both reviews and fails closed above the review limit", async () => {
     const { router, complete } = fakeRouter(["producer", "verifier"], () => JSON.stringify({ satisfied: true, confidence: 0.95, relevance: true, completeness: true, consistentWithEvidence: true, reason: "Complete result reviewed", missingRequirements: [], recoveryRecommendation: "NONE" }));
     const result = "Full program: " + "x".repeat(5_000) + " important final invariant";
     await new ModelObjectiveVerifier(router).evaluate(execution(comparisonTask(), result));
     expect(JSON.parse(complete.mock.calls[0]![0][1]!.content).result).toBe(result);
     expect((await new ModelObjectiveVerifier(router).evaluate(execution(comparisonTask(), "x".repeat(16_001)))).objectiveStatus).toBe("NEEDS_CAPABILITY");
-    expect(complete).toHaveBeenCalledTimes(1);
+    expect(complete).toHaveBeenCalledTimes(2);
   });
   it("does not let the answer producer certify its own open-ended answer", async () => {
     const task = comparisonTask();
@@ -169,8 +255,9 @@ describe("objective verification truth", () => {
     expect(completeForStructuredCandidate.mock.calls[0]?.[1]).toMatchObject({ provider: "fixture", model: "remote-verifier" });
   });
 
-  it("uses one zero-quota local verifier after malformed remote structured output", async () => {
-    const task = comparisonTask("local-verifier-after-invalid");
+  it.each(["short-answer", "critical-artifact"])("respects the original local review budget after malformed remote output (%s)", async kind => {
+    const input = kind === "short-answer" ? "Responda apenas com o nome: qual é a capital do Canadá?" : comparisonTask().input;
+    const task = { ...comparisonTask("local-verifier-after-invalid"), input, goalContract: analyzeGoalContract(input, "reasoning") };
     const remote = candidate("remote-verifier");
     const local = { ...candidate("local-verifier"), provider: "ollama", local: true, costClass: "FREE_CONFIRMED" as const, externalQuotaConsumption: false, shadowCostUsd: 0 };
     const completeForStructuredCandidate = vi.fn(async (_messages: unknown, model: ModelCandidate) => ({
@@ -189,9 +276,9 @@ describe("objective verification truth", () => {
       recordAttempt: vi.fn(async () => undefined)
     } as unknown as ModelRouter;
 
-    const verdict = await new ModelObjectiveVerifier(router).evaluate({ ...execution(task, "Queues distribute work while logs retain replayable history."), economicState: "survival" });
+    const verdict = await new ModelObjectiveVerifier(router).evaluate({ ...execution(task, kind === "short-answer" ? "Ottawa." : "Queues distribute work while logs retain replayable history."), economicState: "survival" });
 
-    expect(verdict).toMatchObject({ taskCompleted: true, objectiveStatus: "SUCCEEDED" });
+    expect(verdict).toMatchObject({ taskCompleted: kind === "short-answer", objectiveStatus: kind === "short-answer" ? "SUCCEEDED" : "NEEDS_CAPABILITY" });
     expect(completeForStructuredCandidate.mock.calls.map((call) => call[1])).toEqual([
       expect.objectContaining({ provider: "fixture", model: "remote-verifier" }),
       expect.objectContaining({ provider: "ollama", model: "local-verifier" })
@@ -218,10 +305,11 @@ describe("objective verification truth", () => {
     expect(outcome.execution.attempts?.map((attempt) => [attempt.phase, attempt.model, attempt.status])).toEqual([
       ["DIRECT_RESPONSE", "first", "SUCCEEDED"],
       ["DIRECT_RESPONSE", "alternate", "SUCCEEDED"],
+      ["OBJECTIVE_VERIFICATION", "first", "SUCCEEDED"],
       ["OBJECTIVE_VERIFICATION", "first", "SUCCEEDED"]
     ]);
     expect(outcomes.at(-1)).toMatchObject({ provider: "fixture", model: "alternate", success: true, evaluation: { method: "independent-semantic-objective-verifier" } });
-    expect(complete).toHaveBeenCalledTimes(3);
+    expect(complete).toHaveBeenCalledTimes(4);
   });
   it("records terminal completion after independent verification, separately from execution finish", async () => {
     const task = comparisonTask("terminal-time"); let clock = Date.now();
@@ -233,7 +321,32 @@ describe("objective verification truth", () => {
     const executor = new AutonomousTaskExecutor({ toolExecutor: new ToolExecutor(new ToolRegistry()), getAvailableTools: async () => [], modelRouter: router, completionEvaluator: new ModelObjectiveVerifier(router), now: () => clock });
     const plan: Plan = { id: "plan", taskId: task.id, objective: task.input, revision: 1, createdAt: new Date(clock).toISOString(), steps: [{ id: "answer", description: "Compare", kind: "DIRECT_RESPONSE", status: "PENDING" }] };
     const { execution: result } = await executor.execute({ task, plan, economicState: "normal" });
-    expect(Date.parse(result.completedAt!) - Date.parse(result.executionFinishedAt!)).toBe(5_000);
+    expect(Date.parse(result.completedAt!) - Date.parse(result.executionFinishedAt!)).toBe(10_000);
     expect(result.executionPhase).toBe("OBJECTIVE_VERIFIED");
+  });
+  it.each(["RETRY_SYNTHESIS", "ALTERNATE_MODEL"] as const)("respects %s when the only eligible producer has a separate qualified judge", async recommendation => {
+    const task = comparisonTask(`bounded-${recommendation}`);
+    let producerCalls = 0;
+    const { router, complete } = fakeRouter(["producer", "judge"], (system) => {
+      if (!system.includes("independent objective verifier")) {
+        producerCalls++;
+        return producerCalls === 1 ? "Queues distribute work." : "Queues distribute transient work; append-only logs preserve ordered history for replay and auditability, at a higher retention cost.";
+      }
+      const satisfied = producerCalls > 1;
+      return JSON.stringify({ satisfied, confidence: 0.95, relevance: true, completeness: satisfied, consistentWithEvidence: true, reason: satisfied ? "Both options and their trade-offs are explained." : "The answer omits append-only logs and the requested trade-offs.", missingRequirements: satisfied ? [] : ["log-comparison"], recoveryRecommendation: satisfied ? "NONE" : recommendation });
+    });
+    vi.mocked(router.route).mockImplementation(async routedTask => ({ task: routedTask, economicState: "normal", candidates: [candidate(routedTask.inferencePhase === "OBJECTIVE_VERIFICATION" ? "judge" : "producer")], selected: candidate("producer"), reason: "role-qualified pair", explored: false }));
+    const executor = new AutonomousTaskExecutor({ toolExecutor: new ToolExecutor(new ToolRegistry()), getAvailableTools: async () => [], modelRouter: router, completionEvaluator: new ModelObjectiveVerifier(router) });
+    const plan: Plan = { id: "bounded-plan", taskId: task.id, objective: task.input, revision: 1, createdAt: new Date().toISOString(), steps: [{ id: "answer", description: "Compare", kind: "DIRECT_RESPONSE", status: "PENDING" }] };
+    const outcome = await executor.execute({ task, plan, economicState: "normal", budget: { maxRetries: 1, maxShadowCostUsd: 1 } });
+    expect(outcome.execution.usage.retries).toBe(1);
+    expect(outcome.success).toBe(recommendation === "RETRY_SYNTHESIS");
+    expect(producerCalls).toBe(recommendation === "RETRY_SYNTHESIS" ? 2 : 1);
+    for (const attempt of outcome.execution.attempts?.filter(attempt => attempt.phase === "OBJECTIVE_VERIFICATION") ?? []) expect(attempt.model).toBe("judge");
+    if (recommendation === "RETRY_SYNTHESIS") {
+      const recoveryRequest = complete.mock.calls.filter(call => !call[0][0]?.content.includes("independent objective verifier")).at(-1)!;
+      expect(JSON.parse(recoveryRequest[0][1]!.content).recoveryReason).toContain("omits append-only logs");
+      expect(outcome.execution.objectiveStatus).toBe("SUCCEEDED");
+    } else expect(outcome.execution.objectiveStatus).not.toBe("SUCCEEDED");
   });
 });

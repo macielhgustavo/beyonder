@@ -1,4 +1,5 @@
 import type { IntelligenceTaskType, ModelCapabilityEvidence, ModelCapabilityRequest, ModelCapabilitySource, CapabilityDimension } from "@beyonder/runtime";
+import { physicalModelIdentity } from "@beyonder/runtime";
 import { BenchmarkStore } from "../persistence/store.js";
 import type { BenchmarkCategory, BenchmarkSummary } from "../types.js";
 
@@ -19,13 +20,32 @@ const DIMENSION_CATEGORIES: Record<CapabilityDimension, BenchmarkCategory> = { r
 
 export class BibModelCapabilitySource implements ModelCapabilitySource {
   private readonly summaries: BenchmarkSummary[];
+  private readonly unsafeVerifiers = new Map<string, { falseApprovals: number; lastFalseApprovalAt: string }>();
 
   constructor(benchmarkStore: BenchmarkStore) {
     try {
       this.summaries = benchmarkStore.summaries();
+      for (const result of benchmarkStore.listResults()) {
+        // This explicit adjudication is distinct from a refusal, false
+        // rejection, generic low score or an upstream failure. Neither a
+        // provider alias nor a different sampling profile erases a known
+        // unsafe physical judge. Original observations remain untouched.
+        if (result.errorCode !== "VERIFIER_FALSE_APPROVAL" || result.status !== "FAIL" || result.quality !== 0 || result.success !== false || !["verification", "evidence-grounding"].includes(result.category)) continue;
+        const identity = physicalModelIdentity(result.model);
+        const previous = this.unsafeVerifiers.get(identity);
+        const observedAt = result.timestamp.toISOString();
+        this.unsafeVerifiers.set(identity, {
+          falseApprovals: (previous?.falseApprovals ?? 0) + 1,
+          lastFalseApprovalAt: previous && previous.lastFalseApprovalAt > observedAt ? previous.lastFalseApprovalAt : observedAt
+        });
+      }
     } finally {
       benchmarkStore.close();
     }
+  }
+
+  async getVerificationSafetyEvidence(model: string) {
+    return this.unsafeVerifiers.get(physicalModelIdentity(model)) ?? null;
   }
 
   async listInferenceProfiles(input: Pick<ModelCapabilityRequest, "provider" | "model">): Promise<string[]> {

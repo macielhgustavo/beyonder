@@ -47,11 +47,40 @@ describe("socket-bound SSRF enforcement", () => {
 
   it("accepts genuine IPv4-only hosts without silently discarding a DNS timeout", async () => {
     const missing = Object.assign(new Error("no IPv6"), { code: "ENODATA" });
-    const resolve6 = vi.fn().mockRejectedValueOnce(missing).mockRejectedValueOnce(Object.assign(new Error("DNS timed out"), { code: "ETIMEOUT" }));
+    const resolve6 = vi.fn().mockRejectedValue(Object.assign(new Error("DNS timed out"), { code: "ETIMEOUT" })).mockRejectedValueOnce(missing);
     const resolver = new SystemAddressResolver({ resolve4: vi.fn(async () => ["93.184.216.34"]), resolve6 } as never);
     const engine = new BrowserPolicyEngine(mergeBrowserPolicy(), resolver);
     expect(await engine.resolveConnection("https://ipv4-only.test/")).toMatchObject({ target: { address: "93.184.216.34" } });
     expect(await engine.resolveConnection("https://ipv4-only.test/next")).toMatchObject({ decision: { allowed: false, reason: "dns-resolution-failed" } });
+  });
+  it("coalesces concurrent DNS observations without caching a completed public answer", async () => {
+    let release!: (addresses: string[]) => void;
+    const first = new Promise<string[]>(resolve => { release = resolve; });
+    const resolve4 = vi.fn().mockReturnValueOnce(first).mockResolvedValue(["127.0.0.1"]);
+    const resolver = new SystemAddressResolver({ resolve4, resolve6: vi.fn(async () => []) } as never);
+    const engine = new BrowserPolicyEngine(mergeBrowserPolicy(), resolver);
+    const pending = [engine.resolveConnection("https://rebinding.test/a"), engine.resolveConnection("https://rebinding.test/b")];
+    expect(resolve4).toHaveBeenCalledTimes(1);
+    release(["93.184.216.34"]);
+    expect(await Promise.all(pending)).toEqual([expect.objectContaining({ target: expect.objectContaining({ address: "93.184.216.34" }) }), expect.objectContaining({ target: expect.objectContaining({ address: "93.184.216.34" }) })]);
+    expect(await engine.resolveConnection("https://rebinding.test/c")).toMatchObject({ decision: { allowed: false, reason: "internal-network-blocked" } });
+    expect(resolve4).toHaveBeenCalledTimes(2);
+  });
+  it("retries both families after a transient DNS failure and rejects a private retry answer", async () => {
+    const resolve4 = vi.fn().mockResolvedValue(["93.184.216.34"]);
+    const resolve6 = vi.fn().mockRejectedValueOnce(Object.assign(new Error("temporary DNS timeout"), { code: "ETIMEOUT" })).mockResolvedValue(["::1"]);
+    const engine = new BrowserPolicyEngine(mergeBrowserPolicy(), new SystemAddressResolver({ resolve4, resolve6 } as never));
+    expect(await engine.resolveConnection("https://retry.test/")).toMatchObject({ decision: { allowed: false, reason: "internal-network-blocked" } });
+    expect(resolve4).toHaveBeenCalledTimes(2);
+    expect(resolve6).toHaveBeenCalledTimes(2);
+  });
+  it("never retries away an observed private address when the other DNS family times out", async () => {
+    const resolve4 = vi.fn().mockResolvedValueOnce(["127.0.0.1"]).mockResolvedValue(["93.184.216.34"]);
+    const resolve6 = vi.fn().mockRejectedValue(Object.assign(new Error("temporary DNS timeout"), { code: "ETIMEOUT" }));
+    const engine = new BrowserPolicyEngine(mergeBrowserPolicy(), new SystemAddressResolver({ resolve4, resolve6 } as never));
+    expect(await engine.resolveConnection("https://mixed.test/")).toMatchObject({ decision: { allowed: false, reason: "internal-network-blocked" } });
+    expect(resolve4).toHaveBeenCalledTimes(1);
+    expect(resolve6).toHaveBeenCalledTimes(1);
   });
   it("pins the socket to the validated public address even if DNS later rebinds", async () => {
     const resolver = new AlternatingResolver({ "attacker.test": [["93.184.216.34"], ["127.0.0.1"]] });

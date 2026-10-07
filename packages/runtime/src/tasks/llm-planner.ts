@@ -170,8 +170,10 @@ export class LlmPlanner implements Planner {
 }
 
 function deterministicBrowserPlan(request: PlanRequest, browserTools: ToolDescriptor[]): Plan {
+  const read = browserTools.find((tool) => tool.capabilities.includes("browser:read"));
   const open = browserTools.find((tool) => tool.capabilities.includes("browser:open"));
   if (!open) throw new InferenceError("Browser reading is required but no compatible read-only browser open tool is available.", "TOOL_UNAVAILABLE");
+  const sourceReader = read ?? open;
   const minimumSources = Math.max(1, Math.min(3, request.task.goalContract?.minimumEvidenceSources ?? 1));
   const steps: Plan["steps"] = [];
   const sourceIds: string[] = [];
@@ -190,7 +192,7 @@ function deterministicBrowserPlan(request: PlanRequest, browserTools: ToolDescri
       expectedOutcome: "The requested public page is open and its visible contents are observed.",
       allowedToolCapabilities: ["browser", "browser:open"],
       dependencies: steps.length ? [steps.at(-1)!.id] : undefined,
-      action: { id: `call_${request.task.id}_browser_source_${index + 1}`, tool: open.id, arguments: { url } },
+      action: { id: `call_${request.task.id}_browser_source_${index + 1}`, tool: sourceReader.id, arguments: { url, ...(!read ? { readMode: "adaptive" } : {}) } },
       alternativeUrls: sources[index]!.alternatives,
       evidenceRole: topics.length ? "DISCOVERY" : "SOURCE"
     });

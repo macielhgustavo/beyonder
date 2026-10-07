@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { AutopilotStateStore } from "@beyonder/compute";
 import { createRuntime } from "../runtime.js";
 import { loadConfig } from "../config/env.js";
-import { httpFailure, parseRetryAfter, runCandidates, type InferenceAttempt } from "./inference.js";
+import { httpFailure, parseRetryAfter, parseRateLimitReset, runCandidates, type InferenceAttempt } from "./inference.js";
 import { ModelRouter } from "./model-router.js";
 import { OperationalHealthStore, operationalCooldown } from "./operational-health.js";
 import { AutopilotQuotaSource, parseReset } from "./quota.js";
@@ -124,6 +124,38 @@ describe("H1 persistent scoped operational health", () => {
     expect(error.retryAfterAt).toBeDefined();
     expect(JSON.stringify(error)).not.toContain("SECRET");
     expect(operationalCooldown(attempt({ retryAfterAt: "2026-10-04T12:01:00Z" }), now)?.until).toBe("2026-10-04T12:01:00.000Z");
+  });
+  it.each(["1791331200000", "1791331200", "2026-10-07T00:00:00Z"])("honors an observed upstream reset instead of guessing a rolling 24 hours (%s)", reset => {
+    const now = Date.parse("2026-10-06T04:20:42Z");
+    const responseBody = JSON.stringify({ error: { message: "daily limit", metadata: { headers: { "X-RateLimit-Reset": reset } } } });
+    expect(parseRateLimitReset(responseBody, undefined, now)).toBe("2026-10-07T00:00:00.000Z");
+    expect(operationalCooldown(attempt({ responseBody, failureScope: "model" }), now)).toMatchObject({ until: "2026-10-07T00:00:00.000Z", deadlineSource: "provider-reset", scope: "model" });
+  });
+  it("keeps the later restriction when Retry-After and an upstream reset disagree", () => {
+    const now = Date.parse("2026-10-06T04:20:42Z");
+    const responseBody = JSON.stringify({ error: { message: "daily limit", metadata: { headers: { "x-ratelimit-reset": "1791331200000" } } } });
+    expect(operationalCooldown(attempt({ responseBody, retryAfterAt: "2026-10-07T05:00:00Z" }), now)?.until).toBe("2026-10-07T05:00:00.000Z");
+    for (const reset of ["nonsense", "-1", {}, null]) {
+      const malformed = JSON.stringify({ error: { metadata: { headers: { "X-RateLimit-Reset": reset } } } });
+      expect(parseRateLimitReset(malformed, undefined, now)).toBeUndefined();
+      expect(operationalCooldown(attempt({ responseBody: "daily limit " + malformed }), now)).toMatchObject({ until: "2026-10-07T04:20:42.000Z", deadlineSource: "fallback" });
+    }
+  });
+  it.each(["past", "future", "missing", "different-model"] as const)("repairs a persisted guessed deadline only from its matching original response (%s)", condition => {
+    const now = Date.now(), resetAt = now + (condition === "future" ? 3_600_000 : -3_600_000);
+    return (async () => {
+      const r = runtime();
+      const failedAt = now - 2 * 3_600_000;
+      const responseBody = JSON.stringify({ error: { message: "daily limit", metadata: { headers: condition === "missing" ? {} : { "X-RateLimit-Reset": String(resetAt) } } } });
+      const original = attempt({ model: condition === "different-model" ? "sibling" : "m", responseBody, failureScope: "model", completedAt: new Date(failedAt).toISOString() });
+      try {
+        await r.modelRouter.recordAttempt(original);
+        await r.state.set("model-health:p:m", { samples: 1, failures: 1, latencyMs: 10, lastFailureAt: original.completedAt, cooldown: { reason: "QUOTA_EXHAUSTED", scope: "model", until: new Date(failedAt + 86_400_000).toISOString() } });
+        expect(await r.modelRouter.canAttempt(candidate("p"))).toBe(condition === "past");
+        expect((await r.modelRouter.attemptsFor("t"))[0]).toEqual(original);
+        expect((await r.modelRouter.operationalHealth.get("p", "m")).failures).toBe(1);
+      } finally { r.sqlite.close(); }
+    })();
   });
   it("persists auth exclusion across restart and releases it only after expiry", async () => {
     const dbPath = join(await mkdtemp(join(tmpdir(), "beyonder-rc-")), "runtime.sqlite");

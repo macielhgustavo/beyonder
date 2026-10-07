@@ -24,6 +24,8 @@ export interface ModelCapabilityEvidence {
 }
 
 export interface ModelCapabilitySource {
+  /** Adjudicated unsafe verdicts cannot be diluted by unrelated passing samples. */
+  getVerificationSafetyEvidence?(model: string): Promise<{ falseApprovals: number; lastFalseApprovalAt: string } | null>;
   listInferenceProfiles?(input: Pick<ModelCapabilityRequest, "provider" | "model">): Promise<string[]>;
   getCapability(input: ModelCapabilityRequest): Promise<ModelCapabilityEvidence | null>;
   getCapabilityScore(input: ModelCapabilityRequest): Promise<number | null>;

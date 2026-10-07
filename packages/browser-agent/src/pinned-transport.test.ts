@@ -7,6 +7,20 @@ const cleanup: Array<() => Promise<void> | void> = [];
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); });
 
 describe("proxy-compatible pinned transport", () => {
+  it("cannot restart network activity after its browser session closes", async () => {
+    let requests = 0;
+    const server = createServer((_request, response) => { requests++; response.end("observed"); });
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    cleanup.push(() => new Promise<void>(resolve => server.close(() => resolve())));
+    const url = new URL(`http://127.0.0.1:${(server.address() as AddressInfo).port}/`);
+    const transport = new PinnedHttpTransport({ proxyUrl: null });
+    const request = { url: url.href, method: "GET", headers: {} };
+    const target = { url, address: "127.0.0.1", family: 4 as const };
+    await transport.fetch(request, target);
+    transport.close();
+    await expect(transport.fetch(request, target)).rejects.toThrow("transport is closed");
+    expect(requests).toBe(1);
+  });
   it.each(["report-to", "vary", "content-security-policy"])("combines repeated %s without invalid HTTP newlines while preserving separate cookies", async name => {
     const server = createServer((_request, response) => {
       response.setHeader(name, ["first", "second"]);

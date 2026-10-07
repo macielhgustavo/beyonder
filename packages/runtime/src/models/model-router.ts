@@ -47,6 +47,8 @@ export class ModelRouter {
   async canAttempt(candidate: Pick<ModelCandidate, "provider" | "model">): Promise<boolean> {
     const repaired = await this.operationalHealth.reclassifyLegacyProviderCooldown(candidate.provider);
     if (repaired) await this.options.telemetry?.record("info", "router.cooldown_scope_repaired", { provider: candidate.provider, ...repaired, evidenceSource: "persisted-original-provider-response" });
+    const deadline = await this.operationalHealth.reclassifyLegacyModelDeadline(candidate.provider, candidate.model);
+    if (deadline) await this.options.telemetry?.record("info", "router.cooldown_deadline_repaired", { provider: candidate.provider, model: candidate.model, ...deadline, evidenceSource: "persisted-original-rate-limit-reset" });
     let cooldown = await this.operationalHealth.blocked(candidate.provider, candidate.model);
     if (cooldown?.scope === "provider" && cooldown.reason === "AUTH_REQUIRED" && getProvider(candidate.provider)?.authType === "keyless") {
       // A real, newer successful keyless inference disproves an old gateway-

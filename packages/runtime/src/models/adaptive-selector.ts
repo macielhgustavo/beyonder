@@ -4,7 +4,8 @@ import type { EconomicState } from "../types.js";
 import type { ModelCapabilitySource } from "./capability-source.js";
 import { NullCapabilitySource, predictCapability } from "./capability-source.js";
 import type { CapabilityPredictionEvidence, HistoricalPerformance, ModelCandidate, RejectedCandidate, RouteDecision, RouterTelemetry } from "./adaptive-types.js";
-import { CLOUD_FIRST_POLICY, assessCapability, computeTier, executionTierRank, paidCandidateAllowed, resolveQualityFloor, routingScore } from "./compute-policy.js";
+import { CLOUD_FIRST_POLICY, assessCapability, computeTier, executionTierRank, paidCandidateAllowed, resolveQualityFloor, routingScore, objectivePhaseTask } from "./compute-policy.js";
+import { physicalModelIdentity } from "./model-identity.js";
 import type { PerformanceRepository } from "./performance-repository.js";
 import { EmptyPerformanceRepository } from "./performance-repository.js";
 import type { QuotaSource } from "./quota.js";
@@ -98,6 +99,18 @@ export class AdaptiveModelSelector {
     }
 
     for (const pair of profiledPairs) {
+      const unsafeVerdicts = task.inferencePhase === "OBJECTIVE_VERIFICATION"
+        ? await this.capabilitySource.getVerificationSafetyEvidence?.(pair.model) : undefined;
+      if (unsafeVerdicts?.falseApprovals) {
+        const rejected: RejectedCandidate = {
+          provider: pair.entry.providerId, model: pair.model, inferenceProfile: pair.inferenceProfile,
+          computeTier: pair.entry.providerId === "ollama" ? "LOCAL_EMERGENCY" : "OTHER_FREE_CLOUD",
+          reasons: [`verification safety: ${unsafeVerdicts.falseApprovals} adjudicated false approval(s); latest ${unsafeVerdicts.lastFalseApprovalAt}. Passing sample averages do not establish a safe verifier.`]
+        };
+        rejectedCandidates.push(rejected);
+        await this.telemetry("debug", "router.candidate_rejected", { taskId: task.id, ...rejected });
+        continue;
+      }
       if (this.options.canAttempt && !await this.options.canAttempt({ provider: pair.entry.providerId, model: pair.model })) {
         const rejected: RejectedCandidate = {
           provider: pair.entry.providerId,
@@ -120,6 +133,16 @@ export class AdaptiveModelSelector {
         inferenceProfile,
         dimensions: Object.keys(qualityFloor.dimensions) as Array<keyof typeof qualityFloor.dimensions>
       });
+      if (inferenceProfile === "reasoning-disabled:max-output-2400" && benchmarkCapability?.inferenceProfile !== inferenceProfile) {
+        const rejected: RejectedCandidate = {
+          provider: pair.entry.providerId, model: pair.model, inferenceProfile,
+          computeTier: pair.entry.providerId === "ollama" ? "LOCAL_EMERGENCY" : "OTHER_FREE_CLOUD",
+          reasons: ["no observed task capability for the requested inference profile"]
+        };
+        rejectedCandidates.push(rejected);
+        await this.telemetry("debug", "router.candidate_rejected", { taskId: task.id, ...rejected });
+        continue;
+      }
       const predictedQuality = predictCapability({
         benchmarkPrior: benchmarkCapability?.score,
         performance,
@@ -257,7 +280,7 @@ export class AdaptiveModelSelector {
       candidate.explanation.constraints.push(`compute-tier=${tier}`, `quality-floor=${qualityFloor.level}:${qualityFloor.minimumOverall}`, `capability-fit=${capabilityFit.overall}`);
       consideredCandidates.push(candidate);
 
-      await this.telemetry("debug", "router.candidate_scored", serializeCandidate(candidate, task.id));
+      await this.telemetry("debug", "router.candidate_scored", serializeCandidate(candidate, task.id, task.inferencePhase));
       if (rejectionReasons.length === 0) {
         candidates.push(candidate);
       } else {
@@ -291,6 +314,34 @@ export class AdaptiveModelSelector {
     }
     consideredCandidates.sort((a, b) => executionTierRank(a.computeTier) - executionTierRank(b.computeTier) || (b.routingScore ?? -Infinity) - (a.routingScore ?? -Infinity));
 
+    let verifierShortage = false;
+    if (task.inferencePhase === "DIRECT_RESPONSE" && task.goalContract && candidates.length) {
+      // Allocate an eligible pair, rather than consuming the only adequate
+      // independent judge as the producer. The judge is still routed again at
+      // execution time: this preview cannot certify future availability.
+      const verification = await this.route(objectivePhaseTask(task, "OBJECTIVE_VERIFICATION"), economicState);
+      for (let index = 0; index < candidates.length;) {
+        const producer = candidates[index]!;
+        const judges = verification.candidates.filter(judge => physicalModelIdentity(judge.model) !== physicalModelIdentity(producer.model));
+        if (judges.length) {
+          producer.explanation.constraints.push(`independent-verifier-candidates=${judges.length}`);
+          index++;
+          continue;
+        }
+        verifierShortage = true;
+        candidates.splice(index, 1);
+        producer.eligible = false;
+        producer.rejectionReasons = [...(producer.rejectionReasons ?? []), "no independently qualified verifier for this producer"];
+        const rejected: RejectedCandidate = {
+          provider: producer.provider, model: producer.model, inferenceProfile: producer.inferenceProfile,
+          computeTier: producer.computeTier!, reasons: producer.rejectionReasons,
+          capabilityFit: producer.capabilityFit
+        };
+        rejectedCandidates.push(rejected);
+        await this.telemetry("debug", "router.candidate_rejected", { taskId: task.id, phase: task.inferencePhase, capacityRole: "VERIFIER", ...rejected });
+      }
+    }
+
     if (candidates.length === 0) {
       await this.telemetry("warn", "router.needs_capability", {
         taskId: task.id,
@@ -305,7 +356,7 @@ export class AdaptiveModelSelector {
         rejectedCandidates,
         explored: false,
         capacityStatus: "NEEDS_CAPABILITY",
-        reason: "adequate models for this mission are unavailable; available compute is below the mission quality floor or policy constraints"
+        reason: verifierShortage ? "producer capacity exists, but no independently qualified verifier is available for an eligible pair" : "adequate models for this mission are unavailable; available compute is below the mission quality floor or policy constraints"
       };
     }
 
@@ -317,7 +368,7 @@ export class AdaptiveModelSelector {
       const offset = Math.floor(this.random.next() * (explorationPool.length - 1));
       selected = explorationPool[1 + offset] ?? selected;
       explored = selected !== candidates[0];
-      if (explored) await this.telemetry("info", "router.exploration_selected", serializeCandidate(selected, task.id));
+      if (explored) await this.telemetry("info", "router.exploration_selected", serializeCandidate(selected, task.id, task.inferencePhase));
     }
 
     const capacityStatus = cloudCandidates.length > 0 ? "NORMAL" : "CAPACITY_REDUCED";
@@ -330,7 +381,7 @@ export class AdaptiveModelSelector {
       });
     }
 
-    await this.telemetry("info", "router.selected", serializeCandidate(selected, task.id));
+    await this.telemetry("info", "router.selected", serializeCandidate(selected, task.id, task.inferencePhase));
     return {
       ...baseDecision,
       candidates,
@@ -388,9 +439,10 @@ export function workloadForTask(taskType: IntelligenceTask["type"]): ModelWorklo
   return taskType === "chat" || taskType === "memory" ? "general_chat" : taskType;
 }
 
-function serializeCandidate(candidate: ModelCandidate, taskId: string): Record<string, unknown> {
+function serializeCandidate(candidate: ModelCandidate, taskId: string, phase?: IntelligenceTask["inferencePhase"]): Record<string, unknown> {
   return {
     taskId,
+    phase,
     provider: candidate.provider,
     model: candidate.model,
     inferenceProfile: candidate.inferenceProfile,

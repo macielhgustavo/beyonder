@@ -1,5 +1,5 @@
 import type { StateStore } from "../memory/state-store.js";
-import { responseFailureScope, type InferenceAttempt } from "./inference.js";
+import { parseRateLimitReset, responseFailureScope, type InferenceAttempt } from "./inference.js";
 
 export interface OperationalHealth {
   samples: number;
@@ -7,7 +7,7 @@ export interface OperationalHealth {
   latencyMs: number;
   lastSuccessAt?: string;
   lastFailureAt?: string;
-  cooldown?: { reason: string; scope: "provider" | "model"; until: string };
+  cooldown?: { reason: string; scope: "provider" | "model"; until: string; deadlineSource?: "provider-reset" | "retry-after" | "fallback" };
 }
 const empty = (): OperationalHealth => ({ samples: 0, failures: 0, latencyMs: 0 });
 export function operationalCooldown(attempt: InferenceAttempt, now = Date.now()): OperationalHealth["cooldown"] {
@@ -30,12 +30,33 @@ export function operationalCooldown(attempt: InferenceAttempt, now = Date.now())
   // A generic bad request/output is not evidence that a provider is unavailable.
   if (!duration) return undefined;
   const retryAt = Date.parse(attempt.retryAfterAt ?? "");
-  const until = Number.isFinite(retryAt) && retryAt > now ? Math.min(retryAt, now + 7 * 24 * 60 * 60_000) : now + duration;
-  return { reason, scope, until: new Date(until).toISOString() };
+  const resetAt = cls === "RATE_LIMITED" ? Date.parse(parseRateLimitReset(body, undefined, now) ?? "") : NaN;
+  const observed = [retryAt, resetAt].filter(timestamp => Number.isFinite(timestamp) && timestamp > now);
+  const until = observed.length ? Math.min(Math.max(...observed), now + 7 * 86_400_000) : now + duration;
+  return { reason, scope, until: new Date(until).toISOString(), deadlineSource: observed.length ? resetAt === until ? "provider-reset" : "retry-after" : "fallback" };
 }
 
 export class OperationalHealthStore {
   private readonly checkedLegacyScopes = new Set<string>();
+  private readonly checkedLegacyDeadlines = new Set<string>();
+  async reclassifyLegacyModelDeadline(provider: string, model: string): Promise<{ attemptId: string; beforeUntil: string; until: string } | undefined> {
+    const key = `model-health:${provider}:${model}`;
+    if (!this.state || this.checkedLegacyDeadlines.has(key)) return;
+    this.checkedLegacyDeadlines.add(key);
+    const health = await this.get(provider, model);
+    if (!health.cooldown || health.cooldown.deadlineSource || !["RATE_LIMITED", "QUOTA_EXHAUSTED"].includes(health.cooldown.reason)) return;
+    const attempts = (await this.state.values<InferenceAttempt[]>("task-attempts:")).flat();
+    const origin = attempts.find(attempt => attempt.provider === provider && attempt.model === model && attempt.status === "FAILED" && attempt.completedAt === health.lastFailureAt);
+    const failedAt = Date.parse(origin?.completedAt ?? "");
+    if (!origin || !Number.isFinite(failedAt)) return;
+    const observed = operationalCooldown(origin, failedAt);
+    if (!observed || observed.scope !== "model" || observed.deadlineSource === "fallback") return;
+    // Reinterpret only the matching retained provider response. A catalog or
+    // successful sibling cannot erase quota, and a newer failure wins the race.
+    const updated = await this.state.update<OperationalHealth>(key, empty(), current => current.lastFailureAt === health.lastFailureAt && current.cooldown?.until === health.cooldown!.until ? { ...current, cooldown: observed } : current);
+    if (updated.lastFailureAt !== health.lastFailureAt || updated.cooldown?.until !== observed.until || updated.cooldown?.deadlineSource !== observed.deadlineSource) return;
+    return { attemptId: origin.id, beforeUntil: health.cooldown.until, until: observed.until };
+  }
   async reclassifyLegacyProviderCooldown(provider: string): Promise<{ attemptId: string; model: string; reason: string } | undefined> {
     if (!this.state || this.checkedLegacyScopes.has(provider)) return;
     this.checkedLegacyScopes.add(provider);

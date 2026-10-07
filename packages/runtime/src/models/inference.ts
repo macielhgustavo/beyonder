@@ -1,5 +1,6 @@
 import { nanoid } from "nanoid";
 import { redactSecrets, redactString } from "@beyonder/tools";
+import { parseReset } from "./quota.js";
 import type { ModelCandidate } from "./adaptive-types.js";
 import type { ModelMessage, ModelResponse } from "../types.js";
 
@@ -40,7 +41,9 @@ export function httpFailure(status: number, body: string, headers?: Headers): In
   const safeBody = safeDiagnosticBody(body);
   const detail = /tool_use_failed|Tool choice is none, but model called a tool/i.test(body) ? " Model attempted a tool call in an inference phase where tools are disabled; it was not executed." : "";
   const failureScope = responseFailureScope(body);
-  return new InferenceError(`Provider returned HTTP ${status}.${detail}`, failureClass, status, safeBody.slice(0, 1500), parseRetryAfter(headers?.get("retry-after")), failureScope);
+  const deadlines = [parseRetryAfter(headers?.get("retry-after")), parseRateLimitReset(body, headers)].filter((value): value is string => Boolean(value));
+  const retryAfterAt = deadlines.length ? new Date(Math.max(...deadlines.map(Date.parse))).toISOString() : undefined;
+  return new InferenceError(`Provider returned HTTP ${status}.${detail}`, failureClass, status, safeBody.slice(0, 1500), retryAfterAt, failureScope);
 }
 
 /** Gateways can report upstream HTTP errors in a successful HTTP envelope. */
@@ -72,6 +75,26 @@ export function parseRetryAfter(raw?: string | null, now = Date.now()): string |
   const numeric = Number(value);
   const until = Number.isFinite(numeric) ? numeric >= 0 ? now + numeric * 1000 : NaN : Date.parse(value);
   return Number.isFinite(until) && until >= now ? new Date(Math.min(until, now + 7 * 86_400_000)).toISOString() : undefined;
+}
+
+/** A gateway can embed the upstream's reset headers inside its error envelope. */
+export function parseRateLimitReset(body: string, headers?: Headers, now = Date.now()): string | undefined {
+  let embedded: Record<string, unknown> = {};
+  try {
+    const value = JSON.parse(body)?.error?.metadata?.headers;
+    if (value && typeof value === "object" && !Array.isArray(value)) embedded = value;
+  } catch { /* A missing or malformed reset keeps the conservative fallback. */ }
+  const normalized = Object.fromEntries(Object.entries(embedded).map(([key, value]) => [key.toLowerCase(), value]));
+  const deadlines: number[] = [];
+  for (const name of ["x-ratelimit-reset", "x-ratelimit-reset-requests", "x-rate-limit-reset", "ratelimit-reset"]) {
+    for (const raw of [headers?.get(name), normalized[name]]) {
+      if (typeof raw !== "string" && typeof raw !== "number") continue;
+      const parsed = parseReset(String(raw), now);
+      const timestamp = parsed === "unknown" ? NaN : Date.parse(parsed);
+      if (Number.isFinite(timestamp) && timestamp > now) deadlines.push(timestamp);
+    }
+  }
+  return deadlines.length ? new Date(Math.min(Math.max(...deadlines), now + 7 * 86_400_000)).toISOString() : undefined;
 }
 
 export function validateDirectResponse(content: string): string {

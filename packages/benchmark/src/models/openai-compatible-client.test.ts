@@ -48,3 +48,9 @@ describe("OpenAiCompatibleBenchmarkClient", () => {
     expect(response.tokens).toBe(7);
   });
 });
+
+
+it.each(['vendor/step-5-preview-free','vendor/model-2-free','vendor/model-3:free'])('keeps free request route while attributing its physical model %s',async targetModel=>{
+ const model=targetModel.replace(/(?::|-)free$/,'');const spy=vi.spyOn(globalThis,'fetch').mockResolvedValue(new Response(JSON.stringify({model,choices:[{message:{content:'OK'}}],usage:{cost:0}})));
+ try {const result=await new OpenAiCompatibleBenchmarkClient().complete({provider:'free',providerName:'Free',model:targetModel,baseUrl:'https://example.com/v1'},[]);expect(result.model).toBe(targetModel);expect(JSON.parse(String(spy.mock.calls[0][1]?.body)).model).toBe(targetModel);} finally {spy.mockRestore();}
+});

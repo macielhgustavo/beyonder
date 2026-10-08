@@ -213,3 +213,68 @@ PASS custo0. Registros externos p1c-*.log em /workspace/beyonder-p1-evidence.
 P1C_REPORT.md documenta A–L, causas, migração e medição0 recuperados.
 PORTABLE_CREDENTIAL_RESOLUTION_READY=true (arquitetura/regressões; não capacidade
 live nem produto qualificado). Sem CI_GREEN,sem38,semVisualQA neste P1-C.
+
+## Retentativa autorizada — 2026-10-08
+
+CURRENT_HEAD anterior:4d25c69d787867438e7d9afa39947f26a71507c5.
+Fetch confirmado,branch feat/v05-final-integration limpa/alinhada na partida.
+Relógio UTC23:23; reset Inkling anterior2026-10-08T00:00:00Z já havia passado.
+
+Inkling:1 tentativa real em rota explicitamente gratuita. HTTP429,964ms,quota
+compartilhada diária restante0/1000. Novo reset do próprio provider:
+2026-10-09T00:00:00Z. Não executar repetidas tentativas antes do novo reset.
+
+Mudança material do catálogo Kilo:401 modelos,16 rotas gratuitas explícitas.
+Entraram stepfun/step-5-preview-free e stealth/glyph-cluster; saíram
+inclusionai/ling-3.0-flash-sante:free e stepfun/step-3.7-flash:free.
+Não reiniciado audit29. Glyph não qualificado como independente: identidade
+física opaca. Step5, candidato realmente novo:primeiro HTTP429 concurrency141/140;
+segunda tentativa limitada após backoff respondeu OK,HTTP200,1188ms. Isto NÃO
+qualifica producer para coding/planning/research.
+
+Fix sistêmico mínimo:identidade física central remove sufixo de rota :free OU
+-free. Benchmark usa a mesma função do router/BIB; não mantém uma cópia.
+Pedido continua enviando a rota gratuita original. Versões distintas continuam
+distintas; alias gratuito nunca reabilita juiz inseguro nem cria independência.
+Regressões:original Step5 e2análogos,modelremap,Step3.7 unsafe alias,Step5 antes/depois
+observação negativa.45 testes focados PASS; compile runtime/benchmark PASS.
+Ambiente desta retentativa:Node24.19.0,pnpm11.19.0,SQLite funcional nos testes;
+toolchain temporária anterior ausente. Nenhum fullCI/VisualQA repetido.
+
+Step5 falhou na PRIMEIRA contraprova real:aprovou com confidence0.95 o artifact
+TTL que afirma garantia de estado atual. Counterexample:origem muda antes do TTL
+expirar. Qualificação interrompida; não repetidas8 contraprovas nem36 smokes.
+Esta é uma aprovação falsa do modelo no probe independente, NÃO um SUCCEEDED de
+missão de produto; protocolo final de2 reviews NÃO foi executado neste probe.
+A observação REAL do juiz é negativa e não performance do producer controlado.
+Persistida idempotentemente nas2BIBs:542 linhas cada,19 adjudicações inseguras.
+Alias físico step-5-preview/step-5-preview-free tem gate de segurança comprovado.
+Nenhum histórico apagado. Nenhuma fixture/source/browser evidence inventada.
+
+Evidência portátil:checkpoint-evidence/2026-10-08-compute-retry.json.
+Raw autorizado externo:/workspace/beyonder-p1-evidence/retry-2026-10-08/.
+Metadados sensíveis/hidden reasoning do gateway não incluídos noGit.
+Custo monetário adicional0;shadow cost UNKNOWN,não estimado sem preço.
+0goldens,0missões completas,0matriz38 nesta retentativa. Não afirmar false success
+rate de produto0 com base neste probe nem gate remoto GREEN.
+
+BLOCKER:nenhum verifier independente adequado/acessível provado agora;Inkling
+quota esgotada eStep5 resposta de verificação comprovadamente incorreta.
+WHY_CODE_CANNOT_FIX_IT:normalização de rota corrigida,mas código não cria quota
+upstream nem transforma uma aprovação falsa em capacidade confiável. Não pagar,
+não baixar floor,não removerindependência,não promoverOllama.
+WHAT_GUSTAVO_MUST_PROVIDE:com a opção de acessos existentes mantida,nova quota
+real utilizável após o reset do provider;nenhum segredo solicitado nochat.
+Próximo passo:1probeInkling após2026-10-09T00:00:00Z;seháquota,contraprovas originais
++2análogosANTESdecoding/planning/current/multi-source;subset/38somenteapós capacidade
+segura material. Reset não garante disponibilidade da quota compartilhada.
+
+PORTABLE_CREDENTIAL_RESOLUTION_READY=true
+PRODUCT_CORE_READY=false
+LIVE_COMPUTE_READY=false
+BROWSER_RESEARCH_READY=false
+HUMAN_ACCEPTANCE_CANDIDATE=false
+V0_5_CANDIDATE_READY_FOR_GUSTAVO=false
+
+Checkpoint de tentativa,NÃOqualificação. Publicação com[skip ci]para não disparar
+fullCI enquanto há bloqueio funcional conhecido. Semmerge,nova branch,v0.6.

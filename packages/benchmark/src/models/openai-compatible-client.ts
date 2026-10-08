@@ -1,3 +1,4 @@
+import { physicalModelIdentity } from "@beyonder/runtime";
 import type { BenchmarkModelClient, BenchmarkModelMessage, BenchmarkModelResponse, ModelTarget } from "../types.js";
 import { providerFetch as fetch } from "@beyonder/compute";
 
@@ -38,7 +39,7 @@ export class OpenAiCompatibleBenchmarkClient implements BenchmarkModelClient {
       };
       const cost = freeResponseCost(json.usage?.cost);
       if (json.error || typeof json.choices?.[0]?.message?.content !== "string" || !json.choices[0].message.content.trim()) throw new BenchmarkRequestError("Provider returned an invalid completion envelope.", { errorCode: "INVALID_OUTPUT", monetaryCostUsd: cost });
-      if (typeof json.model !== "string" || !json.model || physicalIdentity(json.model) !== physicalIdentity(target.model)) throw new BenchmarkRequestError("Provider did not report the requested physical model; its capability cannot be attributed.", { errorCode: "INVALID_OUTPUT", monetaryCostUsd: cost });
+      if (typeof json.model !== "string" || !json.model || physicalModelIdentity(json.model) !== physicalModelIdentity(target.model)) throw new BenchmarkRequestError("Provider did not report the requested physical model; its capability cannot be attributed.", { errorCode: "INVALID_OUTPUT", monetaryCostUsd: cost });
       if (json.choices?.[0]?.finish_reason === "length") throw new BenchmarkRequestError("Completion exhausted its output budget before finishing.", { errorCode: "OUTPUT_LIMIT", monetaryCostUsd: cost });
       return {
         content: json.choices?.[0]?.message?.content ?? "",
@@ -131,10 +132,6 @@ function freeResponseCost(reported: unknown): number {
   if (typeof reported !== "number" || !Number.isFinite(reported) || reported < 0) throw new BenchmarkRequestError("Provider returned invalid monetary usage.", { errorCode: "INVALID_COST" });
   if (reported > 0) throw new BenchmarkRequestError("Provider reported a charge; stop zero-money qualification.", { errorCode: "BILLING_REQUIRED", monetaryCostUsd: reported });
   return reported;
-}
-
-function physicalIdentity(model: string): string {
-  return model.split("/").at(-1)!.replace(/:free$/i, "").replace(/^meta-/i, "").replace(/[^a-z0-9]/gi, "").toLowerCase();
 }
 
 function requestHeaders(target: ModelTarget): Record<string, string> {

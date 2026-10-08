@@ -152,3 +152,9 @@ function result(quality: number, success: boolean) {
     timestamp: new Date()
   };
 }
+
+
+it('free hyphen route cannot bypass an adjudicated unsafe physical verifier',async()=>{
+ const store=new BenchmarkStore(':memory:');
+ try {store.saveResults([{...result(0,false),model:'vendor/step-3.7-flash:free',category:'verification',errorCode:'VERIFIER_FALSE_APPROVAL'}]);const source=new BibModelCapabilitySource(store);expect(await source.getVerificationSafetyEvidence('other/step-3.7-flash-free')).toMatchObject({falseApprovals:1});expect(await source.getVerificationSafetyEvidence('other/step-5-preview-free')).toBeNull();const newStore=new BenchmarkStore(':memory:');newStore.saveResults([{...result(0,false),model:'vendor/step-5-preview-free',category:'verification',errorCode:'VERIFIER_FALSE_APPROVAL'}]);expect(await new BibModelCapabilitySource(newStore).getVerificationSafetyEvidence('other/step-5-preview')).toMatchObject({falseApprovals:1});} finally {store.close();}
+});

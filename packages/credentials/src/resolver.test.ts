@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CredentialResolver, CredentialError } from './resolver.js';
@@ -57,5 +57,21 @@ describe('credential metadata security',()=>{
  it('can unlock after runtime master injection without restarting and compatibility access respects scopes',async()=>{
   const options=await setup();await options.vault.set('groq','GROQ_API_KEY',secret,password);const env: NodeJS.ProcessEnv={};const resolver=new CredentialResolver(defs,{}, {...options,env});expect((await resolver.resolve('groq')).descriptor.status).toBe('VAULT_LOCKED');env.BEYONDER_CREDENTIAL_MASTER_KEY=password;expect((await resolver.resolve('groq')).apiKey()).toBe(secret);
   const scoped=new CredentialResolver(defs,{}, {...options,env:{GROQ_API_KEY:'fallback'},session:new Map([['groq',{values:{GROQ_API_KEY:secret},scopes:['admin']}]] )});expect(scoped.getSecret('groq','GROQ_API_KEY')).toBeUndefined();expect((await scoped.resolve('groq')).descriptor.status).toBe('CREDENTIAL_SCOPE_INSUFFICIENT');
+ });
+});
+
+
+describe('source degradation boundaries',()=>{
+ it.each(['SESSION','ENV_COMPATIBILITY','BEYONDER_VAULT'] as const)('unreadable metadata cannot deny a valid %s source',async source=>{
+  const options=await setup();await writeFile(options.manifestPath,'invalid-json-'+secret);if(source==='BEYONDER_VAULT')await options.vault.set('groq','GROQ_API_KEY',secret,password);
+  const resolver=new CredentialResolver(defs,{}, {...options,...(source==='SESSION'?{session:new Map([['groq',{values:{GROQ_API_KEY:secret},scopes:['inference']}]] )}:source==='ENV_COMPATIBILITY'?{env:{GROQ_API_KEY:secret}}:{masterKey:async()=>password})});
+  const result=await resolver.resolve('groq');expect(result.apiKey()).toBe(secret);expect(result.descriptor).toMatchObject({source,configured:true,present:true,accessible:true,valid:'UNKNOWN'});expect(JSON.stringify(result)).not.toContain(secret);
+ });
+ it('unavailable metadata without an accessible credential remains UNKNOWN rather than missing',async()=>{
+  const options=await setup();const result=await new CredentialResolver(defs,{}, {...options,manifestPath:options.dir}).resolve('groq');expect(result.descriptor).toMatchObject({configured:'UNKNOWN',present:'UNKNOWN',accessible:false,status:'CREDENTIAL_SOURCE_UNAVAILABLE'});
+ });
+ it('explicit import never exposes malformed encrypted-source content in exceptions',async()=>{
+  const options=await setup();await writeFile(join(options.dir,'vault.json'),secret);await expect(options.vault.read(password)).rejects.toMatchObject({code:'CREDENTIAL_DECRYPTION_FAILED'});const resolver=new CredentialResolver(defs,{}, {...options,env:{GROQ_API_KEY:secret}});let failure:unknown;try{await resolver.importEnvironment('groq',password);}catch(error){failure=error;}
+  expect(failure).toBeInstanceOf(CredentialError);expect(failure).toMatchObject({code:'CREDENTIAL_DECRYPTION_FAILED'});expect(String(failure)).not.toContain(secret.slice(0,10));expect(await readFile(join(options.dir,'vault.json'),'utf8')).toBe(secret);
  });
 });

@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, randomBytes, scryptSync } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
+import { CredentialError } from "./errors.js";
 import type { CredentialMetadata, ValidationStatus } from "./types.js";
 
 interface VaultFile {
@@ -24,7 +25,7 @@ export class Vault {
       await readFile(this.filePath, "utf8");
       return true;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new Error("Credential vault source is unavailable.");
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw new CredentialError("CREDENTIAL_SOURCE_UNAVAILABLE");
       return false;
     }
   }
@@ -33,16 +34,21 @@ export class Vault {
     if (!(await this.exists())) {
       return {};
     }
-    const raw = await readFile(this.filePath, "utf8");
-    const envelope = JSON.parse(raw) as VaultFile;
-    const key = deriveKey(password, Buffer.from(envelope.salt, "base64"));
-    const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(envelope.iv, "base64"));
-    decipher.setAuthTag(Buffer.from(envelope.tag, "base64"));
-    const decrypted = Buffer.concat([
-      decipher.update(Buffer.from(envelope.ciphertext, "base64")),
-      decipher.final()
-    ]);
-    return JSON.parse(decrypted.toString("utf8")) as VaultData;
+    try {
+      const raw = await readFile(this.filePath, "utf8");
+      const envelope = JSON.parse(raw) as VaultFile;
+      const key = deriveKey(password, Buffer.from(envelope.salt, "base64"));
+      const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(envelope.iv, "base64"));
+      decipher.setAuthTag(Buffer.from(envelope.tag, "base64"));
+      const decrypted = Buffer.concat([
+        decipher.update(Buffer.from(envelope.ciphertext, "base64")),
+        decipher.final()
+      ]);
+      return JSON.parse(decrypted.toString("utf8")) as VaultData;
+    } catch {
+      // Never propagate native parser snippets containing decrypted/source data.
+      throw new CredentialError("CREDENTIAL_DECRYPTION_FAILED");
+    }
   }
 
   async write(password: string, data: VaultData): Promise<void> {

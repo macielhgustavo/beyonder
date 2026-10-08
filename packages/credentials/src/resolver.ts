@@ -1,11 +1,13 @@
 import { readFile, mkdir, writeFile, rename } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { Vault, type VaultData } from './vault.js';
+import { CredentialError, type CredentialFailure } from './errors.js';
+export { CredentialError } from './errors.js';
+export type { CredentialFailure } from './errors.js';
 
 export type Truth = boolean | 'UNKNOWN';
 export type CredentialScope = 'inference' | 'read' | 'write' | 'spend' | 'sign' | 'trade' | 'withdraw' | 'admin';
 export type CredentialSource = 'SESSION' | 'BEYONDER_VAULT' | 'ENVIRONMENT_BACKEND' | 'OS_KEYRING' | 'ENV_COMPATIBILITY' | 'LOCAL_ONLY' | 'NONE' | 'KEYLESS';
-export type CredentialFailure = 'CREDENTIAL_NOT_CONFIGURED' | 'CREDENTIAL_SOURCE_UNAVAILABLE' | 'VAULT_LOCKED' | 'CREDENTIAL_DECRYPTION_FAILED' | 'CREDENTIAL_INVALID' | 'CREDENTIAL_EXPIRED' | 'CREDENTIAL_SCOPE_INSUFFICIENT' | 'PROVIDER_AUTH_FAILED';
 export interface CredentialDescriptor {
   identity: string; provider: string; expected: boolean; configured: Truth; present: Truth;
   accessible: boolean; valid: Truth; source: CredentialSource; scope: CredentialScope[];
@@ -21,10 +23,6 @@ export interface ResolverOptions {
   masterKey?: () => Promise<string | undefined>; session?: Map<string, { values: Record<string, string>; scopes: CredentialScope[] }>;
   backends?: SecretBackend[]; manifest?: Record<string, Partial<CredentialDescriptor>>;
   onEvent?: (event: string, details: CredentialDescriptor) => void | Promise<void>;
-}
-export class CredentialError extends Error {
-  constructor(readonly code: CredentialFailure) { super(code); this.name = 'CredentialError'; }
-  toJSON() { return { code: this.code }; }
 }
 /** Only metadata serializes. Secret access is explicit and server-side. */
 export class ResolvedCredential {
@@ -95,8 +93,11 @@ export class CredentialResolver {
   }
   async resolve(id: string, scope: CredentialScope = 'inference'): Promise<ResolvedCredential> {
     const definition = this.definition(id), provider = definition.id;
-    const history = (await this.readManifest())[provider];
-    let descriptor: CredentialDescriptor = { identity: `credential://provider/${provider}`, provider, expected: definition.authType !== 'keyless', configured: history?.configured === true, present: history?.present === true ? true : false, accessible: false, valid: 'UNKNOWN', source: history?.source ?? 'NONE', scope: ['inference'], status: history?.configured === true ? 'CREDENTIAL_SOURCE_UNAVAILABLE' : 'CREDENTIAL_NOT_CONFIGURED', lastValidated: typeof history?.lastValidated === 'string' ? history.lastValidated : null };
+    let history: Partial<CredentialDescriptor> | undefined;
+    let metadataUnavailable = false;
+    try { history = (await this.readManifest())[provider]; }
+    catch { metadataUnavailable = true; } // Metadata failure cannot deny an independently accessible source.
+    let descriptor: CredentialDescriptor = { identity: `credential://provider/${provider}`, provider, expected: definition.authType !== 'keyless', configured: metadataUnavailable ? 'UNKNOWN' : history?.configured === true, present: metadataUnavailable ? 'UNKNOWN' : history?.present === true ? true : false, accessible: false, valid: 'UNKNOWN', source: history?.source ?? 'NONE', scope: ['inference'], status: metadataUnavailable || history?.configured === true ? 'CREDENTIAL_SOURCE_UNAVAILABLE' : 'CREDENTIAL_NOT_CONFIGURED', lastValidated: typeof history?.lastValidated === 'string' ? history.lastValidated : null };
     const emit = async (event: string) => { try { await this.#options.onEvent?.(event, { ...descriptor }); } catch { /* Observability cannot expose backend exceptions or alter execution. */ } };
     await emit('credential.resolve.started');
     const selected = async (source: CredentialSource, values: Record<string, string>, scopes: CredentialScope[]) => {
@@ -144,14 +145,23 @@ export class CredentialResolver {
     await mkdir(dirname(this.manifestPath), { recursive: true, mode: 0o700 });
     const tmp = `${this.manifestPath}.${process.pid}.tmp`; await writeFile(tmp, JSON.stringify(safe, null, 2), { mode: 0o600 }); await rename(tmp, this.manifestPath);
   }
+  private async readForImport(password: string): Promise<VaultData> {
+    try { await this.vault.exists(); }
+    catch { throw new CredentialError('CREDENTIAL_SOURCE_UNAVAILABLE'); }
+    try { return await this.vault.read(password); }
+    catch { throw new CredentialError('CREDENTIAL_DECRYPTION_FAILED'); }
+  }
   /** Explicit opt-in import: never changes env and never invents provider validation. */
   async importEnvironment(id: string, password: string) {
     const definition = this.definition(id), values = this.values(definition, this.env);
+    if (password.length < 12) throw new CredentialError('CREDENTIAL_INVALID');
     if (!this.complete(definition, values)) throw new CredentialError('CREDENTIAL_NOT_CONFIGURED');
-    const data = await this.vault.read(password);
+    const data = await this.readForImport(password);
     if (data[definition.id] && Object.keys(data[definition.id]).length) throw new CredentialError('CREDENTIAL_INVALID'); // Do not silently replace existing secrets.
-    data[definition.id] = values; await this.vault.write(password, data);
-    const restored = await this.vault.read(password);
+    data[definition.id] = values;
+    try { await this.vault.write(password, data); }
+    catch { throw new CredentialError('CREDENTIAL_SOURCE_UNAVAILABLE'); }
+    const restored = await this.readForImport(password);
     if (definition.credentialEnvVars.some(name => restored[definition.id]?.[name] !== values[name])) throw new CredentialError('CREDENTIAL_DECRYPTION_FAILED');
     await this.rememberConfigured(definition.id, 'BEYONDER_VAULT'); this.#vaultRead = undefined;
     return { identity: `credential://provider/${definition.id}`, imported: true };

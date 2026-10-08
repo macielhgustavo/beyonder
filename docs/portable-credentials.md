@@ -50,7 +50,7 @@ quota and capability stay separate from credential state.
 From the authorized environment where declared provider variables exist:
 
 ```
-pnpm exec tsx packages/compute/src/cli.ts credentials:import-env groq
+pnpm exec tsx --import dotenv/config packages/compute/src/cli.ts credentials:import-env groq
 pnpm exec tsx packages/compute/src/cli.ts credentials:status
 ```
 
@@ -59,6 +59,10 @@ and verifies, refuses to overwrite an existing provider entry, and records safe
 configuration metadata. It never erases or rewrites environment/.env values.
 Use the injected master or the masked interactive password prompt. Never put a
 master or token in command-line arguments.
+
+The explicit dotenv loader in the import command reads the installation's
+authorized `.env`; exported environment variables need no loader. The resolver
+does not search arbitrary files, and neither command modifies `.env`.
 
 For an operator who can confirm historical local configuration but cannot move
 its secret yet:
@@ -111,3 +115,9 @@ An observed historical model is currently ineligible if credentials are
 inaccessible or known invalid. Failed accessibility checks must not replace a
 previously observed authoritative catalogue with an invented empty catalogue.
 Resources exposes metadata in an existing provider disclosure, without redesign.
+
+An unreadable manifest does not block an independently accessible session, vault
+or environment credential. Without another source, configuration/presence remain
+UNKNOWN and the status is CREDENTIAL_SOURCE_UNAVAILABLE. Corrupt metadata is not
+silently overwritten. Vault parsing/decryption failures use constant typed errors;
+Control Center JSON/schema validation never returns raw received values.

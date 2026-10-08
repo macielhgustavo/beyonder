@@ -278,3 +278,54 @@ V0_5_CANDIDATE_READY_FOR_GUSTAVO=false
 
 Checkpoint de tentativa,NÃOqualificação. Publicação com[skip ci]para não disparar
 fullCI enquanto há bloqueio funcional conhecido. Semmerge,nova branch,v0.6.
+
+## P1-C — revisão de robustez e segurança, 2026-10-08
+
+START_HEAD da missão:a12309d1469ca84a2969e943e01097238ba03039.
+CURRENT_HEAD anterior:7891119aac2d630588c10640ea4676ea28cd28a5.
+Branch preservada:feat/v05-final-integration. Implementação P1-C4d25c69 e retry
+7891119 preservados integralmente, sem nova branch, merge ou rollback.
+
+Root causes adicionais reproduzidas: manifest ilegível bloqueava fontes válidas
+SESSION/env/vault; exceções nativas do vault e validação JSON/schema da API
+podiam ecoar valores opacos. Antes do fix:5 regressões de credenciais e2 da API
+falharam. Fix mínimo:metadata degradada não impede fonte acessível; sem fonte,
+configured/present UNKNOWN/SOURCE_UNAVAILABLE. Erros tipados constantes para
+vault/import e respostas JSON/schema sanitizadas. Nenhum floor, provider API,
+transporte browser, política econômica ou design alterado.
+
+Validação atual:credentials19 PASS;provider subset23 PASS;router15 PASS;
+API/Resources/redaction/security subset16 PASS. Depois:pnpm test713 PASS,
+Control Center52 PASS,root/dashboard build e typecheck PASS,security smoke7
+PASS. Total784 testes locais. Node24.19.0/pnpm11.19.0. Nenhum fullCI remoto,
+VisualQA, audit live de29, matriz38 ou inference provider repetido neste P1-C.
+
+Medição metadata-only2026-10-08T23:43:39.488Z:29 providers,26 exigem credential,
+0 acessíveis,0 historicamente configurados autenticados comprovados aqui,
+0 recuperados,0 requests provider. Vault/manifest não instalados aqui. Não inferir
+que secrets da workstation não existem. Sem reclassificação material da pool.
+BIBs542 linhas/19 observações inseguras preservadas;nenhuma performance sintética
+persistida. Monetary cost adicional0. Evidências p1c-reconfirm-*.log e JSON em
+/workspace/beyonder-p1-evidence;relatório portátil docs/P1C_REPORT.md atualizado.
+
+P1-A continua bloqueado por acesso/capacidade de producer E verifier independente;
+P1-B não requalificado por este trabalho. Inkling último429/0quota;reset declarado
+2026-10-09T00:00:00Z. Step5 false approval no probe de modelo permanece negativo,
+não SUCCEEDED de produto. Nenhuma repetição sem variável/evidência nova.
+
+Próximos passos exatos:portar vault+manifest autorizados e injetar master separado
+se disponíveis;revalidar somente acessibilidade alterada com custo0. Caso contrário,
+1probe Inkling apenas após reset observado;se quota real existir,contraprovas
+originais+2análogos antes de positivos coding/planning/current/multi-source.
+Subset e38 apenas após capacidade segura material. Reset não garante quota.
+
+PORTABLE_CREDENTIAL_RESOLUTION_READY=true
+PRODUCT_CORE_READY=false
+LIVE_COMPUTE_READY=false
+BROWSER_RESEARCH_READY=false
+HUMAN_ACCEPTANCE_CANDIDATE=false
+V0_5_CANDIDATE_READY_FOR_GUSTAVO=false
+
+Publicação desta revisão com[skip ci]:validação local do P1-C, NÃO qualificação
+completa nem CI_GREEN. FINAL_HEAD é o commit contendo esta seção, reportado após
+publicação e verificação de working tree limpa/alinhamento com origin.

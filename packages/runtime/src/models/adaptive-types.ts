@@ -53,6 +53,10 @@ export interface CandidateExplanation {
 }
 
 export interface ModelCandidate {
+  local?: boolean;
+  externalQuotaConsumption?: boolean;
+  costClass?: "FREE_CONFIRMED" | "FREE_TIER_ELIGIBLE" | "UNKNOWN_COST" | "PAID";
+  structuredOutput?: "native" | "prompted" | "unsupported" | "unknown";
   provider: string;
   model: string;
   capabilities: string[];

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Beyonder
+Comment=Open the local Beyonder Control Center
+Exec=pnpm control-center:launch
+Terminal=false
+Categories=Development;Utility;
+StartupNotify=true

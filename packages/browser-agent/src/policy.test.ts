@@ -87,5 +87,11 @@ describe("network helpers", () => {
     expect(isPrivateAddress("10.1.2.3")).toBe(true);
     expect(isPrivateAddress("93.184.216.34")).toBe(false);
     expect(isPrivateAddress("::1")).toBe(true);
+    expect(isPrivateAddress("::ffff:127.0.0.1")).toBe(true);
+    expect(isPrivateAddress("169.254.169.254")).toBe(true);
+    expect(isPrivateAddress("172.16.0.1")).toBe(true);
+    expect(isPrivateAddress("192.168.1.1")).toBe(true);
+    expect(isPrivateAddress("fe80::1")).toBe(true);
+    expect(isPrivateAddress("fd00::1")).toBe(true);
   });
 });

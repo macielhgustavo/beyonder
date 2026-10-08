@@ -13,6 +13,8 @@ export function openDatabase(path: string): { sqlite: Database.Database; db: Db 
 
   const sqlite = new Database(path);
   sqlite.pragma("journal_mode = WAL");
+  sqlite.pragma("busy_timeout = 5000");
+  sqlite.pragma("foreign_keys = ON");
   sqlite.exec(`
     CREATE TABLE IF NOT EXISTS state (
       key TEXT PRIMARY KEY,

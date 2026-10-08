@@ -1,0 +1,42 @@
+name: validate-control-center
+on:
+  pull_request:
+    branches: [main]
+    paths: ['apps/dashboard/**', 'packages/**', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'tsconfig*.json', '.github/workflows/validate-control-center.yml']
+  push:
+    branches: [feat/control-center, main]
+    paths: ['apps/dashboard/**', 'packages/**', 'package.json', 'pnpm-lock.yaml', 'pnpm-workspace.yaml', 'tsconfig*.json', '.github/workflows/validate-control-center.yml']
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    env:
+      BEYONDER_MODEL_PROVIDER: none
+      BEYONDER_CONTROL_FIXTURE: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm control-center:typecheck
+      - run: pnpm control-center:test
+      - run: pnpm control-center:build
+      - run: pnpm control-center:smoke
+      - run: pnpm control-center:security-smoke
+      - run: pnpm --filter @beyonder/browser-agent exec playwright install --with-deps chromium
+      - run: pnpm control-center:supervisor-smoke
+      - run: pnpm browser:smoke
+      - run: pnpm web:evals:smoke
+      - run: pnpm autonomy:smoke
+      - run: pnpm hardening:smoke
+      - run: pnpm opportunities:smoke
+      - run: pnpm approvals:smoke
+      - run: pnpm work-loop:smoke
+      - run: pnpm marketplace:real-smoke

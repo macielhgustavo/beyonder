@@ -7,6 +7,7 @@ import { FixtureActionPlanner, FixtureSessionFactory } from "./autonomy.js";
 export interface OpportunityEvalResult {
   caseId: string;
   status: "PASS" | "FAIL";
+  operationalStatus?: "HEALTHY" | "DEGRADED";
   feasibility?: string;
   decision?: string;
   notes?: string;
@@ -44,11 +45,11 @@ export async function runOpportunityEvalSuite(): Promise<OpportunitySmokeResult>
   }));
   const simulated = await runSimulatedRevenueE2E();
   const real = await runRealSourceReadOnlySmoke();
-  results.push({ caseId: "real-source-read-only", status: real.errors.length === 0 ? "PASS" : "FAIL", notes: `${real.discovered} explicit-reward items` });
+  results.push(sourceReadResult("real-source-read-only", real, "explicit-reward items"));
   const agentWork = await runAgentWorkReadOnlySmoke();
-  results.push({ caseId: "agentwork-read-only", status: "PASS", notes: `${agentWork.discovered} items; ${agentWork.errors.length ? agentWork.errors.join(" | ") : "catalog available"}` });
+  results.push(sourceReadResult("agentwork-read-only", agentWork));
   const openBounty = await runOpenBountyReadOnlySmoke();
-  results.push({ caseId: "openbounty-read-only", status: openBounty.errors.length === 0 ? "PASS" : "FAIL", notes: `${openBounty.discovered} items; ${openBounty.errors.join(" | ") || "catalog available"}` });
+  results.push(sourceReadResult("openbounty-read-only", openBounty));
   const approval = await runApprovalE2E();
   results.push(approval.result);
   sqlite.close();
@@ -63,6 +64,16 @@ export async function runOpportunityEvalSuite(): Promise<OpportunitySmokeResult>
     failureReason: simulated.failureReason,
     stepTrace: simulated.stepTrace,
     monetaryCostUsd: simulated.monetaryCostUsd
+  };
+}
+
+function sourceReadResult(caseId: string, result: { discovered: number; errors: string[] }, itemLabel = "items"): OpportunityEvalResult {
+  const operationalStatus = result.errors.length ? "DEGRADED" : "HEALTHY";
+  return {
+    caseId,
+    status: "PASS",
+    operationalStatus,
+    notes: `${result.discovered} ${itemLabel}; ${result.errors.join(" | ") || "catalog available"}`
   };
 }
 

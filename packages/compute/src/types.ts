@@ -87,6 +87,9 @@ export type ModelOperationalStatus =
   | "UNKNOWN";
 
 export interface ModelCatalogEntry {
+  role?: "instruct" | "guard" | "embedding" | "reranker" | "classification-only" | "vision-only" | "speech-only" | "unknown";
+  structuredOutput?: "native" | "prompted" | "unsupported" | "unknown";
+  costClass?: "FREE_CONFIRMED" | "FREE_TIER_ELIGIBLE" | "UNKNOWN_COST" | "PAID";
   id: string;
   capabilities: ModelCapability[];
   status?: ModelOperationalStatus;

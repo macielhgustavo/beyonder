@@ -110,7 +110,9 @@ export class AgentLoop {
       ? { score: 0, passed: false, confidence: 1, method: "tool-result", issues: [toolResult.error ?? "safe tool failed"] } satisfies Evaluation
       : this.evaluator.evaluate({ task, output: toolResult.output });
     const evaluation = combineEvaluations(adaptive.evaluation, toolEvaluation);
-    const success = toolResult.ok && evaluation.passed;
+    const requiredTools = task.requirements.toolUse || task.requirements.browser || Boolean(task.requirements.tools?.length);
+    const inferenceFailed = adaptive.exhausted && this.config.model.provider !== "none";
+    const success = !requiredTools && !inferenceFailed && toolResult.ok && evaluation.passed;
 
     await this.state.set("loop.step", stepNumber);
     await this.state.set("economy.state", economicState);
@@ -121,7 +123,8 @@ export class AgentLoop {
       attempts,
       success,
       result: toolResult.output || adaptive.response?.content || decision.rationale,
-      error: toolResult.error,
+      error: requiredTools ? "Required tools must execute through TaskExecutor; objective recording is not completion." : inferenceFailed ? "No acceptable inference result." : toolResult.error,
+      ...(!success && adaptive.attempts.at(-1)?.failureClass ? { failureClass: adaptive.attempts.at(-1)?.failureClass } : {}),
       evaluation,
       provider: lastAttempt?.provider ?? "none",
       model: lastAttempt?.model ?? "none",

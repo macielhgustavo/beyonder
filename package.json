@@ -15,7 +15,7 @@
     "test:tools": "vitest run packages/tools/src",
     "test:runtime": "vitest run packages/runtime/src/**/*.test.ts",
     "test:benchmark": "vitest run packages/benchmark/src/**/*.test.ts",
-    "test:browser": "vitest run packages/browser-agent/src/action-parser.test.ts packages/browser-agent/src/policy.test.ts packages/browser-agent/src/redaction.test.ts packages/browser-agent/src/browser-agent.test.ts packages/browser-agent/src/browser-tools.test.ts",
+    "test:browser": "vitest run packages/browser-agent/src/action-parser.test.ts packages/browser-agent/src/policy.test.ts packages/browser-agent/src/ssrf-boundary.test.ts packages/browser-agent/src/redaction.test.ts packages/browser-agent/src/browser-agent.test.ts packages/browser-agent/src/browser-tools.test.ts",
     "test:web-evals": "vitest run packages/web-evals/src",
     "test:integration": "vitest run tests/integration",
     "browser:smoke": "tsx packages/browser-agent/src/smoke.ts",
@@ -30,12 +30,25 @@
     "work-loop:smoke": "tsx packages/web-evals/src/work-loop-cli.ts",
     "start": "tsx apps/cli/src/index.ts",
     "beyonder": "tsx apps/cli/src/index.ts",
+    "control-center": "pnpm --filter @beyonder/control-center dev",
+    "control-center:build": "pnpm build && pnpm --filter @beyonder/control-center build",
+    "control-center:typecheck": "pnpm --filter @beyonder/control-center typecheck",
+    "control-center:test": "pnpm --filter @beyonder/control-center test",
+    "control-center:smoke": "pnpm --filter @beyonder/control-center smoke",
+    "control-center:launch": "node apps/dashboard/bin/launch-control-center.mjs",
+    "control-center:install-launcher": "node apps/dashboard/bin/install-linux-launcher.mjs",
+    "dashboard": "pnpm control-center",
+    "dashboard:build": "pnpm control-center:build",
+    "dashboard:typecheck": "pnpm control-center:typecheck",
+    "dashboard:test": "pnpm control-center:test",
     "providers:autopilot": "tsx apps/cli/src/index.ts providers autopilot",
     "providers:resume": "tsx apps/cli/src/index.ts providers resume",
     "providers:discover": "tsx apps/cli/src/index.ts providers discover",
     "providers:inventory": "tsx apps/cli/src/index.ts providers inventory",
     "providers:status": "tsx apps/cli/src/index.ts providers status",
-    "providers:nvidia-smoke": "tsx packages/benchmark/src/models/nvidia-nim-smoke.ts"
+    "providers:nvidia-smoke": "tsx packages/benchmark/src/models/nvidia-nim-smoke.ts",
+    "control-center:security-smoke": "pnpm --filter @beyonder/control-center security-smoke",
+    "control-center:supervisor-smoke": "pnpm --filter @beyonder/control-center supervisor-smoke"
   },
   "engines": {
     "node": ">=22.0.0",
@@ -59,5 +72,10 @@
     "tsx": "^4.19.3",
     "typescript": "^5.7.3",
     "vitest": "^3.0.7"
+  },
+  "pnpm": {
+    "neverBuiltDependencies": [
+      "better-sqlite3"
+    ]
   }
 }

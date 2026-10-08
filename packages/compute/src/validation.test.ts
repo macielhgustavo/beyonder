@@ -68,3 +68,43 @@ function mockFetch(response: Response | (() => Response)): () => void {
     globalThis.fetch = original;
   };
 }
+
+test("detailed validation performs one authoritative request", async () => {
+  let calls = 0;
+  const restore = mockFetch(() => {
+    calls++;
+    return calls === 1 ? new Response('{"data":[{"id":"actual-model"}]}', { headers: { "content-type": "application/json" } }) : new Response("unauthorized", { status: 401 });
+  });
+  try {
+    const report = await validateProviderDetailed(getProvider("groq")!, new CredentialBroker({}, { GROQ_API_KEY: "fixture" }));
+    assert.equal(calls, 1);
+    assert.equal(report.status.validationStatus, "validated");
+    assert.deepEqual(report.models, ["actual-model"]);
+  } finally { restore(); }
+});
+
+test("malformed catalog cannot validate a credential", async () => {
+  const restore = mockFetch(() => new Response('{"notModels":true}', { headers: { "content-type": "application/json" } }));
+  try {
+    const report = await validateProviderDetailed(getProvider("groq")!, new CredentialBroker({}, { GROQ_API_KEY: "fixture" }));
+    assert.equal(report.status.validationStatus, "failed");
+  } finally { restore(); }
+});
+
+test("validation extracts Gemini model names from the same response", async () => {
+  const restore = mockFetch(() => new Response('{"models":[{"name":"models/gemini-fixture"}]}', { headers: { "content-type": "application/json" } }));
+  try {
+    const report = await validateProviderDetailed(getProvider("gemini")!, new CredentialBroker({}, { GEMINI_API_KEY: "fixture" }));
+    assert.deepEqual(report.models, ["gemini-fixture"]);
+  } finally { restore(); }
+});
+
+test("validation does not persist credential-bearing network errors", async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => { throw new Error("https://provider.test?key=SECRET"); };
+  try {
+    const report = await validateProviderDetailed(getProvider("gemini")!, new CredentialBroker({}, { GEMINI_API_KEY: "SECRET" }));
+    assert.equal(report.status.validationStatus, "failed");
+    assert.doesNotMatch(JSON.stringify(report), /SECRET/);
+  } finally { globalThis.fetch = original; }
+});

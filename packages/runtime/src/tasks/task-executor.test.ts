@@ -97,6 +97,13 @@ describe("task execution state machine", () => {
 });
 
 describe("AutonomousTaskExecutor", () => {
+  it("does not complete a task when BrowserAgent returns an operational error", async () => {
+    const outcome = await run(plan([step("browser", "browser.observe")]), [definition({ id: "browser.observe", execute: async () => ({ output: { sessionId: "test-session", result: { status: "error", error: { message: "Session unavailable" } } } }) })], { maxRetries: 0, maxReplans: 0 });
+    expect(outcome.success).toBe(false);
+    expect(outcome.status).not.toBe("COMPLETED");
+    expect(outcome.execution.steps[0].error).toContain("Session unavailable");
+  });
+
   it("completes a normal multi-step plan and checkpoints every step", async () => {
     const outcome = await run(plan([step("one"), step("two", "fixture.read", ["one"])]), [definition()]);
 

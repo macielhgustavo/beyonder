@@ -1,4 +1,4 @@
-import { AutopilotStateStore, buildComputeInventory, getProvider, isModelEligibleForWorkload, type ModelWorkload } from "@beyonder/compute";
+import { AutopilotStateStore, buildComputeInventory, getProvider, isModelEligibleForWorkload, isModelMetadataEligibleForWorkload, type ModelWorkload } from "@beyonder/compute";
 import type { IntelligenceTask } from "../intelligence/contracts.js";
 import type { EconomicState } from "../types.js";
 import type { ModelCapabilitySource } from "./capability-source.js";
@@ -13,8 +13,12 @@ import { MathRandomSource } from "./random.js";
 import { ROUTER_CONFIG, getEconomicRoutingPolicy } from "./router-config.js";
 import { ShadowCostCalculator } from "./shadow-cost.js";
 import { calculateEffectiveResourceCost, calculateUtility } from "./utility.js";
+import { discoverOllama } from "./ollama-discovery.js";
 
 export interface AdaptiveSelectorOptions {
+  canAttempt?: (candidate: Pick<ModelCandidate, "provider" | "model">) => Promise<boolean>;
+  operationalHealth?: (provider: string, model: string) => Promise<{ samples: number; failures: number; latencyMs: number } | undefined>;
+  ollamaBaseUrl?: string;
   performanceRepository?: PerformanceRepository;
   capabilitySource?: ModelCapabilitySource;
   quotaSource?: QuotaSource;
@@ -50,7 +54,7 @@ export class AdaptiveModelSelector {
     }
 
     const state = await new AutopilotStateStore(this.providerStatePath).read();
-    const inventory = buildComputeInventory(state);
+    const inventory = [...buildComputeInventory(state), ...(this.options.ollamaBaseUrl ? await discoverOllama(this.options.ollamaBaseUrl) : [])];
     const viablePairs = inventory.flatMap((entry) => this.expandCompatible(entry, task));
     const alternativesAvailable = Math.max(0, viablePairs.length - 1);
     const candidates: ModelCandidate[] = [];
@@ -63,6 +67,7 @@ export class AdaptiveModelSelector {
     });
 
     for (const pair of viablePairs) {
+      if (this.options.canAttempt && !await this.options.canAttempt({ provider: pair.entry.providerId, model: pair.model })) continue;
       const performance = await this.performance.get(pair.entry.providerId, pair.model, task.type);
       const benchmarkCapability = await this.capabilitySource.getCapability({
         provider: pair.entry.providerId,
@@ -93,6 +98,7 @@ export class AdaptiveModelSelector {
       await this.telemetry("debug", "quota.updated", { provider: pair.entry.providerId, model: pair.model, quota });
 
       const shadow = this.shadowCost.calculate({ quota, economicState, alternativesAvailable });
+      if (pair.entry.providerId === "ollama") shadow.shadowCostUsd = 0;
       await this.telemetry("debug", "shadow_cost.calculated", {
         provider: pair.entry.providerId,
         model: pair.model,
@@ -100,11 +106,12 @@ export class AdaptiveModelSelector {
         ...shadow
       });
 
-      const failureRisk = performance.samples === 0
+      const health = await this.options.operationalHealth?.(pair.entry.providerId, pair.model);
+      const failureRisk = health?.samples ? health.failures / health.samples : performance.samples === 0
         ? pair.entry.status === "healthy" ? 0.08 : 0.12
         : performance.failures / performance.samples;
       const reliability = clamp((1 - failureRisk) - (pair.entry.toolCalling === "unknown" && task.requirements.tools?.length ? 0.05 : 0));
-      const latencyMs = performance.avgLatencyMs > 0 ? performance.avgLatencyMs : pair.entry.latencyMs ?? 0;
+      const latencyMs = health?.latencyMs ?? (performance.avgLatencyMs > 0 ? performance.avgLatencyMs : pair.entry.latencyMs ?? 0);
       const latencyPenalty = clamp(latencyMs / ROUTER_CONFIG.costNormalization.latencyReferenceMs);
       const monetaryCostUsd = 0;
       const effectiveResourceCost = calculateEffectiveResourceCost({
@@ -112,6 +119,8 @@ export class AdaptiveModelSelector {
         shadowCostUsd: shadow.shadowCostUsd,
         latencyPenalty
       });
+      const metadata = pair.entry.modelMetadata.find((m) => m.id === pair.model);
+      const structuredPenalty = task.requirements.structuredOutput && metadata?.structuredOutput !== "native" ? metadata?.structuredOutput === "prompted" ? 0.02 : 0.08 : 0;
       const utility = calculateUtility({
         predictedQuality,
         historicalSuccess: performance.successRate,
@@ -120,9 +129,13 @@ export class AdaptiveModelSelector {
         shadowCostUsd: shadow.shadowCostUsd,
         latencyPenalty,
         failureRisk
-      }, economicState);
+      }, economicState) - structuredPenalty;
 
       const candidate: ModelCandidate = {
+        local: pair.entry.providerId === "ollama",
+        externalQuotaConsumption: pair.entry.providerId !== "ollama",
+        costClass: metadata?.costClass,
+        structuredOutput: metadata?.structuredOutput ?? "unknown",
         provider: pair.entry.providerId,
         model: pair.model,
         capabilities: capabilitiesFor(pair.entry),
@@ -153,6 +166,7 @@ export class AdaptiveModelSelector {
             { signal: "monetary cost", value: "$0" }
           ],
           penalties: [
+            { signal: "structured output uncertainty", value: structuredPenalty },
             { signal: "quota scarcity", value: shadow.scarcity },
             { signal: "shadow cost", value: shadow.shadowCostUsd },
             { signal: "latency", value: latencyPenalty },
@@ -211,13 +225,16 @@ export class AdaptiveModelSelector {
 
   private expandCompatible(entry: InventoryEntry, task: IntelligenceTask): Array<{ entry: InventoryEntry; model: string }> {
     if (!["healthy", "keyless"].includes(entry.status)) return [];
-    if (entry.cost !== "$0") return [];
+    if (entry.cost === "billing-risk") return [];
     if (task.requirements.contextWindow && typeof entry.contextWindow === "number" && entry.contextWindow < task.requirements.contextWindow) return [];
     if (task.requirements.vision) return [];
-    if (task.requirements.tools?.length && entry.toolCalling === "no") return [];
     const provider = getProvider(entry.providerId);
     const workload = workloadForTask(task.type);
     return entry.models
+      .filter((model) => {
+        const metadata = entry.modelMetadata.find((m) => m.id === model);
+        return metadata && isModelMetadataEligibleForWorkload(metadata, workload) && ["FREE_CONFIRMED", "FREE_TIER_ELIGIBLE"].includes(metadata.costClass ?? "UNKNOWN_COST") && (!task.requirements.structuredOutput || metadata.structuredOutput !== "unsupported");
+      })
       .filter((model) => provider ? isModelEligibleForWorkload(provider, model, workload) : true)
       .map((model) => ({ entry, model }));
   }
@@ -234,9 +251,8 @@ function capabilitiesFor(entry: InventoryEntry): string[] {
   return result;
 }
 
-function workloadForTask(taskType: IntelligenceTask["type"]): ModelWorkload {
-  if (taskType === "coding") return "coding";
-  return "general_chat";
+export function workloadForTask(taskType: IntelligenceTask["type"]): ModelWorkload {
+  return taskType === "chat" || taskType === "memory" ? "general_chat" : taskType;
 }
 
 function serializeCandidate(candidate: ModelCandidate, taskId: string): Record<string, unknown> {

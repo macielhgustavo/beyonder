@@ -69,4 +69,33 @@ suite("BrowserAgent Playwright deterministic integration", () => {
     expect(purchase).toMatchObject({ status: "blocked", policy: { reason: "purchase-prohibited" } });
     expect(server.getPostCount()).toBe(0);
   });
+
+  it("extracts bounded read-only evidence from duplicate text matches", async () => {
+    await agent.execute(sessionId, { type: "navigate", url: `${server.baseUrl}/duplicate-text` });
+
+    const extracted = await agent.execute(sessionId, {
+      type: "extractText",
+      target: { text: "Download Python" },
+      maxChars: 120
+    });
+
+    expect(extracted).toMatchObject({
+      status: "ok",
+      data: {
+        text: expect.stringContaining("Download Python for Any OS")
+      }
+    });
+    expect(JSON.stringify(extracted)).not.toContain("strict mode violation");
+    expect(extracted).toMatchObject({
+      status: "ok",
+      data: {
+        text: expect.stringContaining("Latest stable release: Python 3.14.8")
+      }
+    });
+  });
+
+  it("preserves browser cookies across pinned redirects", async () => {
+    const result = await agent.execute(sessionId, { type: "navigate", url: `${server.baseUrl}/cookie-set` });
+    expect(result).toMatchObject({ status: "ok", observation: { title: "Session preserved" } });
+  });
 });

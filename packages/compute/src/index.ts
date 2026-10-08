@@ -2,13 +2,15 @@ export { providers, getProvider } from "./catalog.js";
 export { CredentialBroker } from "./broker.js";
 export { Vault } from "./vault.js";
 export { getStatuses, getProviderStatus } from "./status.js";
-export { validateProvider } from "./validation.js";
+export { validateProvider, validateProviderDetailed } from "./validation.js";
 export { ProviderAutopilotOrchestrator } from "./autopilot.js";
 export { AutopilotStateStore } from "./state-store.js";
 export { buildComputeInventory } from "./inventory.js";
 export {
   eligibleModelsForWorkload,
   isModelEligibleForWorkload,
+  isModelMetadataEligibleForWorkload,
+  inferRole,
   modelMetadata,
   modelsWithMetadata,
   type ModelWorkload

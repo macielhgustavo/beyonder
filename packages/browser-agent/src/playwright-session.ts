@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import { BrowserElementNotFoundError, BrowserTimeoutError } from "./errors.js";
-import { BrowserPolicyEngine } from "./policy.js";
+import { BrowserPolicyEngine, type AddressResolver } from "./policy.js";
+import { PinnedHttpTransport, type BrowserNetworkTransport } from "./pinned-transport.js";
 import type {
   BrowserElementInfo,
   BrowserFormObservation,
@@ -33,11 +34,15 @@ interface BrowserContextLike {
 
 interface RouteLike {
   continue(): Promise<void>;
+  fulfill(options: { status: number; headers: Record<string, string>; body: Buffer }): Promise<void>;
   abort(errorCode?: string): Promise<void>;
 }
 
 interface RequestLike {
   url(): string;
+  method(): string;
+  headers(): Record<string, string>;
+  postDataBuffer(): Buffer | null;
 }
 
 interface DownloadLike {
@@ -52,6 +57,7 @@ interface LocatorLike {
   innerText(options?: Record<string, unknown>): Promise<string>;
   waitFor(options?: Record<string, unknown>): Promise<void>;
   evaluate<R>(fn: (element: Element) => R): Promise<R>;
+  evaluateAll<R, Arg>(fn: (elements: Element[], arg: Arg) => R, arg: Arg): Promise<R>;
 }
 
 interface PageLike {
@@ -191,6 +197,8 @@ export interface PlaywrightBrowserSessionFactoryOptions {
   navigationTimeoutMs?: number;
   actionTimeoutMs?: number;
   executablePath?: string;
+  addressResolver?: AddressResolver;
+  networkTransport?: BrowserNetworkTransport;
 }
 
 export class PlaywrightBrowserSessionFactory implements BrowserSessionFactory {
@@ -209,7 +217,8 @@ export class PlaywrightBrowserSessionFactory implements BrowserSessionFactory {
       ]
     });
 
-    const policyEngine = new BrowserPolicyEngine(policy);
+    const policyEngine = new BrowserPolicyEngine(policy, this.options.addressResolver);
+    const networkTransport = this.options.networkTransport ?? new PinnedHttpTransport({ timeoutMs: this.options.navigationTimeoutMs ?? 15_000 });
     const context = await browser.newContext({
       acceptDownloads: policy.allowDownload,
       permissions: [],
@@ -217,9 +226,7 @@ export class PlaywrightBrowserSessionFactory implements BrowserSessionFactory {
     });
 
     await context.route("**/*", async (route, request) => {
-      const decision = await policyEngine.evaluateNavigation(request.url());
-      if (decision.allowed) await route.continue();
-      else await route.abort("blockedbyclient");
+      await proxyBrowserRequest(route, request, policyEngine, networkTransport);
     });
 
     const page = await context.newPage();
@@ -227,6 +234,30 @@ export class PlaywrightBrowserSessionFactory implements BrowserSessionFactory {
       navigationTimeoutMs: this.options.navigationTimeoutMs ?? 15_000,
       actionTimeoutMs: this.options.actionTimeoutMs ?? 10_000
     });
+  }
+}
+
+export async function proxyBrowserRequest(
+  route: RouteLike,
+  request: RequestLike,
+  policyEngine: BrowserPolicyEngine,
+  transport: BrowserNetworkTransport
+): Promise<void> {
+  const resolved = await policyEngine.resolveConnection(request.url());
+  if (!resolved.decision.allowed || !resolved.target) {
+    await route.abort("blockedbyclient");
+    return;
+  }
+  try {
+    const response = await transport.fetch({
+      url: request.url(),
+      method: request.method(),
+      headers: request.headers(),
+      body: request.postDataBuffer()
+    }, resolved.target);
+    await route.fulfill(response);
+  } catch {
+    await route.abort("failed");
   }
 }
 
@@ -303,7 +334,7 @@ export class PlaywrightBrowserSession implements BrowserSession {
   async extractText(target: BrowserTarget | undefined, maxChars: number): Promise<string> {
     this.assertOpen();
     try {
-      const text = target ? await this.requiredLocator(target).then((locator) => locator.innerText({ timeout: this.timeouts.actionTimeoutMs })) : await this.page.locator("body").innerText({ timeout: this.timeouts.actionTimeoutMs });
+      const text = target ? await this.extractTargetText(target, maxChars) : await this.page.locator("body").innerText({ timeout: this.timeouts.actionTimeoutMs });
       const normalized = text.replace(/\s+/g, " ").trim();
       return normalized.slice(0, maxChars);
     } catch (error) {
@@ -387,6 +418,25 @@ export class PlaywrightBrowserSession implements BrowserSession {
     const count = await locator.count();
     if (count === 0) throw new BrowserElementNotFoundError(`Browser target not found: ${describeTarget(target)}`);
     return locator;
+  }
+
+  private async extractTargetText(target: BrowserTarget, maxChars: number): Promise<string> {
+    const locator = this.locatorFor(target);
+    const count = await locator.count();
+    if (count === 0) throw new BrowserElementNotFoundError(`Browser target not found: ${describeTarget(target)}`);
+    if (count === 1) return locator.innerText({ timeout: this.timeouts.actionTimeoutMs });
+
+    // Extraction is read-only. Preserve every matching piece of evidence instead
+    // of applying Playwright's strict single-element rule. Mutating interactions
+    // intentionally continue through requiredLocator and remain strict.
+    return locator.evaluateAll(
+      (elements, limit) =>
+        elements
+          .map((element) => (element instanceof HTMLElement ? element.innerText : element.textContent ?? ""))
+          .join("\n")
+          .slice(0, limit),
+      maxChars
+    );
   }
 
   private pushError(message: string): void {

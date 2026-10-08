@@ -12,10 +12,11 @@ function buildInventoryEntry(provider: ProviderCatalogEntry, state: AutopilotSta
   const human = progress?.state === "HUMAN_GATE";
   const skipped = progress?.state === "SKIPPED";
   const failed = progress?.state === "FAILED";
-  const validatedModels = progress?.validation?.models;
+  const validatedModels = progress?.validation?.status === "validated" ? progress.validation.models : undefined;
   const models = provider.id === "nvidia-nim"
     ? validatedModels ?? []
-    : validatedModels?.length ? validatedModels : provider.knownFreeModels;
+    : validatedModels ?? provider.knownFreeModels;
+  const modelMetadata = modelsWithMetadata(provider, models);
   return {
     providerId: provider.id,
     providerName: provider.name,
@@ -26,9 +27,9 @@ function buildInventoryEntry(provider: ProviderCatalogEntry, state: AutopilotSta
           : failed ? "failed"
             : provider.authType === "keyless" ? "keyless" : "missing-credential",
     auth: provider.authType,
-    cost: provider.billingRisk ? "billing-risk" : provider.classification === "PAID_ONLY" ? "billing-risk" : "$0",
+    cost: provider.billingRisk || provider.classification === "PAID_ONLY" ? "billing-risk" : modelMetadata.some((model) => !["FREE_CONFIRMED", "FREE_TIER_ELIGIBLE"].includes(model.costClass ?? "UNKNOWN_COST")) ? "unknown" : "$0",
     models,
-    modelMetadata: modelsWithMetadata(provider, models),
+    modelMetadata,
     eligibleChatModels: eligibleModelsForWorkload(provider, models, "general_chat"),
     rpm: provider.freeTierLimits?.rpm,
     tpm: provider.freeTierLimits?.tpm,

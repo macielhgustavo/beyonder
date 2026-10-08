@@ -1,15 +1,19 @@
 import type { AppConfig } from "../config/env.js";
 import type { IntelligenceTask, TaskOutcome } from "../intelligence/contracts.js";
 import type { EconomicState, ModelMessage, ModelResponse } from "../types.js";
-import { AutopilotStateStore, buildComputeInventory, getProvider } from "@beyonder/compute";
-import { AdaptiveModelSelector, type AdaptiveSelectorOptions } from "./adaptive-selector.js";
+import { getProvider, inferRole, isModelMetadataEligibleForWorkload } from "@beyonder/compute";
+import { AdaptiveModelSelector, workloadForTask, type AdaptiveSelectorOptions } from "./adaptive-selector.js";
 import type { ModelCandidate, QuotaSnapshot, RouteDecision, RouterTelemetry } from "./adaptive-types.js";
 import { EmptyPerformanceRepository, type PerformanceRepository } from "./performance-repository.js";
 import { ROUTER_CONFIG } from "./router-config.js";
 import { ShadowCostCalculator } from "./shadow-cost.js";
 import { calculateEffectiveResourceCost, calculateUtility } from "./utility.js";
+import { httpFailure, InferenceError, type InferenceAttempt } from "./inference.js";
+import type { StateStore } from "../memory/state-store.js";
+import { OperationalHealthStore } from "./operational-health.js";
 
 export interface ModelRouterOptions extends AdaptiveSelectorOptions {
+  state?: StateStore;
   performanceRepository?: PerformanceRepository;
   telemetry?: RouterTelemetry;
 }
@@ -17,13 +21,36 @@ export interface ModelRouterOptions extends AdaptiveSelectorOptions {
 export class ModelRouter {
   private readonly selector: AdaptiveModelSelector;
   private readonly performance: PerformanceRepository;
+  readonly operationalHealth: OperationalHealthStore;
 
   constructor(
     private readonly config: AppConfig["model"],
     private readonly options: ModelRouterOptions = {}
   ) {
     this.performance = options.performanceRepository ?? new EmptyPerformanceRepository();
-    this.selector = new AdaptiveModelSelector(config.providerStatePath, { ...options, performanceRepository: this.performance });
+    this.operationalHealth = new OperationalHealthStore(options.state);
+    this.selector = new AdaptiveModelSelector(config.providerStatePath, { ...options, operationalHealth: (provider, model) => this.operationalHealth.get(provider, model), canAttempt: (candidate) => this.canAttempt(candidate), ollamaBaseUrl: config.ollamaBaseUrl, performanceRepository: this.performance });
+  }
+
+  async recordAttempt(attempt: InferenceAttempt): Promise<void> {
+    let duplicate = false;
+    await this.options.state?.update<InferenceAttempt[]>(`task-attempts:${attempt.taskId}`, [], (previous) => {
+      if (previous.some((item) => item.id === attempt.id && item.status !== "STARTED")) { duplicate = true; return previous; }
+      return [...previous.filter((item) => item.id !== attempt.id), attempt];
+    });
+    if (duplicate) return;
+    await this.options.telemetry?.record(attempt.status === "FAILED" ? "warn" : "info", `inference.${attempt.status.toLowerCase()}`, { ...attempt });
+    await this.operationalHealth.record(attempt);
+  }
+
+  async canAttempt(candidate: Pick<ModelCandidate, "provider" | "model">): Promise<boolean> {
+    const cooldown = await this.operationalHealth.blocked(candidate.provider, candidate.model);
+    if (cooldown) await this.options.telemetry?.record("info", "router.candidate_deferred", { provider: candidate.provider, model: candidate.model, ...cooldown });
+    return !cooldown;
+  }
+
+  async attemptsFor(taskId: string): Promise<InferenceAttempt[]> {
+    return this.options.state?.get<InferenceAttempt[]>(`task-attempts:${taskId}`, []) ?? [];
   }
 
   async route(task: IntelligenceTask, economicState: EconomicState): Promise<RouteDecision> {
@@ -42,16 +69,7 @@ export class ModelRouter {
 
   async complete(messages: ModelMessage[]): Promise<ModelResponse> {
     if (this.config.provider === "auto") {
-      const selected = await this.selectFreeProvider();
-      if (!selected) {
-        return {
-          content: "No free READY/keyless provider is available. Continue with deterministic local policy.",
-          provider: "none",
-          model: "none",
-          estimatedCostUsd: 0
-        };
-      }
-      return this.syntheticAutoResponse(selected.providerId, selected.model, selected);
+      throw new InferenceError("Auto inference requires an explicit task route and bounded candidate execution.", "INVALID_ACTION");
     }
 
     if (this.config.provider === "none") {
@@ -67,19 +85,23 @@ export class ModelRouter {
   }
 
   async completeForCandidate(messages: ModelMessage[], candidate: ModelCandidate): Promise<ModelResponse> {
-    if (this.config.provider === "ollama") return this.completeWithOllama(messages);
+    if (this.config.provider === "auto") return this.completeAutoCandidate(messages, candidate);
+    if (this.config.provider === "ollama") return this.completeWithOllama(messages, candidate.model);
     if (this.config.provider === "openai-compatible") return this.completeWithOpenAiCompatible(messages);
     if (this.config.provider === "none") return this.complete(messages);
-    return this.syntheticAutoResponse(candidate.provider, candidate.model, {
-      utility: candidate.utility,
-      predictedQuality: candidate.predictedQuality,
-      shadowCostUsd: candidate.shadowCostUsd
-    });
+    throw new InferenceError("No compatible inference provider configured.", "NO_CANDIDATES");
   }
 
-  async completeForPlanningCandidate(messages: ModelMessage[], candidate: ModelCandidate): Promise<ModelResponse> {
-    if (this.config.provider === "auto") return this.completeAutoCandidate(messages, candidate);
+  async completeForPlanningCandidate(messages: ModelMessage[], candidate: ModelCandidate, signal?: AbortSignal): Promise<ModelResponse> {
+    if (this.config.provider === "ollama") return this.completeWithOllama(messages, candidate.model, signal);
+    if (this.config.provider === "auto") return this.completeAutoCandidate(messages, candidate, signal);
     return this.completeForCandidate(messages, candidate);
+  }
+
+  async completeForStructuredCandidate(messages: ModelMessage[], candidate: ModelCandidate, signal?: AbortSignal, schema?: Record<string, unknown>): Promise<ModelResponse> {
+    if (candidate.provider === "ollama" || this.config.provider === "ollama") return this.completeWithOllama(messages, candidate.model, signal, schema ?? "json");
+    if (this.config.provider === "auto") return this.completeAutoCandidate(messages, candidate, signal, true);
+    return this.completeForPlanningCandidate(messages, candidate, signal);
   }
 
   async quotas() {
@@ -106,6 +128,9 @@ export class ModelRouter {
   }
 
   private async directRoute(task: IntelligenceTask, economicState: EconomicState): Promise<RouteDecision> {
+    if (this.config.provider !== "ollama") return { task, economicState, candidates: [], explored: false, reason: "Explicit endpoint has UNKNOWN_COST; no zero-cost evidence." };
+    if (!isModelMetadataEligibleForWorkload({ id: this.config.name, role: inferRole(this.config.name), capabilities: ["CHAT"] }, workloadForTask(task.type)) || /:cloud$|-cloud$/.test(this.config.name)) return { task, economicState, candidates: [], explored: false, reason: "Configured model is incompatible with this workload or lacks local cost evidence." };
+    if (!await this.canAttempt({ provider: this.config.provider, model: this.config.name })) return { task, economicState, candidates: [], explored: false, reason: "Configured model is in operational cooldown." };
     const performance = await this.performance.get(this.config.provider, this.config.name, task.type);
     const quota: QuotaSnapshot = {
       provider: this.config.provider,
@@ -147,6 +172,9 @@ export class ModelRouter {
       failureRisk
     }, economicState);
     const candidate: ModelCandidate = {
+      local: true,
+      externalQuotaConsumption: false,
+      costClass: "FREE_CONFIRMED",
       provider: this.config.provider,
       model: this.config.name,
       capabilities: ["text"],
@@ -199,40 +227,18 @@ export class ModelRouter {
     };
   }
 
-  private async selectFreeProvider(): Promise<{ providerId: string; model: string; status: string } | null> {
-    const state = await new AutopilotStateStore(this.config.providerStatePath).read();
-    const inventory = buildComputeInventory(state)
-      .filter((entry) => entry.cost === "$0")
-      .filter((entry) => ["healthy", "keyless"].includes(entry.status))
-      .sort((a, b) => qualityRank(b.qualityClass) - qualityRank(a.qualityClass));
-    const selected = inventory[0];
-    if (!selected) return null;
-    return {
-      providerId: selected.providerId,
-      model: selected.models[0] ?? this.config.name,
-      status: selected.status
-    };
-  }
-
-  private syntheticAutoResponse(provider: string, model: string, raw: unknown): ModelResponse {
-    return {
-      content: `Selected zero-cost provider ${provider} with model ${model} for an economically constrained plan.`,
-      provider,
-      model,
-      estimatedCostUsd: 0,
-      raw
-    };
-  }
-
-  private async completeWithOllama(messages: ModelMessage[]): Promise<ModelResponse> {
+  private async completeWithOllama(messages: ModelMessage[], model = this.config.name, signal?: AbortSignal, format?: "json" | Record<string, unknown>): Promise<ModelResponse> {
+    const deadline = signal ?? AbortSignal.timeout(30_000);
     const response = await fetch(`${this.config.ollamaBaseUrl}/api/chat`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: this.config.name, messages, stream: false })
+      signal: deadline,
+      body: JSON.stringify({ model, messages, stream: false, think: false, ...(format ? { format } : {}), options: { temperature: 0, num_predict: format ? 180 : 1200 } })
     });
-    if (!response.ok) throw new Error(`Ollama request failed: ${response.status} ${await response.text()}`);
-    const json = (await response.json()) as { message?: { content?: string } };
-    return { content: json.message?.content ?? "", provider: "ollama", model: this.config.name, estimatedCostUsd: 0, raw: json };
+    if (!response.ok) throw httpFailure(response.status, await response.text(), response.headers);
+    const json = (await response.json()) as { message?: { content?: string; tool_calls?: unknown[] } };
+    if (json.message?.tool_calls?.length) throw new InferenceError("Model returned unsolicited native tool calls while tools are disabled; no tool was executed.", "INVALID_OUTPUT");
+    return { content: json.message?.content ?? "", provider: "ollama", model, estimatedCostUsd: 0, raw: json };
   }
 
   private async completeWithOpenAiCompatible(messages: ModelMessage[]): Promise<ModelResponse> {
@@ -249,25 +255,30 @@ export class ModelRouter {
     return { content: json.choices?.[0]?.message?.content ?? "", provider: "openai-compatible", model: this.config.name, estimatedCostUsd: 0, raw: json };
   }
 
-  private async completeAutoCandidate(messages: ModelMessage[], candidate: ModelCandidate): Promise<ModelResponse> {
+  private async completeAutoCandidate(messages: ModelMessage[], candidate: ModelCandidate, signal?: AbortSignal, structured = false): Promise<ModelResponse> {
+    if (candidate.provider === "ollama") return this.completeWithOllama(messages, candidate.model, signal);
     const provider = getProvider(candidate.provider);
     if (!provider?.openAiCompatibleEndpoint) throw new Error(`Provider ${candidate.provider} has no compatible completion endpoint.`);
-    const apiKey = provider.credentialEnvVars.map((name) => process.env[name]).find((value) => Boolean(value));
-    if (provider.credentialEnvVars.length > 0 && !apiKey) throw new Error(`Provider ${candidate.provider} credential is unavailable.`);
+    const apiKey = provider.credentialEnvVars.filter((name) => !name.endsWith("ACCOUNT_ID")).map((name) => process.env[name]).find((value) => Boolean(value));
+    if (provider.credentialEnvVars.length > 0 && !apiKey) throw new InferenceError(`Provider ${candidate.provider} credential is unavailable.`, "AUTH_REQUIRED");
+    const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+    if (provider.openAiCompatibleEndpoint.includes("{account_id}") && !accountId) throw new InferenceError("Provider account configuration is unavailable.", "AUTH_REQUIRED");
+    const endpoint = provider.openAiCompatibleEndpoint.replace("{account_id}", encodeURIComponent(accountId ?? ""));
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 20_000);
     try {
-      const response = await fetch(`${provider.openAiCompatibleEndpoint.replace(/\/$/, "")}/chat/completions`, {
+      const response = await fetch(`${endpoint.replace(/\/$/, "")}/chat/completions`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
           ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {})
         },
-        signal: controller.signal,
-        body: JSON.stringify({ model: candidate.model, messages, temperature: 0, max_tokens: 800, stream: false })
+        signal: AbortSignal.any([controller.signal, ...(signal ? [signal] : [])]),
+        body: JSON.stringify({ model: candidate.model, messages, temperature: 0, max_tokens: structured ? 300 : 800, stream: false, ...(structured ? { response_format: { type: "json_object" } } : {}) })
       });
-      if (!response.ok) throw new Error(`Provider ${candidate.provider} returned HTTP ${response.status}.`);
-      const json = await response.json() as { choices?: Array<{ message?: { content?: string } }>; usage?: { total_tokens?: number } };
+      if (!response.ok) throw httpFailure(response.status, (await response.text()).replaceAll(apiKey || "\u0000", "[REDACTED]"), response.headers);
+      const json = await response.json() as { choices?: Array<{ message?: { content?: string; tool_calls?: unknown[]; function_call?: unknown } }>; usage?: { total_tokens?: number } };
+      if (json.choices?.[0]?.message?.tool_calls?.length || json.choices?.[0]?.message?.function_call) throw new InferenceError("Model returned unsolicited native tool calls while tools are disabled; no tool was executed.", "INVALID_OUTPUT");
       return {
         content: json.choices?.[0]?.message?.content ?? "",
         provider: candidate.provider,
@@ -279,11 +290,4 @@ export class ModelRouter {
       clearTimeout(timer);
     }
   }
-}
-
-function qualityRank(quality: "high" | "medium" | "low" | "unknown"): number {
-  if (quality === "high") return 3;
-  if (quality === "medium") return 2;
-  if (quality === "low") return 1;
-  return 0;
 }

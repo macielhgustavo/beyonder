@@ -87,6 +87,8 @@ function validateBrowserToolInput<TAction extends BrowserAction>(
   input: unknown
 ): ToolInputValidation<BrowserToolInputFor<TAction>> {
   if (!isRecord(input)) return validationFailure("Expected an object.");
+  const schema = browserToolJsonSchema(actionType) as { properties: Record<string, unknown> };
+  if (Object.keys(input).some((key) => !(key in schema.properties))) return validationFailure("Unexpected browser argument.");
   if (typeof input.sessionId !== "undefined" && !isNonEmptyString(input.sessionId)) {
     return validationFailure("sessionId must be a non-empty string.", ["sessionId"]);
   }
@@ -106,13 +108,28 @@ function validateBrowserToolInput<TAction extends BrowserAction>(
 }
 
 function browserToolJsonSchema(actionType: BrowserAction["type"]): unknown {
+  const target = {
+    type: "object", additionalProperties: false,
+    properties: { role: { type: "string" }, name: { type: "string" }, label: { type: "string" }, text: { type: "string" }, placeholder: { type: "string" }, testId: { type: "string" }, exact: { type: "boolean" } },
+    oneOf: ["role", "label", "text", "placeholder", "testId"].map((key) => ({ required: [key] }))
+  };
+  const properties: Record<string, unknown> = { sessionId: { type: "string", description: "Reuse the sessionId returned by the preceding browser observation." }, type: { const: actionType } };
+  const required: string[] = [];
+  if (actionType === "open" || actionType === "navigate") { properties.url = { type: "string", format: "uri" }; required.push("url"); }
+  if (["find", "click", "fill", "waitFor", "extractText"].includes(actionType)) properties.target = target;
+  if (["find", "click", "fill", "waitFor"].includes(actionType)) required.push("target");
+  if (actionType === "extractText") properties.maxChars = { type: "integer", minimum: 1 };
+  if (actionType === "fill") { properties.value = { type: "string" }; required.push("value"); }
+  if (actionType === "click") properties.authorizationId = { type: "string" };
+  if (actionType === "scroll") { properties.direction = { enum: ["up", "down"] }; properties.amount = { type: "integer", minimum: 1 }; required.push("direction"); }
+  if (actionType === "screenshot") properties.fullPage = { type: "boolean" };
+  if (actionType === "waitFor") { properties.state = { enum: ["attached", "visible", "hidden"] }; properties.timeoutMs = { type: "integer", minimum: 1 }; }
+  if (actionType === "close") required.push("sessionId");
   return {
     type: "object",
-    additionalProperties: true,
-    properties: {
-      sessionId: { type: "string" },
-      type: { const: actionType }
-    }
+    additionalProperties: false,
+    properties,
+    required
   };
 }
 

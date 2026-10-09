@@ -30,14 +30,19 @@ export function isModelEligibleForWorkload(
 }
 
 export function isModelMetadataEligibleForWorkload(metadata: ModelCatalogEntry, workload: ModelWorkload): boolean {
-  // A dynamic router alias is not a physical model. It cannot supply calibrated
-  // capability or an independently identifiable producer/verifier pair.
-  if (/^(?:auto|free|kilo-auto(?:\/free)?|openrouter\/(?:auto|free))$/i.test(metadata.id)) return false;
+  // Generic dynamic aliases stay excluded because they can silently cross cost
+  // or capability boundaries. OpenRouter's dedicated free router is different:
+  // it is explicitly zero-cost and filters for request capabilities upstream.
+  if (/^(?:auto|free|kilo-auto(?:\/free)?|openrouter\/auto)$/i.test(metadata.id)) return false;
   if (metadata.billingRisk || metadata.status === "PAID_ONLY" || metadata.status === "BILLING_REQUIRED") return false;
   if (metadata.status === "MODEL_UNAVAILABLE" || metadata.status === "UNSUPPORTED") return false;
   if (metadata.role === "classification-only") return workload === "classification";
   if (metadata.role === "embedding") return workload === "embedding";
   if (["guard", "reranker", "vision-only", "speech-only"].includes(metadata.role ?? "")) return false;
+
+  // The free router is a text-capable meta-route even though its slug does not
+  // encode a concrete model family.
+  if (metadata.id === 'openrouter/free') return workload !== 'embedding';
 
   switch (workload) {
     case "embedding":

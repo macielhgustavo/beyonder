@@ -176,21 +176,26 @@ export function computeTier(candidate: ModelCandidate, fit: CandidateCapabilityF
 }
 
 export function routingScore(candidate: ModelCandidate, fit: CandidateCapabilityFit, tier: ComputeTier, floor?: QualityFloor): number {
-  const tierBias = tier === "STRONG_FREE_CLOUD" ? 0.12 : tier === "OTHER_FREE_CLOUD" ? 0.04 : tier === "LOCAL_EMERGENCY" ? -0.18 : -1;
-  // Eligibility has already established every required dimension. For minimal
-  // objectives, surplus quality beyond generous headroom should not dominate
-  // useful latency/resource savings within the same cloud tier.
+  if (tier === "PAID_DISABLED") return -1;
+  // Required dimensions express task fit. Missing measurements retain a
+  // metadata estimate; they are not interpreted as failed capability checks.
+  const taskFit = Object.values(fit.dimensions);
+  const dimensionFit = taskFit.length ? taskFit.reduce((sum, value) => sum + value, 0) / taskFit.length : fit.overall;
+  // A bounded confidence bonus gives untried models a route to real evidence,
+  // while measured failures still lower quality and reliability.
+  const evidenceSamples = candidate.performance.samples + (candidate.benchmarkCapability?.samples ?? 0);
+  const explorationBonus = 0.07 / Math.sqrt(evidenceSamples + 1);
   const minimal = floor?.level === "MINIMAL";
   const ceiling = minimal ? Math.min(1, floor.minimumOverall + 0.15) : 1;
   return Number((
-    Math.min(fit.overall, ceiling) * 0.46
-    + Math.min(candidate.predictedQuality, ceiling) * 0.2
-    + candidate.reliability * 0.12
+    Math.min(dimensionFit, ceiling) * 0.38
+    + Math.min(fit.overall, ceiling) * 0.24
+    + candidate.reliability * 0.13
     + candidate.historicalSuccess * 0.08
-    + candidate.utility * 0.08
-    - candidate.latencyPenalty * (minimal ? 0.12 : 0.025)
-    - Math.min(1, candidate.shadowCostUsd / 0.01) * (minimal ? 0.1 : 0.025)
-    + tierBias
+    + candidate.utility * 0.12
+    + explorationBonus
+    - candidate.latencyPenalty * (minimal ? 0.08 : 0.035)
+    - Math.min(1, candidate.shadowCostUsd / 0.01) * (minimal ? 0.07 : 0.035)
   ).toFixed(6));
 }
 

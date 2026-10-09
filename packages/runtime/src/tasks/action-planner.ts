@@ -7,7 +7,7 @@ import { getEconomicRoutingPolicy, inferenceAttemptPolicy } from "../models/rout
 export function createActionPlanner(router: ModelRouter, registry: ToolRegistry): StepActionPlanner {
   return { async decide(context) {
     const result = await runCandidates({
-      taskId: context.task?.id ?? "unknown", stepId: context.currentStep.id, phase: "ACTION_PLANNING",
+      taskId: context.task?.id ?? "unknown", stepId: context.currentStep.id, phase: "ACTION_PLANNING", taskType: context.task?.type,
       candidates: context.candidates ?? (context.selectedModel ? [context.selectedModel] : []),
       maxCandidates: getEconomicRoutingPolicy(context.economicState ?? "normal").maxAttempts,
       ...inferenceAttemptPolicy(context.economicState ?? "normal"),

@@ -35,7 +35,7 @@ export class AdaptiveExecutionController {
       attempts.push({ ...attempt, completedAt: attempt.completedAt!, latencyMs: attempt.latencyMs ?? 0, tools: [], tokens: 0, success: attempt.status === "SUCCEEDED" });
     };
     try {
-      const result = await runCandidates({ taskId: input.task.id, phase: "DIRECT_RESPONSE", candidates, messages: input.messages,
+      const result = await runCandidates({ taskId: input.task.id, phase: "DIRECT_RESPONSE", taskType: input.task.type, candidates, messages: input.messages,
         maxCandidates: Math.min(policy.maxAttempts, policy.maxEscalations + 1), ...inferenceAttemptPolicy(input.economicState),
         maxMonetaryCostUsd: policy.maxMonetaryCostUsd, maxShadowCostUsd: policy.maxEffectiveCostUsd, maxDurationMs: 60_000,
         complete: this.router.completeForPlanningCandidate?.bind(this.router) ?? this.router.completeForCandidate.bind(this.router),

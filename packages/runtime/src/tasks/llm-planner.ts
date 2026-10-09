@@ -105,7 +105,7 @@ export class LlmPlanner implements Planner {
     const messages = planningPrompt(request);
 
     try {
-      const result = await runCandidates({ taskId: request.task.id, phase: "previousPlan" in request ? "REPLANNING" : "PLANNING", candidates, messages, maxCandidates: Math.min(this.maxCandidates, getEconomicRoutingPolicy(request.economicState).maxAttempts),
+      const result = await runCandidates({ taskId: request.task.id, phase: "previousPlan" in request ? "REPLANNING" : "PLANNING", taskType: request.task.type, candidates, messages, maxCandidates: Math.min(this.maxCandidates, getEconomicRoutingPolicy(request.economicState).maxAttempts),
         ...inferenceAttemptPolicy(request.economicState),
         maxMonetaryCostUsd: request.budget.maxMonetaryCostUsd, maxShadowCostUsd: request.budget.maxShadowCostUsd, maxDurationMs: request.budget.maxDurationMs,
         complete: this.options.modelRouter.completeForPlanningCandidate?.bind(this.options.modelRouter) ?? this.options.modelRouter.completeForCandidate.bind(this.options.modelRouter),

@@ -42,9 +42,8 @@ describe("observed inference profiles", () => {
     const route = await selector.route(researchTask(), "normal");
     expect(route.qualityFloor?.level).toBe("HIGH");
     const models = route.candidates.filter(c => c.provider === "kilo-gateway");
-    expect(models).toHaveLength(score > 0.9 ? 1 : 0);
-    if (models.length) expect(models[0]?.inferenceProfile).toBe(disabled);
-    else expect(route.rejectedCandidates?.some(c => c.model === "profile-model" && c.reasons.some(r => r.startsWith("quality-floor:")))).toBe(true);
+    expect(models).toHaveLength(1);
+    expect(models[0]?.capabilityFit?.passes).toBe(score > 0.9);
   });
   it("counts two qualified modes as one physical candidate", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("local unavailable")));
@@ -57,7 +56,7 @@ describe("observed inference profiles", () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("local unavailable")));
     const selector = new AdaptiveModelSelector(await statePath(), { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model), capabilitySource: new Profiles(0.99, ["unbounded-mode", "reasoning-disabled:max-output-999999"]) });
     const route = await selector.route(researchTask(), "normal");
-    expect(route.candidates.filter(c => c.provider === "kilo-gateway")).toHaveLength(0);
+    expect(route.candidates.filter(c => c.provider === "kilo-gateway")).toHaveLength(1);
     expect(route.consideredCandidates?.filter(c => c.provider === "kilo-gateway")).toHaveLength(1);
   });
   it("does not transfer an optional profile's observations to an unmeasured task category", async () => {

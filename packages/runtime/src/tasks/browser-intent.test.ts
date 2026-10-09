@@ -402,19 +402,20 @@ describe("survival: one remote attempt plus optional zero-quota local fallback",
     await expect(run(complete, [remote(), { ...local, ...overrides } as ModelCandidate])).rejects.toMatchObject({ failureClass: "PROVIDER_UNAVAILABLE" });
     expect(complete).toHaveBeenCalledOnce();
   });
-  it("does not reinterpret invalid output as operational failure", async () => {
+  it("tries another free candidate after invalid output without changing the failure class", async () => {
     const complete = vi.fn().mockRejectedValue(new InferenceError("invalid", "INVALID_OUTPUT"));
     await expect(run(complete)).rejects.toMatchObject({ failureClass: "INVALID_OUTPUT" });
-    expect(complete).toHaveBeenCalledOnce();
+    expect(complete).toHaveBeenCalledTimes(2);
   });
   it("allows local alone when remote is unavailable", async () => {
     const complete = vi.fn().mockResolvedValue({ ...response, provider: "ollama" });
     await run(complete, [local]);
     expect(complete.mock.calls[0]?.[1]).toEqual(local);
   });
-  it("keeps local resource accounting separate and enforces the remaining budget", async () => {
+  it("keeps local resource accounting separate without turning shadow cost into a blocker", async () => {
     const complete = vi.fn().mockRejectedValueOnce(httpFailure(500, "offline")).mockResolvedValue(response);
-    await expect(run(complete, [remote(), { ...local, shadowCostUsd: 0.02 }])).rejects.toMatchObject({ failureClass: "BUDGET_EXHAUSTED" });
-    expect(complete).toHaveBeenCalledOnce();
+    const result = await run(complete, [remote(), { ...local, shadowCostUsd: 0.02 }]);
+    expect(result.shadowCostUsd).toBeGreaterThan(0.01);
+    expect(complete).toHaveBeenCalledTimes(2);
   });
 });

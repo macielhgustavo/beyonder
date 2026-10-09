@@ -4,11 +4,12 @@ import { redactSecrets, redactString } from "@beyonder/tools";
 import { parseReset } from "./quota.js";
 import type { ModelCandidate } from "./adaptive-types.js";
 import type { ModelMessage, ModelResponse } from "../types.js";
+import type { IntelligenceTaskType } from "../intelligence/contracts.js";
 
 export type InferencePhase = "PLANNING" | "ACTION_PLANNING" | "DIRECT_RESPONSE" | "TOOL_EXECUTION" | "REPLANNING" | "OBJECTIVE_VERIFICATION";
 export type FailureClass = "ECONOMIC_POLICY_BLOCKED" | "BAD_REQUEST" | "AUTH_REQUIRED" | "FORBIDDEN" | "MODEL_UNAVAILABLE" | "RATE_LIMITED" | "PROVIDER_UNAVAILABLE" | "TIMEOUT" | "NETWORK_ERROR" | "INVALID_OUTPUT" | "INVALID_ACTION" | "NO_CANDIDATES" | "NEEDS_CAPABILITY" | "BUDGET_EXHAUSTED" | "TOOL_ERROR" | "TOOL_UNAVAILABLE";
 export interface InferenceAttempt {
-  id: string; taskId: string; stepId?: string; phase: InferencePhase; attempt: number;
+  id: string; taskId: string; stepId?: string; phase: InferencePhase; taskType?: IntelligenceTaskType; attempt: number;
   provider: string; model: string; inferenceProfile?: string; startedAt: string; completedAt?: string;
   status: "STARTED" | "SUCCEEDED" | "FAILED"; latencyMs?: number;
   failureClass?: FailureClass; httpStatus?: number; upstreamHttpStatus?: number; error?: string; responseBody?: string; retryAfterAt?: string;
@@ -124,8 +125,8 @@ export function parseStructuredObject(content: string): Record<string, unknown> 
 }
 
 export async function runCandidates<T>(input: {
-  taskId: string; stepId?: string; phase: InferencePhase; candidates: ModelCandidate[];
-  messages: ModelMessage[]; maxCandidates?: number; maxMonetaryCostUsd: number; maxShadowCostUsd: number; maxDurationMs: number;
+  taskId: string; stepId?: string; phase: InferencePhase; taskType?: IntelligenceTaskType; candidates: ModelCandidate[];
+  messages: ModelMessage[]; maxCandidates?: number; maxMonetaryCostUsd: number; /** Advisory resource budget; never a monetary safety gate. */ maxShadowCostUsd: number; maxDurationMs: number;
   remoteAttemptBudget?: number;
   localFallbackBudget?: number;
   localFallbackFailureClasses?: FailureClass[];
@@ -137,7 +138,7 @@ export async function runCandidates<T>(input: {
   const start = Date.now();
   const attempts: InferenceAttempt[] = [];
   let monetaryCostUsd = 0, shadowCostUsd = 0;
-  let last: InferenceError = new InferenceError("Adequate models for this mission are unavailable. Available compute is below the required quality floor or policy constraints.", "NEEDS_CAPABILITY");
+  let last: InferenceError = new InferenceError("No economically and operationally eligible model is available.", "NEEDS_CAPABILITY");
   const requestedRemoteAttemptBudget = Math.max(0, input.remoteAttemptBudget ?? input.maxCandidates ?? 3);
   const localFallbackBudget = Math.max(0, input.localFallbackBudget ?? 1);
   const cloudFirstMetadata = input.candidates.some((candidate) => candidate.computeTier !== undefined);
@@ -149,12 +150,10 @@ export async function runCandidates<T>(input: {
   const remoteAttemptBudget = cloudFirstMetadata ? requestedRemoteAttemptBudget : legacyRemoteBudget;
   // Do not slice before canAttempt: a sibling invalidated by provider health must not
   // consume a physical-attempt slot or prevent a later healthy cloud from being tried.
-  const remoteCandidates = input.candidates.filter((candidate) => !candidate.local);
-  const localCandidates = input.candidates.filter(isAcceptableLocalFallback).slice(0, localFallbackBudget);
-  const candidates = [...remoteCandidates, ...localCandidates];
+  // Preserve the selector's score order, including a local model when it wins.
+  const candidates = input.candidates.filter(candidate => !candidate.local || isAcceptableLocalFallback(candidate));
   let remoteAttempts = 0;
   let localAttempts = 0;
-  const localFallbackFailureClasses = input.localFallbackFailureClasses ?? ["BAD_REQUEST", "AUTH_REQUIRED", "FORBIDDEN", "MODEL_UNAVAILABLE", "RATE_LIMITED", "PROVIDER_UNAVAILABLE", "TIMEOUT", "NETWORK_ERROR"];
 
   for (const candidate of candidates) {
     try { requireZeroCostDecision(candidate.economics, candidate.provider, candidate.model); }
@@ -162,18 +161,17 @@ export async function runCandidates<T>(input: {
     if (candidate.costClass === 'PAID' || candidate.monetaryCostUsd !== 0 || candidate.eligible === false) { last = new InferenceError('Paid or ineligible inference is disabled.', 'ECONOMIC_POLICY_BLOCKED'); continue; }
     if (candidate.local) {
       if (localAttempts >= localFallbackBudget) continue;
-      if (remoteAttempts > 0 && !localFallbackFailureClasses.includes(last.failureClass)) break;
     } else if (remoteAttempts >= remoteAttemptBudget) {
       continue;
     }
     if (input.canAttempt && !await input.canAttempt(candidate)) continue;
-    if (Date.now() - start >= input.maxDurationMs || monetaryCostUsd + candidate.monetaryCostUsd > input.maxMonetaryCostUsd || shadowCostUsd + candidate.shadowCostUsd > input.maxShadowCostUsd) {
+    if (Date.now() - start >= input.maxDurationMs || monetaryCostUsd + candidate.monetaryCostUsd > input.maxMonetaryCostUsd) {
       last = new InferenceError("Inference budget exhausted.", "BUDGET_EXHAUSTED"); break;
     }
 
     if (candidate.local) localAttempts++;
     else remoteAttempts++;
-    const attempt: InferenceAttempt = { id: nanoid(), taskId: input.taskId, stepId: input.stepId, phase: input.phase, attempt: attempts.length + 1, provider: candidate.provider, model: candidate.model, inferenceProfile: candidate.inferenceProfile, startedAt: new Date().toISOString(), status: "STARTED", monetaryCostUsd: 0, shadowCostUsd: candidate.shadowCostUsd };
+    const attempt: InferenceAttempt = { id: nanoid(), taskId: input.taskId, stepId: input.stepId, phase: input.phase, taskType: input.taskType, attempt: attempts.length + 1, provider: candidate.provider, model: candidate.model, inferenceProfile: candidate.inferenceProfile, startedAt: new Date().toISOString(), status: "STARTED", monetaryCostUsd: 0, shadowCostUsd: candidate.shadowCostUsd };
     attempts.push(attempt);
     await input.record?.(attempt);
     shadowCostUsd += candidate.shadowCostUsd;
@@ -204,7 +202,7 @@ export async function runCandidates<T>(input: {
     }
   }
   if (cloudFirstMetadata && attempts.length > 0 && attempts.every((attempt) => ["AUTH_REQUIRED", "FORBIDDEN", "MODEL_UNAVAILABLE", "RATE_LIMITED", "PROVIDER_UNAVAILABLE", "TIMEOUT", "NETWORK_ERROR"].includes(attempt.failureClass ?? ""))) {
-    throw new InferenceError(`No acceptable compute remains after qualified provider attempts failed (${last.failureClass}).`, "NEEDS_CAPABILITY");
+    throw new InferenceError(`No free candidate remains after bounded attempts failed (${last.failureClass}).`, "NEEDS_CAPABILITY");
   }
   throw last;
 }

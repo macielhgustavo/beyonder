@@ -136,8 +136,8 @@ describe("cloud-first product routing journeys", () => {
     expect(routed.selected?.computeTier).toMatch(/^(STRONG|OTHER)_FREE_CLOUD$/);
     expect(routed.selected?.monetaryCostUsd).toBe(0);
     const complex = await router.route(complexTask(), "normal");
-    expect(complex.candidates.some((candidate) => candidate.provider === "ollama")).toBe(false);
-    expect(complex.rejectedCandidates?.some((candidate) => candidate.provider === "ollama" && candidate.reasons.some((reason) => reason.startsWith("quality-floor")))).toBe(true);
+    expect(complex.candidates.some((candidate) => candidate.provider === "ollama")).toBe(true);
+    expect(complex.candidates.find((candidate) => candidate.provider === "ollama")?.capabilityFit?.passes).toBe(false);
   });
   it("keeps an acceptable local model behind all acceptable free-cloud candidates", async () => {
     const selector = new AdaptiveModelSelector(await providerStatePath(), { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model),
@@ -155,17 +155,16 @@ describe("cloud-first product routing journeys", () => {
     expect(route.candidates.filter((candidate) => candidate.local).every((candidate) => candidate.computeTier === "LOCAL_EMERGENCY")).toBe(true);
   });
 
-  it("rejects local emergency compute below a complex mission floor", async () => {
+  it("scores local compute below a complex mission floor without blocking it", async () => {
     const selector = new AdaptiveModelSelector(await providerStatePath(), { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model),
       ollamaBaseUrl: await ollamaServer(),
       quotaSource: new JourneyQuotaSource(),
       capabilitySource: new JourneyCapabilitySource(0.42)
     });
     const route = await selector.route(complexTask(), "normal");
-    expect(route.candidates.some((candidate) => candidate.provider === "ollama")).toBe(false);
-    const rejectedLocal = route.rejectedCandidates?.filter((candidate) => candidate.provider === "ollama") ?? [];
-    expect(rejectedLocal.length).toBeGreaterThan(0);
-    expect(rejectedLocal.every((candidate) => candidate.computeTier === "LOCAL_EMERGENCY" && candidate.reasons.some((reason) => reason.startsWith("quality-floor:")))).toBe(true);
+    const local = route.candidates.find((candidate) => candidate.provider === "ollama");
+    expect(local).toBeDefined();
+    expect(local?.capabilityFit?.passes).toBe(false);
   });
 
   it("uses qualified local compute as an airbag when cloud is operationally unavailable", async () => {
@@ -181,7 +180,7 @@ describe("cloud-first product routing journeys", () => {
     expect(route.selected?.computeTier).toBe("LOCAL_EMERGENCY");
   });
 
-  it("returns NEEDS_CAPABILITY when cloud is unavailable and local is below the floor", async () => {
+  it("allows a safe local attempt when cloud is unavailable and quality evidence is low", async () => {
     const selector = new AdaptiveModelSelector(await providerStatePath(), { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model),
       ollamaBaseUrl: await ollamaServer(),
       quotaSource: new JourneyQuotaSource(),
@@ -189,9 +188,8 @@ describe("cloud-first product routing journeys", () => {
       canAttempt: async (candidate) => candidate.provider === "ollama"
     });
     const route = await selector.route(complexTask(), "normal");
-    expect(route.candidates).toHaveLength(0);
-    expect(route.selected).toBeUndefined();
-    expect(route.capacityStatus).toBe("NEEDS_CAPABILITY");
-    expect(route.reason).toContain("below the mission quality floor");
+    expect(route.candidates.length).toBeGreaterThan(0);
+    expect(route.selected?.provider).toBe("ollama");
+    expect(route.capacityStatus).toBe("CAPACITY_REDUCED");
   });
 });

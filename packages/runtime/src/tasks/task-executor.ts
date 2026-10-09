@@ -504,7 +504,7 @@ export class AutonomousTaskExecutor {
     const budget = remainingBudget(execution);
     let responseText: string;
     try {
-      const result = await runCandidates({ taskId: execution.task.id, stepId: step.id, phase: "DIRECT_RESPONSE", candidates,
+      const result = await runCandidates({ taskId: execution.task.id, stepId: step.id, phase: "DIRECT_RESPONSE", taskType: execution.task.type, candidates,
         maxCandidates: getEconomicRoutingPolicy(request.economicState).maxAttempts,
         ...inferenceAttemptPolicy(request.economicState),
         maxMonetaryCostUsd: budget.monetaryCostUsd, maxShadowCostUsd: budget.shadowCostUsd, maxDurationMs: budget.durationMs,

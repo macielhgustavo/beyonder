@@ -89,7 +89,9 @@ export class ModelObjectiveVerifier implements CompletionEvaluator {
     ].join(" ");
     const economicState = execution.economicState ?? "normal";
     const route = await this.router.route(verificationTask, economicState);
-    const independent = route.candidates.filter((candidate) => modelIdentity(candidate.model) && (!producer || independentPhysicalModels(candidate.model, producer.attribution?.reportedModel ?? producer.model)));
+    // Dynamic free routes have no physical identity until the response. They
+    // may attempt verification; semanticResponse checks the reported identity.
+    const independent = route.candidates.filter((candidate) => candidate.model === "openrouter/free" || modelIdentity(candidate.model) && (!producer || independentPhysicalModels(candidate.model, producer.attribution?.reportedModel ?? producer.model)));
     if (!independent.length) {
       const gaps = route.rejectedCandidates?.slice(0, 3).map(candidate => `${candidate.provider}/${candidate.model}: ${candidate.reasons.join(", ")}`).join("; ");
       return unverifiable(`No independent zero-money verifier meets this mission's quality floor. ${route.candidates.length ? "Only the producer is eligible." : gaps || route.reason}`);
@@ -120,6 +122,7 @@ export class ModelObjectiveVerifier implements CompletionEvaluator {
         taskId: execution.task.id,
         stepId: claimReview ? planReview ? "objective-verification-plan-review" : staticClaimReview ? "objective-verification-static-claim-review" : "objective-verification-claim-review" : "objective-verification",
         phase: "OBJECTIVE_VERIFICATION",
+        taskType: execution.task.type,
         // A failed physical candidate in the first stage is not a fresh
         // attempt slot in the second stage. In particular, a remapped producer
         // identity must not repeatedly consume the remaining review budget.

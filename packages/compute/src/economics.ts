@@ -105,8 +105,12 @@ export function resolveZeroCostExecution(input: {
   if (evidence.billingSpilloverPossible === true || evidence.providerBillingBehavior === 'MAY_CHARGE' && evidence.spendCap !== 'ENFORCED_ZERO') return reject('BILLING_RISK', 'This account can charge after free quota.');
   const protectedAccount = evidence.spendCap === 'ENFORCED_ZERO' || evidence.accountBillingState === 'DISABLED' && evidence.providerBillingBehavior === 'REJECT_AFTER_FREE_QUOTA' && evidence.billingSpilloverPossible === false;
   if (!protectedAccount) return reject('BILLING_STATE_UNKNOWN', 'No effective zero spend cap or verified reject-after-free billing protection.');
-  if (evidence.freeTierEligible !== true || evidence.freeQuota !== 'AVAILABLE') return reject('UNKNOWN_COST', 'Current free-tier eligibility/quota is not confirmed.');
-  return confirm('FREE_QUOTA_CONFIRMED', 'Current account-bound free quota and enforced zero-charge protection.', evidence.expiresAt);
+  if (evidence.freeTierEligible !== true) return reject('UNKNOWN_COST', 'Account is not confirmed eligible for the free tier.');
+  // Unknown quota means a possible 429, not a charge, when the current account
+  // is proven unable to spill into paid usage. Exhaustion remains a hard block.
+  return confirm('FREE_QUOTA_CONFIRMED', evidence.freeQuota === 'AVAILABLE'
+    ? 'Current account-bound free quota and enforced zero-charge protection.'
+    : 'Free-tier account has enforced zero-charge protection; remaining quota is unknown.', evidence.expiresAt);
 }
 
 function fresh(timestamp: string, now: number, ttl: number) { const age = now - Date.parse(timestamp); return Number.isFinite(age) && age >= 0 && age < ttl; }

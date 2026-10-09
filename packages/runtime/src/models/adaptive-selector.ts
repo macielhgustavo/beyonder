@@ -4,8 +4,7 @@ import type { EconomicState } from "../types.js";
 import type { ModelCapabilitySource } from "./capability-source.js";
 import { NullCapabilitySource, predictCapability } from "./capability-source.js";
 import type { CapabilityPredictionEvidence, HistoricalPerformance, ModelCandidate, RejectedCandidate, RouteDecision, RouterTelemetry } from "./adaptive-types.js";
-import { CLOUD_FIRST_POLICY, assessCapability, computeTier, executionTierRank, paidCandidateAllowed, resolveQualityFloor, routingScore, objectivePhaseTask } from "./compute-policy.js";
-import { independentPhysicalModels } from "./model-identity.js";
+import { CLOUD_FIRST_POLICY, assessCapability, computeTier, paidCandidateAllowed, resolveQualityFloor, routingScore } from "./compute-policy.js";
 import type { PerformanceRepository } from "./performance-repository.js";
 import { EmptyPerformanceRepository } from "./performance-repository.js";
 import type { QuotaSource } from "./quota.js";
@@ -293,10 +292,11 @@ export class AdaptiveModelSelector {
       const tier = computeTier(candidate, capabilityFit, qualityFloor);
       const score = routingScore(candidate, capabilityFit, tier, qualityFloor);
       const rejectionReasons: string[] = [];
-      if (!capabilityFit.passes) rejectionReasons.push(...capabilityFit.gaps.map((gap) => `quality-floor:${gap}`));
+      // A quality estimate is evidence for ranking, never permission to produce.
+      // Unknown and low-sample models must be able to gather real observations.
       if (tier === "PAID_DISABLED" && !paidCandidateAllowed()) rejectionReasons.push("paid escalation is architecturally represented but disabled in v0.5");
       if (candidate.monetaryCostUsd > policy.maxMonetaryCostUsd) rejectionReasons.push(`monetary-cost>${policy.maxMonetaryCostUsd}`);
-      if (candidate.effectiveResourceCost > policy.maxEffectiveCostUsd) rejectionReasons.push(`effective-resource-cost>${policy.maxEffectiveCostUsd}`);
+      // Shadow cost is a score signal. The hard economic limit is monetary.
 
       Object.assign(candidate, {
         capabilityFit,
@@ -330,7 +330,7 @@ export class AdaptiveModelSelector {
       }
     }
 
-    candidates.sort((a, b) => executionTierRank(a.computeTier) - executionTierRank(b.computeTier) || (b.routingScore ?? -Infinity) - (a.routingScore ?? -Infinity) || b.predictedQuality - a.predictedQuality);
+    candidates.sort((a, b) => (b.routingScore ?? -Infinity) - (a.routingScore ?? -Infinity) || b.predictedQuality - a.predictedQuality);
     // Multiple qualified modes are alternatives for one physical candidate,
     // not additional providers, verifier independence, or fresh quota capacity.
     const selectedModels = new Set<string>();
@@ -340,35 +340,7 @@ export class AdaptiveModelSelector {
       if (selectedModels.has(identity)) candidates.splice(index, 1);
       else { selectedModels.add(identity); index++; }
     }
-    consideredCandidates.sort((a, b) => executionTierRank(a.computeTier) - executionTierRank(b.computeTier) || (b.routingScore ?? -Infinity) - (a.routingScore ?? -Infinity));
-
-    let verifierShortage = false;
-    if (task.inferencePhase === "DIRECT_RESPONSE" && task.goalContract && candidates.length) {
-      // Allocate an eligible pair, rather than consuming the only adequate
-      // independent judge as the producer. The judge is still routed again at
-      // execution time: this preview cannot certify future availability.
-      const verification = await this.route(objectivePhaseTask(task, "OBJECTIVE_VERIFICATION"), economicState);
-      for (let index = 0; index < candidates.length;) {
-        const producer = candidates[index]!;
-        const judges = verification.candidates.filter(judge => independentPhysicalModels(judge.model, producer.model));
-        if (judges.length) {
-          producer.explanation.constraints.push(`independent-verifier-candidates=${judges.length}`);
-          index++;
-          continue;
-        }
-        verifierShortage = true;
-        candidates.splice(index, 1);
-        producer.eligible = false;
-        producer.rejectionReasons = [...(producer.rejectionReasons ?? []), "no independently qualified verifier for this producer"];
-        const rejected: RejectedCandidate = {
-          provider: producer.provider, model: producer.model, inferenceProfile: producer.inferenceProfile,
-          computeTier: producer.computeTier!, reasons: producer.rejectionReasons,
-          capabilityFit: producer.capabilityFit
-        };
-        rejectedCandidates.push(rejected);
-        await this.telemetry("debug", "router.candidate_rejected", { taskId: task.id, phase: task.inferencePhase, capacityRole: "VERIFIER", ...rejected });
-      }
-    }
+    consideredCandidates.sort((a, b) => (b.routingScore ?? -Infinity) - (a.routingScore ?? -Infinity));
 
     if (candidates.length === 0) {
       await this.telemetry("warn", "router.needs_capability", {
@@ -384,14 +356,14 @@ export class AdaptiveModelSelector {
         rejectedCandidates,
         explored: false,
         capacityStatus: "NEEDS_CAPABILITY",
-        reason: verifierShortage ? "producer capacity exists, but no independently qualified verifier is available for an eligible pair" : "adequate models for this mission are unavailable; available compute is below the mission quality floor or policy constraints"
+        reason: "No operationally and economically eligible model is available"
       };
     }
 
-    const cloudCandidates = candidates.filter((candidate) => candidate.computeTier !== "LOCAL_EMERGENCY");
+    const cloudCandidates = candidates.filter((candidate) => !candidate.local);
     let selected = candidates[0];
     let explored = false;
-    const explorationPool = cloudCandidates.length > 1 ? cloudCandidates : [];
+    const explorationPool = candidates.length > 1 ? candidates : [];
     if (this.options.allowExploration === true && explorationPool.length > 1 && this.random.next() < policy.explorationRate) {
       const offset = Math.floor(this.random.next() * (explorationPool.length - 1));
       selected = explorationPool[1 + offset] ?? selected;
@@ -419,10 +391,10 @@ export class AdaptiveModelSelector {
       explored,
       capacityStatus,
       reason: capacityStatus === "CAPACITY_REDUCED"
-        ? "cloud capacity unavailable; quality-qualified local emergency compute selected as airbag"
+        ? "only local zero-cost compute is available"
         : explored
           ? `controlled cloud exploration within ${economicState} safety and quality constraints`
-          : `highest mission-adjusted cloud quality under ${economicState} zero-money constraints`
+          : `highest task-adjusted score under ${economicState} zero-money constraints`
     };
   }
 
@@ -435,7 +407,10 @@ export class AdaptiveModelSelector {
   }
 
   private expandCompatible(entry: InventoryEntry, task: IntelligenceTask): Array<{ entry: InventoryEntry; model: string }> {
-    if (!["healthy", "keyless"].includes(entry.status)) return [];
+    // Bootstrap state can be stale after a transient validation failure. A
+    // previously validated catalog is still discoverable; current credential,
+    // cooldown and economic checks decide whether it can be attempted now.
+    if (!["healthy", "keyless"].includes(entry.status) && !entry.modelCatalogReady) return [];
     if (task.requirements.contextWindow && typeof entry.contextWindow === "number" && entry.contextWindow < task.requirements.contextWindow) return [];
     if (task.requirements.vision) return [];
     const workload = workloadForTask(task.type);

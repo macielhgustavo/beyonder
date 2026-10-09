@@ -220,10 +220,10 @@ describe("parsing, budgets and local discovery", () => {
   });
   it.each(['{"ok":true}', '```json\n{"ok":true}\n```', 'Result: {"ok":true}'])("parses one safely extractable object", (text) => expect(parseStructuredObject(text)).toEqual({ ok: true }));
   it.each(['{} {}', '{broken}', '{"x":"unterminated}', 'no JSON'])("rejects ambiguous or malformed output", (text) => expect(() => parseStructuredObject(text)).toThrow());
-  it("enforces cumulative fallback resource budget", async () => {
+  it("tries the next free candidate despite advisory shadow budget", async () => {
     const complete = vi.fn().mockRejectedValue(httpFailure(429, "limited"));
-    await expect(runCandidates({ taskId: "t", phase: "PLANNING", candidates: [candidate("1"), candidate("2")], messages: [], maxMonetaryCostUsd: 0, maxShadowCostUsd: 0.001, maxDurationMs: 500, complete, validate: (v) => v })).rejects.toMatchObject({ failureClass: "BUDGET_EXHAUSTED" });
-    expect(complete).toHaveBeenCalledOnce();
+    await expect(runCandidates({ taskId: "t", phase: "PLANNING", candidates: [candidate("1"), candidate("2")], messages: [], maxMonetaryCostUsd: 0, maxShadowCostUsd: 0.001, maxDurationMs: 500, complete, validate: (v) => v })).rejects.toMatchObject({ failureClass: "RATE_LIMITED" });
+    expect(complete).toHaveBeenCalledTimes(2);
   });
   it("bounds a stalled inference and persists TIMEOUT", async () => {
     const record = vi.fn();

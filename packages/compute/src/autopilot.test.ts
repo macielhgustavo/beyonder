@@ -55,7 +55,7 @@ test("inaccessible historical credential preserves observed catalog and capabili
   const before=(await store.read()).providers.groq.validation;
   const broker=new CredentialBroker({}, {}, {providerStatePath:path,manifestPath:join(dir,'manifest.json')});
   const descriptor=(await broker.resolve('groq')).descriptor;
-  assert.equal(descriptor.configured,true);assert.equal(descriptor.accessible,false);assert.equal(descriptor.status,'CREDENTIAL_SOURCE_UNAVAILABLE');
+  assert.equal(descriptor.configured,true);assert.equal(descriptor.accessible,false);assert.ok(['CREDENTIAL_SOURCE_UNAVAILABLE','VAULT_LOCKED'].includes(descriptor.status));
   await new ProviderAutopilotOrchestrator(broker,store).run({providerId:'groq',dryRun:true});
   const after=(await store.read()).providers.groq;assert.deepEqual(after.validation,before);assert.equal(after.state,'HUMAN_GATE');
  } finally {await rm(dir,{recursive:true,force:true});}

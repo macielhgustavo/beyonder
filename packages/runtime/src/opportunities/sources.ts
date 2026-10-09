@@ -1,7 +1,8 @@
-import type { OpportunitySource, OpportunityDiscoveryResult, OpportunitySourceContext, RawOpportunity } from "./contracts.js";
+import type { OpportunitySource, OpportunityDiscoveryResult, OpportunitySourceContext, RawOpportunity, OpportunitySourceClassification } from "./contracts.js";
 
 export class DeterministicFixtureOpportunitySource implements OpportunitySource {
   readonly id = "fixture";
+  readonly classification: OpportunitySourceClassification = "FIXTURE";
 
   async discover(context: OpportunitySourceContext = {}): Promise<OpportunityDiscoveryResult> {
     const discoveredAt = context.now ?? new Date().toISOString();
@@ -50,6 +51,7 @@ export interface GitHubIssueSourceOptions {
 
 export class GitHubPublicOpportunitySource implements OpportunitySource {
   readonly id = "github-public";
+  readonly classification: OpportunitySourceClassification = "REAL";
   private readonly apiBaseUrl: string;
   private readonly repository?: string;
   private readonly fetchImpl: typeof fetch;
@@ -89,6 +91,7 @@ export interface AgentWorkOpportunitySourceOptions {
 export interface OpenBountyOpportunitySourceOptions { apiBaseUrl?: string; fetchImpl?: typeof fetch; }
 export class OpenBountyPublicOpportunitySource implements OpportunitySource {
   readonly id = "openbounty-public";
+  readonly classification: OpportunitySourceClassification = "REAL";
   private readonly apiBaseUrl: string;
   private readonly fetchImpl: typeof fetch;
   constructor(options: OpenBountyOpportunitySourceOptions = {}) { this.apiBaseUrl = (options.apiBaseUrl ?? "https://www.openbounty.app/api/v1").replace(/\/$/, ""); this.fetchImpl = options.fetchImpl ?? fetch; }
@@ -116,6 +119,7 @@ function openBountyToRaw(value: unknown, source: string): RawOpportunity | undef
 /** Public, read-only AgentWork catalog adapter. It never registers, applies, messages, or pays. */
 export class AgentWorkPublicOpportunitySource implements OpportunitySource {
   readonly id = "agentwork-public";
+  readonly classification: OpportunitySourceClassification = "DEGRADED";
   private readonly apiBaseUrl: string;
   private readonly fetchImpl: typeof fetch;
 

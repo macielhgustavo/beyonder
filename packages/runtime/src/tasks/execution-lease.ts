@@ -24,6 +24,7 @@ export class ExecutionLeaseConflictError extends Error {
 export interface TaskExecutionLeaseStore {
   acquire(taskId: string, executionId: string, durationMs?: number): Promise<ExecutionLease>;
   release(lease: ExecutionLease): Promise<void>;
+  assertOwned?(lease: ExecutionLease): Promise<void>;
 }
 
 export class StateTaskExecutionLeaseStore implements TaskExecutionLeaseStore {
@@ -59,6 +60,14 @@ export class StateTaskExecutionLeaseStore implements TaskExecutionLeaseStore {
       throw new ExecutionLeaseConflictError(taskId);
     }
     throw new ExecutionLeaseConflictError(taskId);
+  }
+
+  async assertOwned(lease: ExecutionLease): Promise<void> {
+    const current = await this.state.get<ExecutionLease | null>(leaseKey(lease.taskId), null);
+    const expiresAt = current ? Date.parse(current.expiresAt) : NaN;
+    if (!current || current.ownerId !== lease.ownerId || current.executionId !== lease.executionId || !Number.isFinite(expiresAt) || expiresAt <= this.now()) {
+      throw new ExecutionLeaseConflictError(lease.taskId);
+    }
   }
 
   async release(lease: ExecutionLease): Promise<void> {

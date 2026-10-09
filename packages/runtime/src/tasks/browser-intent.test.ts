@@ -273,18 +273,18 @@ describe("browser evidence and no-tool response boundary", () => {
   it("formats observed browser evidence deterministically after an operational response failure", async () => {
     const runtime = setup(true);
     try {
-      const { task } = await runtime.intelligence.inspect("Use o site oficial do Python para descobrir a versão estável atual e explique em uma frase curta o que encontrou.");
+      const { task } = await runtime.intelligence.inspect("Use o site oficial do Caddy para descobrir a versão estável atual e explique em uma frase curta o que encontrou.");
       const open = (await runtime.getAvailableTools()).find((tool) => tool.capabilities.includes("browser:open"))!;
       vi.spyOn(runtime.browser, "startSession").mockResolvedValue("fixture-session");
-      const browser = vi.spyOn(runtime.browser, "execute").mockResolvedValue({ status: "ok", action: { type: "open", url: "https://python.org/" }, observation: { url: "https://python.org/", title: "Python fixture", visibleText: "Download Python 3.14.8. Release notes are available.", interactiveElements: [] } } as never);
+      const browser = vi.spyOn(runtime.browser, "execute").mockResolvedValue({ status: "ok", action: { type: "open", url: "https://caddyserver.com/" }, observation: { url: "https://caddyserver.com/", title: "Caddy fixture", visibleText: "Download Caddy 2.10.2. Release notes are available.", interactiveElements: [] } } as never);
       vi.spyOn(runtime.modelRouter, "completeForPlanningCandidate").mockRejectedValue(new InferenceError("Inference deadline exceeded.", "TIMEOUT"));
       const plan: Plan = { id: "p", taskId: task.id, objective: task.input, revision: 1, createdAt: new Date().toISOString(), steps: [
-        { id: "read", description: "Read official page", status: "PENDING", action: { id: "open", tool: open.id, arguments: { url: "https://python.org/" } } },
+        { id: "read", description: "Read official page", status: "PENDING", action: { id: "open", tool: open.id, arguments: { url: "https://caddyserver.com/" } } },
         { id: "respond", description: "Answer from evidence", status: "PENDING", kind: "DIRECT_RESPONSE", dependencies: ["read"] }
       ] };
-      const outcome = await runtime.taskExecutor.execute({ task, plan, economicState: "survival", completionCriteria: { expectedText: "3.14.8" } });
+      const outcome = await runtime.taskExecutor.execute({ task, plan, economicState: "survival", completionCriteria: { expectedText: "2.10.2" } });
       expect(outcome.status).toBe("COMPLETED");
-      expect(outcome.result).toBe("A versão estável atual do Python observada no site oficial é 3.14.8.");
+      expect(outcome.result).toBe("A versão estável atual do Caddy observada na evidência é 2.10.2.");
       expect(browser).toHaveBeenCalledOnce();
       expect(outcome.execution.attempts?.at(-1)).toMatchObject({ phase: "DIRECT_RESPONSE", provider: "deterministic", model: "observed-evidence-format", status: "SUCCEEDED" });
       expect(outcome.execution.steps.at(-1)?.route?.selected).toMatchObject({ provider: "deterministic", model: "observed-evidence-format" });

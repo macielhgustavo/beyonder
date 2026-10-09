@@ -1,3 +1,4 @@
+import { currentVersionLookup, observedCurrentVersion } from "./current-version.js";
 import { objectivePhaseTask } from "../models/compute-policy.js";
 import { nanoid } from "nanoid";
 import { parseCalculatorExpression } from "../intelligence/calculator-expression.js";
@@ -27,7 +28,7 @@ import type { Planner } from "./planner.js";
 import { validatePlan } from "./planner.js";
 import { assertTaskStateTransition, isTerminalTaskState } from "./state-machine.js";
 import { findReconciliationRequired, type TaskCheckpointStore } from "./checkpoints.js";
-import type { TaskExecutionLeaseStore } from "./execution-lease.js";
+import type { ExecutionLease, TaskExecutionLeaseStore } from "./execution-lease.js";
 import { classifyFailure, InferenceError, runCandidates, validateDirectResponse } from "../models/inference.js";
 import { getEconomicRoutingPolicy, inferenceAttemptPolicy } from "../models/router-config.js";
 import { hasBrowserEvidence, isReadOnlyBrowserTool, relevantEvidenceExcerpt } from "./browser-evidence.js";
@@ -83,6 +84,7 @@ const EMPTY_USAGE: TaskBudgetUsage = {
 };
 
 export class AutonomousTaskExecutor {
+  private readonly activeLeases = new WeakMap<TaskExecution, ExecutionLease>();
   private readonly now: () => number;
   private readonly id: () => string;
   private readonly recoveryPolicy: RecoveryPolicy;
@@ -155,8 +157,9 @@ export class AutonomousTaskExecutor {
       execution.id,
       Math.max(300_000, execution.budget.maxDurationMs + 60_000)
     );
+    if (lease) this.activeLeases.set(execution, lease);
     try { return await this.runExecution(execution, request); }
-    finally { if (lease) await this.options.executionLeaseStore?.release(lease); }
+    finally { this.activeLeases.delete(execution); if (lease) await this.options.executionLeaseStore?.release(lease); }
   }
 
   private async runExecution(execution: TaskExecution, request: ExecuteTaskRequest): Promise<AutonomousTaskOutcome> {
@@ -169,6 +172,7 @@ export class AutonomousTaskExecutor {
     await this.transition(execution, "RUNNING", { objective: execution.plan.objective });
 
     while (!isTerminalTaskState(execution.state)) {
+      await this.assertLease(execution);
       await this.syncInferenceUsage(execution);
       execution.usage.durationMs = elapsedDuration(execution, this.now());
       const terminal = budgetTerminalState(execution, request.signal);
@@ -621,7 +625,13 @@ export class AutonomousTaskExecutor {
     return this.options.getAvailableTools?.({ taskId: execution.task.id, economicState }) ?? [];
   }
 
+  private async assertLease(execution: TaskExecution) {
+    const lease = this.activeLeases.get(execution);
+    if (lease) await this.options.executionLeaseStore?.assertOwned?.(lease);
+  }
+
   private async checkpoint(execution: TaskExecution, observationSummary?: string) {
+    await this.assertLease(execution);
     const checkpoint: ExecutionCheckpoint = {
       taskId: execution.task.id,
       planId: execution.plan.id,
@@ -655,6 +665,7 @@ export class AutonomousTaskExecutor {
   }
 
   private async transition(execution: TaskExecution, state: TaskExecutionState, details: Record<string, unknown> = {}) {
+    await this.assertLease(execution);
     if (execution.state === state) return;
     assertTaskStateTransition(execution.state, state);
     const previous = execution.state;
@@ -929,16 +940,12 @@ function deterministicBrowserResponse(input: string, observations: StepExecution
     .map((text) => text.replace(/\s+/g, " ").trim())
     .filter(Boolean)
     .join("\n");
-  if (!evidence || !/\b(vers(?:ion|ao)|lts|release)\b/i.test(input.normalize("NFD").replace(/[\u0300-\u036f]/g, ""))) return undefined;
-
-  const versions = [...evidence.matchAll(/\bv?\d{1,3}\.\d{1,3}(?:\.\d{1,3})?\b/gi)]
-    .map((match) => ({ value: match[0]!, context: evidence.slice(Math.max(0, match.index! - 80), match.index! + match[0]!.length + 80) }))
-    .sort((a, b) => versionEvidenceScore(b.context, input) - versionEvidenceScore(a.context, input));
-  const selected = versions[0]?.value;
+  const lookup = currentVersionLookup(input);
+  if (!lookup) return undefined;
+  const selected = observedCurrentVersion(lookup, evidence);
   if (!selected) return undefined;
   if (/(?:responda|reply|answer).{0,30}(?:somente|apenas|only|just).{0,20}(?:vers[aã]o|version)/i.test(input)) return selected;
-  const product = /\bpython\b/i.test(input) ? "Python" : /\bnode(?:\.js)?\b/i.test(input) ? "Node.js" : undefined;
-  return `A versão ${/\blts\b/i.test(input) ? "LTS " : "estável atual "}${product ? `do ${product} ` : ""}observada no site oficial é ${selected}.`;
+  return `A versão ${lookup.channel === "lts" ? "LTS " : "estável atual "}do ${lookup.entity} observada na evidência é ${selected}.`;
 }
 
 function collectEvidenceStrings(value: unknown, depth = 0): string[] {
@@ -949,14 +956,6 @@ function collectEvidenceStrings(value: unknown, depth = 0): string[] {
   return [];
 }
 
-function versionEvidenceScore(context: string, input: string): number {
-  let score = /\b(latest|stable|estavel|lts|download|release)\b/i.test(context) ? 4 : 0;
-  if (/\blts\b/i.test(input) && /\blts\b/i.test(context)) score += 4;
-  if (/\bpython\b/i.test(input) && /\bpython\b/i.test(context)) score += 2;
-  if (/\bnode(?:\.js)?\b/i.test(input) && /\bnode(?:\.js)?\b/i.test(context)) score += 2;
-  if (/\b(?:19|20)\d{2}[.-]\d{1,2}[.-]\d{1,2}\b/.test(context)) score -= 3;
-  return score;
-}
 
 function toOutcome(execution: TaskExecution): AutonomousTaskOutcome {
   const terminal = isTerminalTaskState(execution.state) ? execution.state : "FAILED";

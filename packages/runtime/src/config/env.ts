@@ -28,7 +28,7 @@ const envSchema = z.object({
   BEYONDER_MAX_STEPS: numberFromEnv(1),
   BEYONDER_TOOLS_ENABLED: booleanFromEnv,
   BEYONDER_SHELL_ENABLED: booleanFromEnv,
-  BEYONDER_BROWSER_ENABLED: booleanFromEnv,
+  BEYONDER_BROWSER_ENABLED: z.preprocess(value => value == null || value === "" ? true : value === true || value === "true" || value === "1", z.boolean()),
   BEYONDER_FILESYSTEM_ENABLED: booleanFromEnv,
   BEYONDER_MODEL_PROVIDER: z.enum(["auto", "none", "ollama", "openai-compatible"]).default("auto"),
   BEYONDER_MODEL_NAME: z.string().default("llama3.2"),
@@ -58,7 +58,8 @@ export function loadConfig(overrides: Partial<Record<string, string>> = {}) {
     tools: {
       enabled: parsed.BEYONDER_TOOLS_ENABLED,
       shell: parsed.BEYONDER_TOOLS_ENABLED && parsed.BEYONDER_SHELL_ENABLED,
-      browser: parsed.BEYONDER_TOOLS_ENABLED && parsed.BEYONDER_BROWSER_ENABLED,
+      // Read-only public research is a baseline capability; mutating tools remain opt-in.
+      browser: parsed.BEYONDER_BROWSER_ENABLED,
       filesystem: parsed.BEYONDER_TOOLS_ENABLED && parsed.BEYONDER_FILESYSTEM_ENABLED
     },
     model: {

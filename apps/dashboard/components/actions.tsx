@@ -11,11 +11,10 @@ type Command = Record<string, unknown> & { type: string };
 export function ObjectiveBox({ initialMission = null }: { initialMission?: TaskView | null }) {
   const router = useRouter();
   const [objective, setObjective] = useState("");
-  const initialTerminal = Boolean(initialMission && ["succeeded", "failed", "blocked", "cancelled"].includes(initialMission.status)
-    && initialMission.completedAt && initialMission.objectiveStatus && initialMission.executionPhase !== "EXECUTING");
-  const [pending, setPending] = useState(Boolean(initialMission && !initialTerminal));
+  const initialPending = Boolean(initialMission && ["queued", "planning", "running"].includes(initialMission.status));
+  const [pending, setPending] = useState(initialPending);
   const [message, setMessage] = useState<string | null>(null);
-  const [taskId, setTaskId] = useState<string | null>(initialTerminal ? null : initialMission?.taskId ?? null);
+  const [taskId, setTaskId] = useState<string | null>(initialPending ? initialMission?.taskId ?? null : null);
   const [mission, setMission] = useState<TaskView | null>(initialMission);
   const [submittedObjective, setSubmittedObjective] = useState<string | null>(initialMission?.title ?? null);
 

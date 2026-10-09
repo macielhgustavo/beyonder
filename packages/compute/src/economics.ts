@@ -20,7 +20,7 @@ export interface AccountCostEvidence {
 export interface ZeroCostDecision {
   version: 1; provider: string; model: string;
   costClass: NonNullable<ModelCatalogEntry['costClass']>;
-  classification: CostDecisionClass; source: 'NONE' | 'LOCAL_ENDPOINT' | 'EXPLICIT_FREE_ROUTE_AND_LIVE_PRICE' | AccountCostEvidence['source'];
+  classification: CostDecisionClass; source: 'NONE' | 'LOCAL_ENDPOINT' | 'EXPLICIT_FREE_ROUTE_AND_LIVE_PRICE' | 'OFFICIAL_FREE_ROUTER' | AccountCostEvidence['source'];
   checkedAt: string; expiresAt: string;
   accountBillingState: AccountCostEvidence['accountBillingState'];
   freeTierEligible: EconomicTruth; freeQuota: FreeQuotaState;
@@ -74,16 +74,27 @@ export function resolveZeroCostExecution(input: {
     Object.assign(decision, { source: 'LOCAL_ENDPOINT', accountBillingState: 'DISABLED', billingSpilloverPossible: false, spendCap: 'ENFORCED_ZERO', providerBillingBehavior: 'REJECT_AFTER_FREE_QUOTA' });
     return confirm('ZERO_COST_CONFIRMED', 'Local inference endpoint; no provider monetary billing. Local resource/shadow cost remains separate.', new Date(now + 60_000).toISOString());
   }
-  // Keep the monetary gate small and evidence-based: exact zero-priced free routes
-  // are allowed, including OpenRouter's official dynamic free-model router.
+
+  // OpenRouter publishes openrouter/free as its dedicated free-model router. The
+  // runtime also sends a zero price ceiling and checks the returned usage cost,
+  // so this official route does not need per-model catalog pricing to execute.
+  const officialOpenRouterFreeRouter = provider.id === 'openrouter'
+    && provider.openAiCompatibleEndpoint === 'https://openrouter.ai/api/v1'
+    && model.id === 'openrouter/free'
+    && ['FREE_CONFIRMED', 'FREE_TIER_ELIGIBLE'].includes(model.costClass ?? '');
+  if (officialOpenRouterFreeRouter) {
+    Object.assign(decision, { source: 'OFFICIAL_FREE_ROUTER', billingSpilloverPossible: false, spendCap: 'ENFORCED_ZERO', providerBillingBehavior: 'REJECT_AFTER_FREE_QUOTA' });
+    return confirm('ZERO_COST_CONFIRMED', 'Official OpenRouter free-model router; request price ceiling and response cost check keep paid spillover disabled.', new Date(now + 60_000).toISOString());
+  }
+
   const price = model.costEvidence;
   const gatewayEndpoints: Record<string, string> = { openrouter: 'https://openrouter.ai/api/v1', 'kilo-gateway': 'https://api.kilo.ai/api/gateway' };
   const explicitFreeRoute = provider.id === 'openrouter'
-    ? model.id.endsWith(':free') || model.id === 'openrouter/free'
+    ? model.id.endsWith(':free')
     : provider.id === 'kilo-gateway' && /(?::|-)free$/i.test(model.id) && price?.explicitFreeRoute === true;
   if (gatewayEndpoints[provider.id] === provider.openAiCompatibleEndpoint && explicitFreeRoute && price?.zeroPrice === true && price.source === 'live-catalog' && fresh(price.observedAt, now, 86_400_000) && ['FREE_CONFIRMED', 'FREE_TIER_ELIGIBLE'].includes(model.costClass ?? '')) {
     Object.assign(decision, { source: 'EXPLICIT_FREE_ROUTE_AND_LIVE_PRICE', billingSpilloverPossible: false, spendCap: 'ENFORCED_ZERO', providerBillingBehavior: 'REJECT_AFTER_FREE_QUOTA' });
-    return confirm('ZERO_COST_CONFIRMED', 'Zero-priced free gateway route/router confirmed by the live catalog; paid substitution remains disallowed by the request price ceiling and response cost check.', new Date(Math.min(now + 60_000, Date.parse(price.observedAt) + 86_400_000)).toISOString());
+    return confirm('ZERO_COST_CONFIRMED', 'Zero-priced free gateway route confirmed by the live catalog; paid substitution remains disallowed by the request price ceiling and response cost check.', new Date(Math.min(now + 60_000, Date.parse(price.observedAt) + 86_400_000)).toISOString());
   }
   const evidence = input.accountEvidence;
   if (!evidence || !validAccountEvidence(evidence, now) || evidence.provider !== provider.id || evidence.model !== model.id || evidence.endpoint !== provider.openAiCompatibleEndpoint) return reject(model.costClass === 'UNKNOWN_COST' || !model.costClass ? 'UNKNOWN_COST' : 'BILLING_STATE_UNKNOWN', 'Free-tier eligibility does not prove account billing, free quota or spillover protection.');

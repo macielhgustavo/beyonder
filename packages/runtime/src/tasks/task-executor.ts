@@ -937,8 +937,43 @@ function deterministicBrowserResponse(input: string, observations: StepExecution
   const selected = versions[0]?.value;
   if (!selected) return undefined;
   if (/(?:responda|reply|answer).{0,30}(?:somente|apenas|only|just).{0,20}(?:vers[aã]o|version)/i.test(input)) return selected;
-  const product = /\bpython\b/i.test(input) ? "Python" : /\bnode(?:\.js)?\b/i.test(input) ? "Node.js" : undefined;
-  return `A versão ${/\blts\b/i.test(input) ? "LTS " : "estável atual "}${product ? `do ${product} ` : ""}observada no site oficial é ${selected}.`;
+
+  // Try to identify the software product from the input and evidence context
+  const product = identifyProduct(input, evidence);
+  return `A versão ${/\blts\b/i.test(input) ? "LTS " : "estável atual "}${product ? `do ${product} ` : ""}observada na evidência é ${selected}.`;
+}
+
+function identifyProduct(input: string, evidence: string): string | undefined {
+  // Look for known software names in the input
+  const softwarePatterns: Array<{ pattern: RegExp; name: string }> = [
+    { pattern: /\bpython\b/i, name: "Python" },
+    { pattern: /\bnode(?:\.js)?\b/i, name: "Node.js" },
+    { pattern: /\brust\b/i, name: "Rust" },
+    { pattern: /\bgo\b/i, name: "Go" },
+    { pattern: /\bpostgres(?:ql)?\b/i, name: "PostgreSQL" },
+    { pattern: /\bmysql\b/i, name: "MySQL" },
+    { pattern: /\bredis\b/i, name: "Redis" },
+    { pattern: /\bdocker\b/i, name: "Docker" },
+    { pattern: /\bkubernetes\b/i, name: "Kubernetes" },
+    { pattern: /\bterraform\b/i, name: "Terraform" },
+    { pattern: /\bansible\b/i, name: "Ansible" },
+    { pattern: /\bnginx\b/i, name: "Nginx" },
+    { pattern: /\bapache\b/i, name: "Apache" },
+  ];
+
+  for (const { pattern, name } of softwarePatterns) {
+    if (pattern.test(input)) return name;
+  }
+
+  // Try to infer from evidence context
+  const evidenceLower = evidence.toLowerCase();
+  if (evidenceLower.includes("python")) return "Python";
+  if (evidenceLower.includes("node.js") || evidenceLower.includes("nodejs")) return "Node.js";
+  if (evidenceLower.includes("rust")) return "Rust";
+  if (evidenceLower.includes("golang") || evidenceLower.includes(" go ")) return "Go";
+  if (evidenceLower.includes("postgresql") || evidenceLower.includes("postgres")) return "PostgreSQL";
+
+  return undefined;
 }
 
 function collectEvidenceStrings(value: unknown, depth = 0): string[] {

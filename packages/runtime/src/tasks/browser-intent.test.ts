@@ -284,7 +284,7 @@ describe("browser evidence and no-tool response boundary", () => {
       ] };
       const outcome = await runtime.taskExecutor.execute({ task, plan, economicState: "survival", completionCriteria: { expectedText: "3.14.8" } });
       expect(outcome.status).toBe("COMPLETED");
-      expect(outcome.result).toBe("A versão estável atual do Python observada no site oficial é 3.14.8.");
+      expect(outcome.result).toBe("A versão estável atual do Python observada na evidência é 3.14.8.");
       expect(browser).toHaveBeenCalledOnce();
       expect(outcome.execution.attempts?.at(-1)).toMatchObject({ phase: "DIRECT_RESPONSE", provider: "deterministic", model: "observed-evidence-format", status: "SUCCEEDED" });
       expect(outcome.execution.steps.at(-1)?.route?.selected).toMatchObject({ provider: "deterministic", model: "observed-evidence-format" });

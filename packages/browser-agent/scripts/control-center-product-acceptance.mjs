@@ -51,11 +51,21 @@ await fs.mkdir(output, { recursive: true });
 const browser = await chromium.launch({ headless: true });
 const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
 const report = { base, fixture: false, startedAt: new Date().toISOString(), cases: [], consoleErrors: [], pageErrors: [] };
+const authFile = process.env.BEYONDER_CONTROL_AUTH_DIR ? path.join(process.env.BEYONDER_CONTROL_AUTH_DIR, "auth-token.json") : null;
+async function authorizeLocalUI() {
+  if (!authFile) throw new Error("Product acceptance requires BEYONDER_CONTROL_AUTH_DIR for the isolated Control Center.");
+  const { token } = JSON.parse(await fs.readFile(authFile, "utf8"));
+  const form = page.getByRole("form", { name: "Autenticação local" });
+  await form.locator('input[type="password"]').fill(token);
+  await form.getByRole("button", { name: "Autorizar comandos" }).click();
+  await page.getByText("Comandos autorizados nesta aba.").waitFor();
+}
 page.on("console", (message) => { if (message.type() === "error") report.consoleErrors.push(message.text()); });
 page.on("pageerror", (error) => report.pageErrors.push(String(error)));
 const save = () => fs.writeFile(path.join(output, "report.json"), JSON.stringify(report, null, 2));
 try {
   await page.goto(base);
+  await authorizeLocalUI();
   const onboarding = page.locator('[data-command="completeFirstRun"]');
   if (await onboarding.count()) { await onboarding.click(); await page.locator("#objective").waitFor(); }
   for (const [category, objective] of objectives) {
@@ -63,6 +73,7 @@ try {
     const entry = { category, objective };
     try {
       await page.goto(base);
+      await authorizeLocalUI();
       await page.locator("#objective").fill(objective);
       const responsePromise = page.waitForResponse((response) => response.url().endsWith("/api/control/command") && response.request().method() === "POST");
       await page.locator('.objective-box button[type="submit"]').click();

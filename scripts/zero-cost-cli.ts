@@ -47,7 +47,9 @@ async function main() {
     process.exitCode = 1; return;
   }
   const physicalIdentity = physicalModelIdentity(response.attribution?.reportedModel ?? '');
-  console.log(JSON.stringify({ command, provider: providerId, model: requestedModel, status: response.content.trim() === 'OK' && physicalIdentity && physicalIdentity === physicalModelIdentity(requestedModel!) ? 'PASS_OPERATIONAL_ONLY' : 'FAIL_RESPONSE_OR_IDENTITY', inferenceCalls: 1, maxOutputTokens: 32, latencyMs: Date.now() - started, monetaryCostUsd: response.estimatedCostUsd, physicalModel: response.attribution?.reportedModel, quota: candidate.quota, economics: candidate.economics, verifierQualified: false, capabilityQualified: false }, null, 2));
+  const requestedIdentity = physicalModelIdentity(requestedModel!);
+  const identityAccepted = requestedModel === 'openrouter/free' ? Boolean(physicalIdentity) : Boolean(physicalIdentity && physicalIdentity === requestedIdentity);
+  console.log(JSON.stringify({ command, provider: providerId, model: requestedModel, status: response.content.trim() === 'OK' && identityAccepted ? 'PASS_OPERATIONAL_ONLY' : 'FAIL_RESPONSE_OR_IDENTITY', inferenceCalls: 1, maxOutputTokens: 32, latencyMs: Date.now() - started, monetaryCostUsd: response.estimatedCostUsd, physicalModel: response.attribution?.reportedModel, quota: candidate.quota, economics: candidate.economics, verifierQualified: false, capabilityQualified: false }, null, 2));
   } finally { sqlite.close(); }
 }
 main().catch(() => { console.error(JSON.stringify({ status: 'STOPPED', error: 'Zero-cost qualification stopped; consult metadata diagnostics. No retry performed.' })); process.exitCode = 1; });

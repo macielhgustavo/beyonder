@@ -1,3 +1,4 @@
+import { fixtureZeroCost } from './testing/zero-cost-fixture.js';
 import { createServer, type Server } from "node:http";
 import { mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
@@ -129,7 +130,7 @@ async function ollamaServer() {
 describe("cloud-first product routing journeys", () => {
   it("explicit local configuration cannot displace adequate free cloud or bypass the mission floor", async () => {
     const config = loadConfig({ BEYONDER_MODEL_PROVIDER: "ollama", BEYONDER_MODEL_NAME: "qwen3:4b", BEYONDER_PROVIDER_STATE_PATH: await providerStatePath(), OLLAMA_BASE_URL: await ollamaServer() });
-    const router = new ModelRouter(config.model, { capabilitySource: new JourneyCapabilitySource(0.48), quotaSource: new JourneyQuotaSource() });
+    const router = new ModelRouter(config.model, { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model), capabilitySource: new JourneyCapabilitySource(0.48), quotaSource: new JourneyQuotaSource() });
     const routed = await router.route(simpleTask(), "normal");
     expect(routed.selected?.provider).not.toBe("ollama");
     expect(routed.selected?.computeTier).toMatch(/^(STRONG|OTHER)_FREE_CLOUD$/);
@@ -139,7 +140,7 @@ describe("cloud-first product routing journeys", () => {
     expect(complex.rejectedCandidates?.some((candidate) => candidate.provider === "ollama" && candidate.reasons.some((reason) => reason.startsWith("quality-floor")))).toBe(true);
   });
   it("keeps an acceptable local model behind all acceptable free-cloud candidates", async () => {
-    const selector = new AdaptiveModelSelector(await providerStatePath(), {
+    const selector = new AdaptiveModelSelector(await providerStatePath(), { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model),
       ollamaBaseUrl: await ollamaServer(),
       quotaSource: new JourneyQuotaSource(),
       capabilitySource: new JourneyCapabilitySource(0.76)
@@ -155,7 +156,7 @@ describe("cloud-first product routing journeys", () => {
   });
 
   it("rejects local emergency compute below a complex mission floor", async () => {
-    const selector = new AdaptiveModelSelector(await providerStatePath(), {
+    const selector = new AdaptiveModelSelector(await providerStatePath(), { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model),
       ollamaBaseUrl: await ollamaServer(),
       quotaSource: new JourneyQuotaSource(),
       capabilitySource: new JourneyCapabilitySource(0.42)
@@ -168,7 +169,7 @@ describe("cloud-first product routing journeys", () => {
   });
 
   it("uses qualified local compute as an airbag when cloud is operationally unavailable", async () => {
-    const selector = new AdaptiveModelSelector(await providerStatePath(), {
+    const selector = new AdaptiveModelSelector(await providerStatePath(), { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model),
       ollamaBaseUrl: await ollamaServer(),
       quotaSource: new JourneyQuotaSource(),
       capabilitySource: new JourneyCapabilitySource(0.76),
@@ -181,7 +182,7 @@ describe("cloud-first product routing journeys", () => {
   });
 
   it("returns NEEDS_CAPABILITY when cloud is unavailable and local is below the floor", async () => {
-    const selector = new AdaptiveModelSelector(await providerStatePath(), {
+    const selector = new AdaptiveModelSelector(await providerStatePath(), { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model),
       ollamaBaseUrl: await ollamaServer(),
       quotaSource: new JourneyQuotaSource(),
       capabilitySource: new JourneyCapabilitySource(0.4),

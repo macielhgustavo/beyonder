@@ -93,7 +93,7 @@ export interface ModelCatalogEntry {
   contextWindow?: number;
   toolCalling?: "yes" | "no" | "unknown";
   reasoningControl?: boolean;
-  costEvidence?: { source: "live-catalog"; observedAt: string };
+  costEvidence?: { source: "live-catalog"; observedAt: string; zeroPrice?: boolean; explicitFreeRoute?: boolean };
   role?: "instruct" | "guard" | "embedding" | "reranker" | "classification-only" | "vision-only" | "speech-only" | "unknown";
   structuredOutput?: "native" | "prompted" | "unsupported" | "unknown";
   costClass?: "FREE_CONFIRMED" | "FREE_TIER_ELIGIBLE" | "UNKNOWN_COST" | "PAID";
@@ -206,6 +206,10 @@ export interface AutopilotStateFile {
 }
 
 export interface ComputeInventoryEntry {
+  bootstrapReady?: boolean;
+  modelCatalogReady?: boolean;
+  inferenceQualified?: boolean;
+  verifierQualified?: boolean;
   providerId: string;
   providerName: string;
   status: "healthy" | "keyless" | "missing-credential" | "human-action-required" | "manual-required" | "skipped" | "failed";

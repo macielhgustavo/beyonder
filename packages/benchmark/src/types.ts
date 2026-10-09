@@ -71,6 +71,8 @@ export interface BenchmarkResult {
 }
 
 export interface ModelTarget {
+  economics?: import('@beyonder/compute').ZeroCostDecision;
+  resolveEconomics?: () => Promise<import('@beyonder/compute').ZeroCostDecision>;
   reasoning?: { enabled?: boolean; effort?: "low" | "medium" | "high" };
   provider: string;
   providerName: string;

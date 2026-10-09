@@ -144,6 +144,7 @@ export interface ApprovalView {
 }
 
 export interface ProviderView {
+  economicModels?: Array<Pick<import('@beyonder/compute').ZeroCostInventoryRow, 'model' | 'costClass' | 'costEvidenceSource' | 'freeQuota' | 'billingSpillover' | 'zeroCostReady' | 'inferenceQualified' | 'verifierQualified' | 'reason'>>;
   credential?: import("@beyonder/compute").CredentialDescriptor;
   placement?: "CLOUD" | "LOCAL";
   id: string;

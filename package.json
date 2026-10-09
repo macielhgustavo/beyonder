@@ -45,6 +45,8 @@
     "providers:resume": "tsx apps/cli/src/index.ts providers resume",
     "providers:discover": "tsx apps/cli/src/index.ts providers discover",
     "providers:inventory": "tsx apps/cli/src/index.ts providers inventory",
+    "providers:zero-cost-inventory": "tsx scripts/zero-cost-cli.ts inventory",
+    "providers:zero-cost-smoke": "tsx scripts/zero-cost-cli.ts smoke",
     "providers:status": "tsx apps/cli/src/index.ts providers status",
     "providers:nvidia-smoke": "tsx packages/benchmark/src/models/nvidia-nim-smoke.ts",
     "control-center:security-smoke": "pnpm --filter @beyonder/control-center security-smoke",

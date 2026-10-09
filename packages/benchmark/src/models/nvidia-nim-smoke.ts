@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { getProvider, CredentialBroker, eligibleModelsForWorkload } from "@beyonder/compute";
+import { getProvider, CredentialBroker, eligibleModelsForWorkload, resolveZeroCostExecution, modelMetadata, requireZeroCostDecision, type ZeroCostDecision } from "@beyonder/compute";
 
 export const NVIDIA_NIM_SMOKE_PROMPT = "Return exactly: BEYONDER_NVIDIA_OK";
 export const NVIDIA_NIM_SMOKE_EXPECTED = "BEYONDER_NVIDIA_OK";
@@ -32,10 +32,11 @@ export interface NvidiaNimSmokeResult {
   testedCandidates: number;
   attempts: NvidiaNimSmokeAttempt[];
   catalogFailure?: Omit<NvidiaNimSmokeAttempt, "model">;
-  monetaryCostUsd: 0;
+  monetaryCostUsd: number | 'UNKNOWN';
 }
 
 interface NvidiaNimSmokeOptions {
+  economicEvidence?: (model: string) => Promise<ZeroCostDecision>;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
   maxCandidates?: number;
@@ -51,7 +52,7 @@ export async function runNvidiaNimSmoke(
 
   const fetchImpl = options.fetchImpl ?? fetch;
   const timeoutMs = options.timeoutMs ?? 15_000;
-  const maxCandidates = options.maxCandidates ?? 20;
+  const maxCandidates = Math.min(3, options.maxCandidates ?? 1);
   const baseUrl = provider.openAiCompatibleEndpoint.replace(/\/$/, "");
 
   const catalogResponse = await timedFetch(fetchImpl, `${baseUrl}/models`, {
@@ -73,6 +74,9 @@ export async function runNvidiaNimSmoke(
   const attempts: NvidiaNimSmokeAttempt[] = [];
 
   for (const model of candidates) {
+    const economics = await options.economicEvidence?.(model) ?? resolveZeroCostExecution({ provider, model: modelMetadata(provider, model) });
+    try { requireZeroCostDecision(economics, provider.id, model); }
+    catch { continue; } // Auth/catalog existence is not monetary authorization.
     try {
       const response = await timedFetch(fetchImpl, `${baseUrl}/chat/completions`, {
         method: "POST",
@@ -111,9 +115,10 @@ export async function runNvidiaNimSmoke(
       attempts.push({
         model,
         status: "RESPONSE_MISMATCH",
-        failureReason: `Expected exactly ${JSON.stringify(NVIDIA_NIM_SMOKE_EXPECTED)}; received ${JSON.stringify(content.trim().slice(0, 240))}.`
+      failureReason: 'Response did not match the operational smoke expectation.'
       });
     } catch (error) {
+      if (error instanceof SmokeBillingViolation) return { ok: false, catalogModelCount: models.length, chatCandidateCount: candidates.length, testedCandidates: attempts.length + 1, attempts: [...attempts, { model, status: 'BILLING_REQUIRED', errorCode: 'ZERO_COST_EVIDENCE_CONTRADICTED' }], monetaryCostUsd: error.cost };
       attempts.push({ model, ...classifyThrownError(error) });
     }
   }
@@ -125,7 +130,7 @@ export async function runNvidiaNimSmoke(
     testedCandidates: attempts.length,
     attempts,
     catalogFailure: candidates.length
-      ? undefined
+      ? attempts.length ? undefined : { status: 'BILLING_REQUIRED', errorCode: 'ZERO_COST_EXECUTION_NOT_GUARANTEED', failureReason: 'Catalog/auth valid does not prove free quota or no paid spillover; no inference executed.' }
       : {
           status: "MODEL_UNAVAILABLE",
           errorCode: "NO_CHAT_CANDIDATES",
@@ -144,9 +149,14 @@ async function extractModelIds(response: Response): Promise<string[]> {
 }
 
 async function extractCompletionContent(response: Response): Promise<string> {
-  const body = await response.json() as { choices?: Array<{ message?: { content?: unknown } }> };
+  const body = await response.json() as { choices?: Array<{ message?: { content?: unknown } }>; usage?: { cost?: unknown } };
+  if (body.usage?.cost !== undefined && (typeof body.usage.cost !== 'number' || !Number.isFinite(body.usage.cost) || body.usage.cost !== 0)) throw new SmokeBillingViolation(typeof body.usage.cost === 'number' && Number.isFinite(body.usage.cost) && body.usage.cost >= 0 ? body.usage.cost : 'UNKNOWN');
   const content = body.choices?.[0]?.message?.content;
   return typeof content === "string" ? content : "";
+}
+
+class SmokeBillingViolation extends Error {
+  constructor(readonly cost: number | 'UNKNOWN') { super('Provider contradicted zero-cost evidence.'); }
 }
 
 function candidatePriority(model: string): number {
@@ -169,7 +179,7 @@ async function timedFetch(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetchImpl(input, { ...init, signal: controller.signal });
+    return await fetchImpl(input, { ...init, redirect: 'error', signal: controller.signal });
   } finally {
     clearTimeout(timer);
   }
@@ -249,8 +259,8 @@ async function main(): Promise<void> {
     process.exitCode = 2;
     return;
   }
-  const maxCandidatesRaw = Number(process.env.NVIDIA_NIM_SMOKE_MAX_CANDIDATES ?? "20");
-  const maxCandidates = Number.isFinite(maxCandidatesRaw) && maxCandidatesRaw > 0 ? Math.floor(maxCandidatesRaw) : 20;
+  const maxCandidatesRaw = Number(process.env.NVIDIA_NIM_SMOKE_MAX_CANDIDATES ?? "1");
+  const maxCandidates = Number.isFinite(maxCandidatesRaw) && maxCandidatesRaw > 0 ? Math.floor(maxCandidatesRaw) : 1;
   const result = await runNvidiaNimSmoke(apiKey, { maxCandidates });
   console.log(JSON.stringify(result));
   if (!result.ok) process.exitCode = 1;

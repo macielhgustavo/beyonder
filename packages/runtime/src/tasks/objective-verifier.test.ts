@@ -1,3 +1,4 @@
+import { fixtureZeroCost } from '../models/testing/zero-cost-fixture.js';
 import { describe, expect, it, vi } from "vitest";
 import { ToolExecutor, ToolRegistry, ToolSideEffect } from "@beyonder/tools";
 import type { IntelligenceTask, TaskOutcome } from "../intelligence/contracts.js";
@@ -10,7 +11,7 @@ import type { Plan, TaskExecution } from "./contracts.js";
 import { ModelObjectiveVerifier } from "./model-objective-verifier.js";
 import { AutonomousTaskExecutor } from "./task-executor.js";
 
-const candidate = (model: string): ModelCandidate => ({ provider: "fixture", model, monetaryCostUsd: 0, shadowCostUsd: 0.001, utility: 1 } as ModelCandidate);
+const candidate = (model: string): ModelCandidate => ({ economics: fixtureZeroCost("fixture", model), provider: "fixture", model, monetaryCostUsd: 0, shadowCostUsd: 0.001, utility: 1 } as ModelCandidate);
 
 function comparisonTask(id = "objective-task"): IntelligenceTask {
   const input = "Compare filas e logs append-only para este pipeline e explique os trade-offs.";
@@ -241,7 +242,7 @@ describe("objective verification truth", () => {
   it("uses one independent remote verifier before preserving local fallback", async () => {
     const task = comparisonTask("local-verifier");
     const remote = candidate("remote-verifier");
-    const local = { ...candidate("local-verifier"), provider: "ollama", local: true, costClass: "FREE_CONFIRMED" as const, externalQuotaConsumption: false, shadowCostUsd: 0 };
+    const local = { ...candidate("local-verifier"), provider: "ollama", economics: fixtureZeroCost("ollama", "local-verifier"), local: true, costClass: "FREE_CONFIRMED" as const, externalQuotaConsumption: false, shadowCostUsd: 0 };
     const completeForStructuredCandidate = vi.fn(async (_messages: unknown, model: ModelCandidate) => ({ provider: model.provider, model: model.model, estimatedCostUsd: 0, content: JSON.stringify({ satisfied: true, confidence: 0.9, relevance: true, completeness: true, consistentWithEvidence: true, reason: "Objective and evidence agree.", missingRequirements: [], recoveryRecommendation: "NONE" }) }));
     const router = {
       route: vi.fn(async () => ({ task, economicState: "survival", selected: remote, candidates: [remote, local], reason: "fixture", explored: false })),
@@ -259,7 +260,7 @@ describe("objective verification truth", () => {
     const input = kind === "short-answer" ? "Responda apenas com o nome: qual é a capital do Canadá?" : comparisonTask().input;
     const task = { ...comparisonTask("local-verifier-after-invalid"), input, goalContract: analyzeGoalContract(input, "reasoning") };
     const remote = candidate("remote-verifier");
-    const local = { ...candidate("local-verifier"), provider: "ollama", local: true, costClass: "FREE_CONFIRMED" as const, externalQuotaConsumption: false, shadowCostUsd: 0 };
+    const local = { ...candidate("local-verifier"), provider: "ollama", economics: fixtureZeroCost("ollama", "local-verifier"), local: true, costClass: "FREE_CONFIRMED" as const, externalQuotaConsumption: false, shadowCostUsd: 0 };
     const completeForStructuredCandidate = vi.fn(async (_messages: unknown, model: ModelCandidate) => ({
       provider: model.provider,
       model: model.model,

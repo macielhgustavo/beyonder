@@ -1,3 +1,4 @@
+import { fixtureZeroCost } from '../models/testing/zero-cost-fixture.js';
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TaskClassifier } from "../intelligence/task-classifier.js";
 import { ComplexityEstimator } from "../intelligence/complexity-estimator.js";
@@ -11,8 +12,8 @@ import { getEconomicRoutingPolicy, inferenceAttemptPolicy } from "../models/rout
 import type { ModelCandidate } from "../models/adaptive-types.js";
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
-const remote = (model = "remote"): ModelCandidate => ({ provider: "fixture", model, monetaryCostUsd: 0, shadowCostUsd: 0.001, local: false, utility: 1 } as ModelCandidate);
-const local: ModelCandidate = { ...remote("local"), provider: "ollama", local: true, costClass: "FREE_CONFIRMED", shadowCostUsd: 0, externalQuotaConsumption: false };
+const remote = (model = "remote"): ModelCandidate => ({ economics: fixtureZeroCost("fixture", model), provider: "fixture", model, monetaryCostUsd: 0, shadowCostUsd: 0.001, local: false, utility: 1 } as ModelCandidate);
+const local: ModelCandidate = { ...remote("local"), provider: "ollama", economics: fixtureZeroCost("ollama", "local"), local: true, costClass: "FREE_CONFIRMED", shadowCostUsd: 0, externalQuotaConsumption: false };
 const response = { provider: "fixture", model: "remote", content: "OK", estimatedCostUsd: 0 };
 function setup(browser = false) {
   const runtime = createRuntime(loadConfig({ BEYONDER_DB_PATH: ":memory:", BEYONDER_MODEL_PROVIDER: "none", BEYONDER_TOOLS_ENABLED: "1", BEYONDER_BROWSER_ENABLED: browser ? "1" : "0" }));
@@ -370,7 +371,7 @@ describe("browser evidence and no-tool response boundary", () => {
   it("rejects native tool calls even in a successful HTTP response", async () => {
     vi.stubEnv("GROQ_API_KEY", "fixture-key");
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ choices: [{ message: { content: "OK", tool_calls: [{ function: { name: "web.run" } }] } }] }))));
-    const runtime = createRuntime(loadConfig({ BEYONDER_DB_PATH: ":memory:", BEYONDER_MODEL_PROVIDER: "auto" }));
+    const runtime = createRuntime(loadConfig({ BEYONDER_DB_PATH: ":memory:", BEYONDER_MODEL_PROVIDER: "auto" }), { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model) });
     try {
       await expect(runtime.modelRouter.completeForPlanningCandidate([{ role: "user", content: "OK" }], { ...remote(), provider: "groq" })).rejects.toMatchObject({ failureClass: "INVALID_OUTPUT" });
     } finally { runtime.sqlite.close(); }

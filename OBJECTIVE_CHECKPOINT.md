@@ -329,3 +329,87 @@ V0_5_CANDIDATE_READY_FOR_GUSTAVO=false
 Publicação desta revisão com[skip ci]:validação local do P1-C, NÃO qualificação
 completa nem CI_GREEN. FINAL_HEAD é o commit contendo esta seção, reportado após
 publicação e verificação de working tree limpa/alinhamento com origin.
+
+## P1-D — zero-cost execution guarantee, 2026-10-09
+
+START_HEAD/CURRENT_HEAD anterior:567c58e6c5a75036b777cb2c823db9705016cb73.
+Preflight confirmou feat/v05-final-integration,HEAD e origin iguais,working tree
+limpa;P1-C/checkpoint/docs portabilidade lidos e preservados. FINAL_HEAD é o
+commit contendo esta seção, reportado após publicação e alinhamento ao remoto.
+
+Bugs confirmados:selector atribuía monetaryCostUsd0 sem prova;READY/free-tier
+confundidos com execução grátis;direct/legacy/benchmark/NVIDIA tinham bypasses;
+usage inválido podia ser convertido em0;aliases podiam criar independência falsa.
+Fix sistêmico:decisão econômica tipada com UNKNOWN sem usd0;price/account/free
+quota/spend cap/spillover separados;PAID/risk/exhaustion são vetos duros,antes
+score e antes POST com revalidação. FREE_TIER_ELIGIBLE só não autoriza. Proof
+account atual vinculado à credential validada,provider/model/endpoint e5min;
+rotas gratuitas fixas Kilo/OpenRouter com pricinglive todo0 e fallback/preço
+restritos;local loopback instalado não-cloud apenas,sem promoção de tier.
+Endpoint genérico UNKNOWN bloqueado;legacy router delega;benchmark para todos
+após cobrança/usage inválido. Charge reportado preservado;runtime economic-stop.
+Bootstrap/catalog/economic/inference/verifier qualificação separados. Resources
+mantém premium e mostra disclosure econômico verdadeiro. Nenhum floor/verifier,
+browser boundary,wallet/economia futura ou P1-C enfraquecido.
+
+Testes:core econômica16;regressões runtime23;BIB durability3;operator CLI3
+cenários controlados semnetworkexterna,incluindoquota escopada/restart e0POST
+na segunda execução. Cobrem A–O,price/quota drift,UNKNOWN não0,billingrisk,
+same-physical gateway,aliases,skippedHorde,redaction/histórico ehalt global.
+Full pnpm test passou760 casos;últimos reruns áreas alteradas compute50,
+benchmark79,integration4 PASS. Grupos restantes tools15/runtime524/browser69+
+network4/web-evals20 PASS. Base final de casos distintos root765 +credentials19
++ControlCenter53=837. Build/typecheck root/CC PASS;CC production build PASS;
+security smoke7 PASS e hardening smoke PASS,cost0. Sem lock/dependency change.
+Não reexecutei38,VisualQA,fullremoteCI ou audit29. Nenhum CI_GREEN declarado.
+
+Inventário metadata-only antes do refresh:29providers/478rows/0ZERO_COST_READY.
+1GET catálogo keylessKilo,sem inferência paga/unknown,observou401 modelos e12
+rotas fixas economicamente gratuitas. Snapshot final01:11:26.671Z:480rows,
+74FREE_TIER_ELIGIBLE/405PAID/1UNKNOWN_COST;12economicreadyKilo,não qualification
+producer/verifier. Credentialedproviders acessíveisWork0;não inferir ausência
+na workstation nem reabrirP1-C. Gemini smokeNOT_RUN_LOCAL_CREDENTIAL_REQUIRED,
+0calls. Pool econômica não implica quota nem qualidade/independência reais.
+
+1smoke realInkling thinkingmachines/inkling-small:free após prova live válida,
+32maxoutputtokens,709ms:HTTP429 RATE_LIMITED,freequotaEXHAUSTED;resetobservado
+2026-10-10T00:00:00Z,cost0. Sem retryequivalente ou novasgoldens38.
+Observação original pré-datou recording durável final do harness;scope não
+retido não foi inventado como cooldown provider-wide. Harness final usa
+recordAttempt/StateStore existente:quota/reset/cooldown escopados persistem,
+segunda chamada bloqueada,regressão controlada comprova. Matrix snapshotquota
+UNKNOWN não substitui falha liveInkling;reset NÃO comprova replenishment.
+HistóricoStep5 false approvalTTL permanece negativo,nãoSUCCEEDEDdeproduto.
+As duas BIBs reais mantêm542rows e19VERIFIER_FALSE_APPROVAL. Nenhuma performance
+sintética ou apagamento;EconomicMemory não inventada. Monetary adicionalUS$0;
+shadow liveUNKNOWN,sem inventar preço. P1-A continua aberto;P1-Bnão requalificado.
+
+Provenance/matriz/delivery:docs/P1D_ZERO_COST_REPORT.md e
+checkpoint-evidence/v05-zero-cost-inventory.json. Raw externo p1d-*.log em
+/workspace/beyonder-p1-evidence;nenhumsecret/rawreasoning/vault/master noGit.
+Account billing adapters reais não instaladosWork. Interface+loaderallowlist
+BEYONDER_ZERO_COST_EVIDENCE_PATH exigem prova autorizada fresca,credential
+revision validada,quota ezero cap/rejectafterfree. Arquivo com flags por si só
+não prova proteção. UNKNOWN/PAID nunca é habilitado por auth/catalog sozinho.
+
+Comandoslocais:pnpm build;pnpm providers:zero-cost-inventory;
+pnpm providers:zero-cost-inventory --provider openrouter --refresh-catalog;
+pnpm providers:zero-cost-smoke --provider openrouter --model thinkingmachines/inkling-small:free.
+Usar apenasfixedmodel presenteREADYnoinventárioatual;semprovaCLIrecusa1POST.
+Secrets só fontes P1-C autorizadas,master separado,nunca chat/args. Primeiro
+observarquota utilizável,contraprovas verifier+2análogos,coding/planning/current/
+multi-source;subset/38somente progresso seguro material. Não repetirInkling
+antes mudança real;Oct10 reset não cria quota. Não pedir novaschaves/re-audit29.
+
+ZERO_COST_EXECUTION_GUARANTEE_READY=true
+P1-D_READY=true
+PORTABLE_CREDENTIAL_RESOLUTION_READY=true
+PRODUCT_CORE_READY=false
+LIVE_COMPUTE_READY=false
+BROWSER_RESEARCH_READY=false
+HUMAN_ACCEPTANCE_CANDIDATE=false
+V0_5_CANDIDATE_READY_FOR_GUSTAVO=false
+
+Publicação com[skip ci],semmerge/novabranch/v0.6/paid. Este pass qualifica a camada
+econômica;NÃO a pool compute independente nem v0.5 completa. Working tree/origin
+verificados após commit. P1-A/P1-B anteriores não reclassificados comoP2.

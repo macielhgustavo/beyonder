@@ -137,7 +137,7 @@ function liveModelMetadata(provider: ProviderCatalogEntry, value: unknown): Mode
     // Only supported providers with an explicitly zero-priced model can unlock
     // a route. Negative sentinel/unknown charges and paid extras stay excluded.
     metadata.costClass = row.isFree === false || amounts.some(amount => amount > 0) ? "PAID" : free && !provider.billingRisk ? "FREE_TIER_ELIGIBLE" : "UNKNOWN_COST";
-    metadata.costEvidence = { source: "live-catalog", observedAt: new Date().toISOString() };
+    metadata.costEvidence = { source: "live-catalog", observedAt: new Date().toISOString(), zeroPrice: free && row.isFree !== false, explicitFreeRoute: row.isFree === true || provider.id === 'openrouter' && row.id.endsWith(':free') };
   }
   if (row.isFree === false) metadata.costClass = "PAID";
   return [metadata];

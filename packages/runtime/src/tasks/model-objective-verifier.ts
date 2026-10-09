@@ -6,6 +6,7 @@ import { classifyFailure, InferenceError, parseStructuredObject, runCandidates, 
 import type { ModelRouter } from "../models/model-router.js";
 import { objectivePhaseTask } from "../models/compute-policy.js";
 import { physicalModelIdentity as modelIdentity } from "../models/model-identity.js";
+import { independentPhysicalModels } from "../models/model-identity.js";
 import { getEconomicRoutingPolicy, inferenceAttemptPolicy } from "../models/router-config.js";
 import { browserEvidence } from "./browser-evidence.js";
 import { staticCodeReview } from "./typescript-validation.js";
@@ -52,6 +53,7 @@ export class ModelObjectiveVerifier implements CompletionEvaluator {
       observedAt: step.completedAt
     })).slice(-10);
     const producer = [...(execution.attempts ?? [])].reverse().find((attempt) => attempt.phase === "DIRECT_RESPONSE" && attempt.status === "SUCCEEDED");
+    if (producer && !modelIdentity(producer.attribution?.reportedModel ?? producer.model)) return unverifiable("The producer's physical model identity is unknown; independent verification cannot be proven.");
     if (producer?.attribution && !producer.attribution.reportedModel) return unverifiable("The producer's physical model identity was not reported; independent verification cannot be proven.");
     const verificationTask: IntelligenceTask = {
       ...objectivePhaseTask(execution.task, "OBJECTIVE_VERIFICATION"),
@@ -87,7 +89,7 @@ export class ModelObjectiveVerifier implements CompletionEvaluator {
     ].join(" ");
     const economicState = execution.economicState ?? "normal";
     const route = await this.router.route(verificationTask, economicState);
-    const independent = route.candidates.filter((candidate) => !producer || modelIdentity(candidate.model) !== modelIdentity(producer.attribution?.reportedModel ?? producer.model));
+    const independent = route.candidates.filter((candidate) => modelIdentity(candidate.model) && (!producer || independentPhysicalModels(candidate.model, producer.attribution?.reportedModel ?? producer.model)));
     if (!independent.length) {
       const gaps = route.rejectedCandidates?.slice(0, 3).map(candidate => `${candidate.provider}/${candidate.model}: ${candidate.reasons.join(", ")}`).join("; ");
       return unverifiable(`No independent zero-money verifier meets this mission's quality floor. ${route.candidates.length ? "Only the producer is eligible." : gaps || route.reason}`);
@@ -204,7 +206,8 @@ const STATIC_CLAIM_REVIEW_INSTRUCTIONS = [
 
 function semanticResponse(response: import("../types.js").ModelResponse, producer: InferenceAttempt | undefined): SemanticVerdict {
   if (response.attribution && !response.attribution.reportedModel) throw new InferenceError("Verifier did not report its physical model identity.", "INVALID_OUTPUT");
-  if (producer && modelIdentity(response.attribution?.reportedModel ?? response.model) === modelIdentity(producer.attribution?.reportedModel ?? producer.model)) throw new InferenceError("Verifier resolved to the same physical model as the producer.", "INVALID_OUTPUT");
+  if (!modelIdentity(response.attribution?.reportedModel ?? response.model)) throw new InferenceError('Verifier physical identity is unknown.', 'INVALID_OUTPUT');
+  if (producer && !independentPhysicalModels(response.attribution?.reportedModel ?? response.model, producer.attribution?.reportedModel ?? producer.model)) throw new InferenceError("Verifier resolved to the same physical model as the producer.", "INVALID_OUTPUT");
   try {
     return semanticVerdict(parseStructuredObject(response.content));
   } catch (error) {

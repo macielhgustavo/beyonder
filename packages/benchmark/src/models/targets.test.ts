@@ -1,10 +1,11 @@
+import { fixtureZeroCost } from './testing/zero-cost-fixture.js';
 import { describe, expect, it } from "vitest";
 import { CredentialBroker } from "@beyonder/compute";
 import { selectFreeModelTargets } from "./targets.js";
 
 describe("free model target selection", () => {
   it("qualifies disabled reasoning only on explicitly compatible free models", () => {
-    const targets = selectFreeModelTargets({ version: 1, updatedAt: new Date().toISOString(), providers: {
+    const targets = selectFixtureTargets({ version: 1, updatedAt: new Date().toISOString(), providers: {
       "kilo-gateway": { providerId: "kilo-gateway", state: "READY", classification: "KEYLESS", attempts: 1, lastUpdatedAt: new Date().toISOString(), validation: { status: "validated", models: ["measured", "unsupported", "paid"], modelMetadata: [
         { id: "measured", capabilities: ["CHAT"], role: "instruct", costClass: "FREE_CONFIRMED", reasoningControl: true },
         { id: "unsupported", capabilities: ["CHAT"], role: "instruct", costClass: "FREE_CONFIRMED", reasoningControl: false },
@@ -15,7 +16,7 @@ describe("free model target selection", () => {
     expect(targets[0]?.reasoning).toEqual({ enabled: false });
   });
   it("ignores unavailable providers and billing-risk states", () => {
-    const targets = selectFreeModelTargets(
+    const targets = selectFixtureTargets(
       {
         version: 1,
         updatedAt: new Date().toISOString(),
@@ -33,7 +34,7 @@ describe("free model target selection", () => {
   });
 
   it("requires OpenRouter models to be explicit free routes", () => {
-    const targets = selectFreeModelTargets(
+    const targets = selectFixtureTargets(
       {
         version: 1,
         updatedAt: new Date().toISOString(),
@@ -54,7 +55,7 @@ describe("free model target selection", () => {
   });
 
   it("filters Cloudflare and NVIDIA models to chat-compatible BIB targets", () => {
-    const targets = selectFreeModelTargets(
+    const targets = selectFixtureTargets(
       {
         version: 1,
         updatedAt: new Date().toISOString(),
@@ -99,6 +100,24 @@ describe("free model target selection", () => {
 });
 
 it('never serializes credential material on selected benchmark targets',()=>{
- const secret='opaque-target-only-material';const targets=selectFreeModelTargets({version:1,updatedAt:new Date().toISOString(),providers:{groq:{providerId:'groq',state:'READY',classification:'FULL_AUTO',attempts:1,lastUpdatedAt:new Date().toISOString()}}},new CredentialBroker({}, {GROQ_API_KEY:secret}));
+ const secret='opaque-target-only-material';const targets=selectFixtureTargets({version:1,updatedAt:new Date().toISOString(),providers:{groq:{providerId:'groq',state:'READY',classification:'FULL_AUTO',attempts:1,lastUpdatedAt:new Date().toISOString()}}},new CredentialBroker({}, {GROQ_API_KEY:secret}));
  expect(targets.length).toBeGreaterThan(0);expect(targets[0].apiKey).toBe(secret);expect(JSON.stringify(targets)).not.toContain(secret);
+});
+
+const selectFixtureTargets: typeof selectFreeModelTargets = (state, broker, selection = {}) => selectFreeModelTargets(state, broker, { economicEvidence: fixtureZeroCost, ...selection });
+
+it('rechecks observed exhausted quota before a previously selected benchmark target can POST', async () => {
+ const { mkdtemp, rm } = await import('node:fs/promises'); const { join } = await import('node:path'); const { tmpdir } = await import('node:os');
+ const { AutopilotStateStore, getProvider } = await import('@beyonder/compute'); const { OpenAiCompatibleBenchmarkClient } = await import('./openai-compatible-client.js'); const { vi } = await import('vitest');
+ const dir = await mkdtemp(join(tmpdir(), 'benchmark-quota-drift-'));
+ try {
+  const path = join(dir, 'providers.json'), store = new AutopilotStateStore(path), provider = getProvider('kilo-gateway')!, model = 'vendor/measured:free';
+  const validation = { status: 'validated' as const, models: [model], modelMetadata: [{ id: model, capabilities: ['CHAT' as const], role: 'instruct' as const, costClass: 'FREE_TIER_ELIGIBLE' as const, costEvidence: { source: 'live-catalog' as const, observedAt: new Date().toISOString(), zeroPrice: true, explicitFreeRoute: true } }] };
+  await store.update(provider, 'READY', { validation });
+  const targets = selectFreeModelTargets(await store.read(), new CredentialBroker({}, {}, { providerStatePath: path }), { provider: provider.id, models: [model] });
+  expect(targets).toHaveLength(1);
+  await store.update(provider, 'READY', { validation: { ...validation, rateLimitHeaders: { 'ratelimit-remaining': '0' } } });
+  const spy = vi.spyOn(globalThis, 'fetch');
+  try { await expect(new OpenAiCompatibleBenchmarkClient().complete(targets[0], [])).rejects.toMatchObject({ errorCode: 'ECONOMIC_POLICY_BLOCKED' }); expect(spy).not.toHaveBeenCalled(); } finally { spy.mockRestore(); }
+ } finally { await rm(dir, { recursive: true, force: true }); }
 });

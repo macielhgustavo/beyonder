@@ -1,3 +1,4 @@
+import { fixtureZeroCost } from './testing/zero-cost-fixture.js';
 import { analyzeGoalContract } from "../intelligence/goal-contract.js";
 import { describe, expect, it, vi } from "vitest";
 import type { IntelligenceTask } from "../intelligence/contracts.js";
@@ -49,6 +50,7 @@ function candidate(overrides: Partial<ModelCandidate> = {}): ModelCandidate {
   const provider = overrides.provider ?? "groq";
   const model = overrides.model ?? "strong-free-model";
   return {
+    economics: fixtureZeroCost(provider, model),
     provider,
     model,
     local: false,

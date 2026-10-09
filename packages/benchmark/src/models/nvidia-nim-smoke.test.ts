@@ -1,3 +1,4 @@
+import { fixtureZeroCost } from './testing/zero-cost-fixture.js';
 import { describe, expect, it } from "vitest";
 import { NVIDIA_NIM_SMOKE_EXPECTED, runNvidiaNimSmoke } from "./nvidia-nim-smoke.js";
 
@@ -24,7 +25,7 @@ describe("NVIDIA NIM smoke", () => {
       return jsonResponse({ choices: [{ message: { content: NVIDIA_NIM_SMOKE_EXPECTED } }] });
     };
 
-    const result = await runNvidiaNimSmoke("test-key", { fetchImpl: fetchImpl as typeof fetch });
+    const result = await runFixtureSmoke("test-key", { fetchImpl: fetchImpl as typeof fetch });
 
     expect(result.ok).toBe(true);
     expect(result.model).toBe("vendor/live-instruct");
@@ -45,7 +46,7 @@ describe("NVIDIA NIM smoke", () => {
       return jsonResponse({ error: { code: "EOL", message: "This model is end-of-life" } }, 410);
     };
 
-    const result = await runNvidiaNimSmoke("test-key", { fetchImpl: fetchImpl as typeof fetch });
+    const result = await runFixtureSmoke("test-key", { fetchImpl: fetchImpl as typeof fetch });
 
     expect(result.ok).toBe(false);
     expect(result.monetaryCostUsd).toBe(0);
@@ -62,7 +63,7 @@ describe("NVIDIA NIM smoke", () => {
 
   it("reports catalog authentication failures without inventing model capability", async () => {
     const fetchImpl = async (): Promise<Response> => jsonResponse({ error: { code: "INVALID_KEY", message: "unauthorized" } }, 401);
-    const result = await runNvidiaNimSmoke("bad-key", { fetchImpl: fetchImpl as typeof fetch });
+    const result = await runFixtureSmoke("bad-key", { fetchImpl: fetchImpl as typeof fetch });
 
     expect(result).toMatchObject({
       ok: false,
@@ -85,3 +86,14 @@ function jsonResponse(body: unknown, status = 200): Response {
     headers: { "content-type": "application/json" }
   });
 }
+
+function runFixtureSmoke(key: string, options: Parameters<typeof runNvidiaNimSmoke>[1]) { return runNvidiaNimSmoke(key, { economicEvidence: async model => fixtureZeroCost('nvidia-nim', model), maxCandidates: 3, ...options }); }
+it('authenticated catalog cannot authorize NVIDIA inference without account cost evidence', async () => {
+ const calls: string[]=[]; const fetchImpl=async (input: string | URL | Request) => { calls.push(String(input));return jsonResponse({data:[{id:'qwen/qwen2.5-coder-32b-instruct'}]}); };
+ const result=await runNvidiaNimSmoke('test-only-key',{fetchImpl:fetchImpl as typeof fetch});expect(result.testedCandidates).toBe(0);expect(result.catalogFailure?.errorCode).toBe('ZERO_COST_EXECUTION_NOT_GUARANTEED');expect(calls).toHaveLength(1);expect(calls[0]).toMatch(/models$/);
+});
+
+it('contradictory billed usage is retained and stops NVIDIA candidate recovery', async()=>{
+ const calls:string[]=[];const fetchImpl=async(input:string|URL|Request)=>{calls.push(String(input));return String(input).endsWith('/models')?jsonResponse({data:[{id:'vendor/a-instruct'},{id:'vendor/b-instruct'}]}):jsonResponse({choices:[{message:{content:NVIDIA_NIM_SMOKE_EXPECTED}}],usage:{cost:0.02}});};
+ const result=await runFixtureSmoke('test-only-key',{fetchImpl:fetchImpl as typeof fetch});expect(result.ok).toBe(false);expect(result.monetaryCostUsd).toBe(0.02);expect(result.attempts[0]?.errorCode).toBe('ZERO_COST_EVIDENCE_CONTRADICTED');expect(calls).toHaveLength(2);
+});

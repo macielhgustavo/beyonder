@@ -115,8 +115,8 @@ export type {
 
 
 export { ModelRouter } from "./models/model-router.js";
-export { physicalModelIdentity } from "./models/model-identity.js";
-export { classifyFailure } from "./models/inference.js";
+export { physicalModelIdentity, independentPhysicalModels } from "./models/model-identity.js";
+export { classifyFailure, InferenceError, runCandidates } from "./models/inference.js";
 export { discoverOllama } from "./models/ollama-discovery.js";
 export { browserEvidence } from "./tasks/browser-evidence.js";
 export type { InferenceAttempt } from "./models/inference.js";

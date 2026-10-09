@@ -1,3 +1,4 @@
+import { fixtureZeroCost } from '../models/testing/zero-cost-fixture.js';
 import { describe, expect, it } from "vitest";
 import type { IntelligenceTask } from "./contracts.js";
 import { AdaptiveExecutionController } from "./adaptive-execution-controller.js";
@@ -17,6 +18,7 @@ const task: IntelligenceTask = {
 
 function candidate(provider: string, model: string, predictedQuality: number, utility: number): ModelCandidate {
   return {
+    economics: fixtureZeroCost(provider, model),
     provider,
     model,
     capabilities: ["text"],

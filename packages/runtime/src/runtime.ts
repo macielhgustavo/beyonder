@@ -64,6 +64,7 @@ export interface BeyonderRuntime {
 }
 
 export interface RuntimeOptions {
+  economicEvidence?: import('./models/model-router.js').ModelRouterOptions['economicEvidence'];
   fixture?: boolean;
   onProgress?: (execution: import("./tasks/contracts.js").TaskExecution) => Promise<void>;
   beforeStep?: () => Promise<void>;
@@ -86,7 +87,7 @@ export function createRuntime(config: AppConfig, options: RuntimeOptions = {}): 
     } catch { return undefined; }
   });
   const audit = new AuditLog(db);
-  const modelRouter = new ModelRouter(config.model, { state, performanceRepository: performance, capabilitySource: options.capabilitySource, telemetry: audit });
+  const modelRouter = new ModelRouter(config.model, { state, performanceRepository: performance, capabilitySource: options.capabilitySource, economicEvidence: options.economicEvidence, telemetry: audit });
   const adaptiveExecution = new AdaptiveExecutionController(modelRouter, evaluation, audit);
   const browser = new BrowserAgent({ sessionFactory: new PlaywrightBrowserSessionFactory(), telemetry: { emit: async (event) => { await audit.record("info", event.name, event.details); } } });
   const tools = createRuntimeToolRegistry(config.tools, options.fixture === true);

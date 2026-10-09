@@ -7,6 +7,10 @@ export { validateProvider, validateProviderDetailed } from "./validation.js";
 export { ProviderAutopilotOrchestrator } from "./autopilot.js";
 export { AutopilotStateStore } from "./state-store.js";
 export { buildComputeInventory } from "./inventory.js";
+export { resolveZeroCostExecution, requireZeroCostDecision, readAccountCostEvidence, isLocalZeroCostEndpoint, observedEconomicQuota } from './economics.js';
+export type { ZeroCostDecision, AccountCostEvidence, CostDecisionClass, EconomicQuota } from './economics.js';
+export { zeroCostInventory } from './zero-cost-inventory.js';
+export type { ZeroCostInventoryRow } from './zero-cost-inventory.js';
 export {
   eligibleModelsForWorkload,
   isModelEligibleForWorkload,

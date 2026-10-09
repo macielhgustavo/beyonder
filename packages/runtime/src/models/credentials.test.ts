@@ -7,5 +7,5 @@ it('compatibility endpoint configuration never serializes keys and resolves cent
  expect(JSON.stringify(config)).not.toContain(secret);
  const broker=new CredentialBroker({}, {}, {session:new Map([['openai-compatible',{values:{OPENAI_COMPAT_API_KEY:secret},scopes:['inference']}]] )});
  const spy=vi.spyOn(broker,'resolve');vi.stubGlobal('fetch',vi.fn(async (_url,init)=>{expect(new Headers(init.headers).get('authorization')).toBe(`Bearer ${secret}`);return new Response(secret,{status:401});}));
- try {await expect(new ModelRouter(config.model,{credentials:broker}).complete([])).rejects.toThrow('HTTP 401');expect(spy).toHaveBeenCalledWith('openai-compatible');} finally {vi.unstubAllGlobals();}
+ try {await expect(new ModelRouter(config.model,{credentials:broker}).complete([])).rejects.toMatchObject({failureClass:'ECONOMIC_POLICY_BLOCKED'});expect((await broker.resolve('openai-compatible')).apiKey()).toBe(secret);expect(spy).toHaveBeenCalledWith('openai-compatible');} finally {vi.unstubAllGlobals();}
 });

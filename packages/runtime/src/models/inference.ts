@@ -1,11 +1,12 @@
 import { nanoid } from "nanoid";
+import { requireZeroCostDecision } from '@beyonder/compute';
 import { redactSecrets, redactString } from "@beyonder/tools";
 import { parseReset } from "./quota.js";
 import type { ModelCandidate } from "./adaptive-types.js";
 import type { ModelMessage, ModelResponse } from "../types.js";
 
 export type InferencePhase = "PLANNING" | "ACTION_PLANNING" | "DIRECT_RESPONSE" | "TOOL_EXECUTION" | "REPLANNING" | "OBJECTIVE_VERIFICATION";
-export type FailureClass = "BAD_REQUEST" | "AUTH_REQUIRED" | "FORBIDDEN" | "MODEL_UNAVAILABLE" | "RATE_LIMITED" | "PROVIDER_UNAVAILABLE" | "TIMEOUT" | "NETWORK_ERROR" | "INVALID_OUTPUT" | "INVALID_ACTION" | "NO_CANDIDATES" | "NEEDS_CAPABILITY" | "BUDGET_EXHAUSTED" | "TOOL_ERROR" | "TOOL_UNAVAILABLE";
+export type FailureClass = "ECONOMIC_POLICY_BLOCKED" | "BAD_REQUEST" | "AUTH_REQUIRED" | "FORBIDDEN" | "MODEL_UNAVAILABLE" | "RATE_LIMITED" | "PROVIDER_UNAVAILABLE" | "TIMEOUT" | "NETWORK_ERROR" | "INVALID_OUTPUT" | "INVALID_ACTION" | "NO_CANDIDATES" | "NEEDS_CAPABILITY" | "BUDGET_EXHAUSTED" | "TOOL_ERROR" | "TOOL_UNAVAILABLE";
 export interface InferenceAttempt {
   id: string; taskId: string; stepId?: string; phase: InferencePhase; attempt: number;
   provider: string; model: string; inferenceProfile?: string; startedAt: string; completedAt?: string;
@@ -16,7 +17,7 @@ export interface InferenceAttempt {
   failureScope?: "provider" | "model";
 }
 export class InferenceError extends Error {
-  constructor(message: string, readonly failureClass: FailureClass, readonly httpStatus?: number, readonly responseBody?: string, readonly retryAfterAt?: string, readonly failureScope?: "provider" | "model", readonly upstreamHttpStatus?: number) { super(message); }
+  constructor(message: string, readonly failureClass: FailureClass, readonly httpStatus?: number, readonly responseBody?: string, readonly retryAfterAt?: string, readonly failureScope?: "provider" | "model", readonly upstreamHttpStatus?: number, readonly reportedMonetaryCostUsd?: number) { super(message); }
 }
 export function classifyFailure(error: unknown): InferenceError {
   if (error instanceof InferenceError) return error;
@@ -156,6 +157,9 @@ export async function runCandidates<T>(input: {
   const localFallbackFailureClasses = input.localFallbackFailureClasses ?? ["BAD_REQUEST", "AUTH_REQUIRED", "FORBIDDEN", "MODEL_UNAVAILABLE", "RATE_LIMITED", "PROVIDER_UNAVAILABLE", "TIMEOUT", "NETWORK_ERROR"];
 
   for (const candidate of candidates) {
+    try { requireZeroCostDecision(candidate.economics, candidate.provider, candidate.model); }
+    catch { last = new InferenceError('Zero-cost execution is not guaranteed; no inference attempt authorized.', 'ECONOMIC_POLICY_BLOCKED'); continue; }
+    if (candidate.costClass === 'PAID' || candidate.monetaryCostUsd !== 0 || candidate.eligible === false) { last = new InferenceError('Paid or ineligible inference is disabled.', 'ECONOMIC_POLICY_BLOCKED'); continue; }
     if (candidate.local) {
       if (localAttempts >= localFallbackBudget) continue;
       if (remoteAttempts > 0 && !localFallbackFailureClasses.includes(last.failureClass)) break;
@@ -181,14 +185,17 @@ export async function runCandidates<T>(input: {
       attempt.monetaryCostUsd = response.estimatedCostUsd;
       attempt.attribution = response.attribution;
       monetaryCostUsd += response.estimatedCostUsd;
+      if (!Number.isFinite(response.estimatedCostUsd) || response.estimatedCostUsd !== 0) throw new InferenceError('Response violates zero monetary spend; no fallback authorized.', 'ECONOMIC_POLICY_BLOCKED');
       if (!Number.isFinite(response.estimatedCostUsd) || response.estimatedCostUsd < 0 || monetaryCostUsd > input.maxMonetaryCostUsd) throw new InferenceError("Provider reported a cost outside the authorized monetary budget.", "BUDGET_EXHAUSTED");
       const value = input.validate(response);
       attempt.status = "SUCCEEDED";
       return { value, response, candidate, attempts, monetaryCostUsd, shadowCostUsd };
     } catch (error) {
       last = classifyFailure(error);
+      if (!response && last.reportedMonetaryCostUsd !== undefined) { attempt.monetaryCostUsd = last.reportedMonetaryCostUsd; monetaryCostUsd += last.reportedMonetaryCostUsd; }
       if (last.failureClass === "INVALID_OUTPUT" && response?.content) last = new InferenceError(last.message, last.failureClass, last.httpStatus, safeDiagnosticBody(response.content).slice(0, 1_500), last.retryAfterAt);
       Object.assign(attempt, { status: "FAILED", failureClass: last.failureClass, failureScope: last.failureScope, httpStatus: last.httpStatus, upstreamHttpStatus: last.upstreamHttpStatus, error: last.message, responseBody: last.responseBody, retryAfterAt: last.retryAfterAt });
+      if (last.failureClass === 'ECONOMIC_POLICY_BLOCKED') throw last;
     } finally {
       if (timer) clearTimeout(timer);
       attempt.completedAt = new Date().toISOString();

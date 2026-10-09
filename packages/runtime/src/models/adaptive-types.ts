@@ -33,6 +33,7 @@ export interface CandidateCapabilityFit {
 }
 
 export interface RejectedCandidate {
+  economics?: import('@beyonder/compute').ZeroCostDecision;
   inferenceProfile?: string;
   provider: string;
   model: string;
@@ -94,6 +95,7 @@ export interface CandidateExplanation {
 }
 
 export interface ModelCandidate {
+  economics?: import('@beyonder/compute').ZeroCostDecision;
   inferenceProfile?: string;
   metadataQuality?: number;
   local?: boolean;

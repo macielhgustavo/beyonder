@@ -1,11 +1,11 @@
-import { AutopilotStateStore, buildComputeInventory, isModelMetadataEligibleForWorkload, type ModelWorkload } from "@beyonder/compute";
+import { AutopilotStateStore, buildComputeInventory, getProvider, resolveZeroCostExecution, readAccountCostEvidence, requireZeroCostDecision, isModelMetadataEligibleForWorkload, type ModelWorkload, type ZeroCostDecision } from "@beyonder/compute";
 import type { IntelligenceTask } from "../intelligence/contracts.js";
 import type { EconomicState } from "../types.js";
 import type { ModelCapabilitySource } from "./capability-source.js";
 import { NullCapabilitySource, predictCapability } from "./capability-source.js";
 import type { CapabilityPredictionEvidence, HistoricalPerformance, ModelCandidate, RejectedCandidate, RouteDecision, RouterTelemetry } from "./adaptive-types.js";
 import { CLOUD_FIRST_POLICY, assessCapability, computeTier, executionTierRank, paidCandidateAllowed, resolveQualityFloor, routingScore, objectivePhaseTask } from "./compute-policy.js";
-import { physicalModelIdentity } from "./model-identity.js";
+import { independentPhysicalModels } from "./model-identity.js";
 import type { PerformanceRepository } from "./performance-repository.js";
 import { EmptyPerformanceRepository } from "./performance-repository.js";
 import type { QuotaSource } from "./quota.js";
@@ -18,6 +18,8 @@ import { calculateEffectiveResourceCost, calculateUtility } from "./utility.js";
 import { discoverOllama } from "./ollama-discovery.js";
 
 export interface AdaptiveSelectorOptions {
+  /** Trusted account/price evidence adapter. Never a score adjustment or paid opt-in. */
+  economicEvidence?: (provider: string, model: string) => Promise<ZeroCostDecision>;
   /** Explicit experimental opt-in; normal product routing chooses the best fit. */
   allowExploration?: boolean;
   canAttempt?: (candidate: Pick<ModelCandidate, "provider" | "model">) => Promise<boolean>;
@@ -105,6 +107,23 @@ export class AdaptiveModelSelector {
         const rejected: RejectedCandidate = { provider: pair.entry.providerId, model: pair.model, inferenceProfile: pair.inferenceProfile, computeTier: pair.entry.providerId === 'ollama' ? 'LOCAL_EMERGENCY' : 'OTHER_FREE_CLOUD', reasons: [`credential:${access.status}; configured=${access.configured}; source=${access.source}; capability history retained`] };
         rejectedCandidates.push(rejected); await this.telemetry('debug', 'router.candidate_rejected', { taskId: task.id, ...rejected }); continue;
       }
+      const economicQuota = await this.quotaSource.get(pair.entry.providerId, pair.model);
+      const provider = getProvider(pair.entry.providerId) ?? { id: 'ollama' as const, openAiCompatibleEndpoint: this.options.ollamaBaseUrl };
+      const modelMetadata = pair.entry.modelMetadata.find(m => m.id === pair.model)!;
+      const accountEvidence = (await readAccountCostEvidence()).find(e => e.provider === pair.entry.providerId && e.model === pair.model);
+      const observedEconomics = resolveZeroCostExecution({ provider, model: modelMetadata, credential: access, accountEvidence, quota: economicQuota });
+      const economics = ['FREE_QUOTA_EXHAUSTED', 'PAID', 'BILLING_RISK'].includes(observedEconomics.classification) ? observedEconomics : await this.options.economicEvidence?.(pair.entry.providerId, pair.model) ?? observedEconomics;
+      await this.telemetry('debug', 'economic.cost_evidence_resolved', { taskId: task.id, ...economics });
+      let costAllowed = true;
+      try { requireZeroCostDecision(economics, pair.entry.providerId, pair.model); } catch { costAllowed = false; }
+      if (!costAllowed || modelMetadata.costClass === 'PAID' || pair.entry.cost === 'billing-risk') {
+        const rejected: RejectedCandidate = { provider: pair.entry.providerId, model: pair.model, inferenceProfile: pair.inferenceProfile, computeTier: modelMetadata.costClass === 'PAID' ? 'PAID_DISABLED' : 'OTHER_FREE_CLOUD', economics, reasons: [`economic:${economics.classification}; ${economics.reason}`] };
+        rejectedCandidates.push(rejected);
+        await this.telemetry('debug', 'router.candidate_rejected_cost', { taskId: task.id, ...rejected });
+        if (economics.classification === 'FREE_QUOTA_EXHAUSTED') await this.telemetry('info', 'quota.free_tier_exhausted', { provider: pair.entry.providerId, model: pair.model, reason: economics.reason });
+        continue;
+      }
+      await this.telemetry('debug', 'economic.zero_cost_guarantee', { taskId: task.id, ...economics });
       const unsafeVerdicts = task.inferencePhase === "OBJECTIVE_VERIFICATION"
         ? await this.capabilitySource.getVerificationSafetyEvidence?.(pair.model) : undefined;
       if (unsafeVerdicts?.falseApprovals) {
@@ -197,7 +216,9 @@ export class AdaptiveModelSelector {
       // must not win the efficient-cloud decision by appearing instantaneous.
       const latencyMs = health?.samples ? health.latencyMs : (performance.avgLatencyMs > 0 ? performance.avgLatencyMs : benchmarkCapability?.latencyMs);
       const latencyPenalty = latencyMs === undefined ? 1 : clamp(latencyMs / ROUTER_CONFIG.costNormalization.latencyReferenceMs);
-      const monetaryCostUsd = 0;
+      // Rejected/unknown executions never reach scoring or acquire a $0 value.
+      const monetaryCostUsd = economics.monetaryCost.state === 'CONFIRMED_ZERO' ? economics.monetaryCost.usd : undefined;
+      if (monetaryCostUsd !== 0) continue;
       const effectiveResourceCost = calculateEffectiveResourceCost({
         monetaryCostUsd,
         shadowCostUsd: shadow.shadowCostUsd,
@@ -216,6 +237,7 @@ export class AdaptiveModelSelector {
       }, economicState) - structuredPenalty;
 
       const candidate: ModelCandidate = {
+        economics,
         inferenceProfile,
         metadataQuality: ROUTER_CONFIG.qualityClassDefaults[pair.entry.qualityClass],
         local: pair.entry.providerId === "ollama",
@@ -328,7 +350,7 @@ export class AdaptiveModelSelector {
       const verification = await this.route(objectivePhaseTask(task, "OBJECTIVE_VERIFICATION"), economicState);
       for (let index = 0; index < candidates.length;) {
         const producer = candidates[index]!;
-        const judges = verification.candidates.filter(judge => physicalModelIdentity(judge.model) !== physicalModelIdentity(producer.model));
+        const judges = verification.candidates.filter(judge => independentPhysicalModels(judge.model, producer.model));
         if (judges.length) {
           producer.explanation.constraints.push(`independent-verifier-candidates=${judges.length}`);
           index++;
@@ -414,14 +436,13 @@ export class AdaptiveModelSelector {
 
   private expandCompatible(entry: InventoryEntry, task: IntelligenceTask): Array<{ entry: InventoryEntry; model: string }> {
     if (!["healthy", "keyless"].includes(entry.status)) return [];
-    if (entry.cost === "billing-risk") return [];
     if (task.requirements.contextWindow && typeof entry.contextWindow === "number" && entry.contextWindow < task.requirements.contextWindow) return [];
     if (task.requirements.vision) return [];
     const workload = workloadForTask(task.type);
     return entry.models
       .filter((model) => {
         const metadata = entry.modelMetadata.find((m) => m.id === model);
-        return metadata && isModelMetadataEligibleForWorkload(metadata, workload) && ["FREE_CONFIRMED", "FREE_TIER_ELIGIBLE"].includes(metadata.costClass ?? "UNKNOWN_COST") && (!task.requirements.structuredOutput || metadata.structuredOutput !== "unsupported");
+        return metadata && isModelMetadataEligibleForWorkload(metadata, workload) && (!task.requirements.structuredOutput || metadata.structuredOutput !== "unsupported");
       })
       .map((model) => ({ entry, model }));
   }
@@ -467,6 +488,7 @@ function serializeCandidate(candidate: ModelCandidate, taskId: string, phase?: I
     historicalSuccess: candidate.historicalSuccess,
     reliability: candidate.reliability,
     monetaryCostUsd: candidate.monetaryCostUsd,
+    economics: candidate.economics,
     shadowCostUsd: candidate.shadowCostUsd,
     latencyPenalty: candidate.latencyPenalty,
     failureRisk: candidate.failureRisk,

@@ -1,3 +1,4 @@
+import { fixtureZeroCost } from './testing/zero-cost-fixture.js';
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
@@ -37,7 +38,7 @@ function researchTask(): IntelligenceTask {
 describe("observed inference profiles", () => {
   it.each([0.99, 0.2])("requires the unchanged high floor for an observed mode (score=%s)", async score => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("local unavailable")));
-    const selector = new AdaptiveModelSelector(await statePath(), { capabilitySource: new Profiles(score) });
+    const selector = new AdaptiveModelSelector(await statePath(), { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model), capabilitySource: new Profiles(score) });
     const route = await selector.route(researchTask(), "normal");
     expect(route.qualityFloor?.level).toBe("HIGH");
     const models = route.candidates.filter(c => c.provider === "kilo-gateway");
@@ -47,14 +48,14 @@ describe("observed inference profiles", () => {
   });
   it("counts two qualified modes as one physical candidate", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("local unavailable")));
-    const selector = new AdaptiveModelSelector(await statePath(), { capabilitySource: new Profiles(0.99, [disabled], 0.99) });
+    const selector = new AdaptiveModelSelector(await statePath(), { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model), capabilitySource: new Profiles(0.99, [disabled], 0.99) });
     const route = await selector.route(researchTask(), "normal");
     expect(route.consideredCandidates?.filter(c => c.provider === "kilo-gateway" && c.eligible)).toHaveLength(2);
     expect(route.candidates.filter(c => c.provider === "kilo-gateway")).toHaveLength(1);
   });
   it("ignores unmeasured or unsupported mode names", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("local unavailable")));
-    const selector = new AdaptiveModelSelector(await statePath(), { capabilitySource: new Profiles(0.99, ["unbounded-mode", "reasoning-disabled:max-output-999999"]) });
+    const selector = new AdaptiveModelSelector(await statePath(), { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model), capabilitySource: new Profiles(0.99, ["unbounded-mode", "reasoning-disabled:max-output-999999"]) });
     const route = await selector.route(researchTask(), "normal");
     expect(route.candidates.filter(c => c.provider === "kilo-gateway")).toHaveLength(0);
     expect(route.consideredCandidates?.filter(c => c.provider === "kilo-gateway")).toHaveLength(1);
@@ -66,7 +67,7 @@ describe("observed inference profiles", () => {
       getCapability: async input => input.inferenceProfile === disabled ? null : measured.getCapability(input),
       getCapabilityScore: async input => input.inferenceProfile === disabled ? null : measured.getCapabilityScore(input)
     };
-    const selector = new AdaptiveModelSelector(await statePath(), { capabilitySource: source });
+    const selector = new AdaptiveModelSelector(await statePath(), { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model), capabilitySource: source });
     const route = await selector.route(researchTask(), "normal");
     expect(route.candidates.find(candidate => candidate.provider === "kilo-gateway")?.inferenceProfile).toBe("reasoning-low:max-output-2400");
     expect(route.rejectedCandidates).toContainEqual(expect.objectContaining({ inferenceProfile: disabled, reasons: ["no observed task capability for the requested inference profile"] }));
@@ -74,7 +75,7 @@ describe("observed inference profiles", () => {
   it.each([true, false])("executes only the independently measured bounded profile (matched=%s)", async matched => {
     const fetch = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({ model: "profile-model", choices: [{ finish_reason: "stop", message: { content: "Observed response" } }], usage: { cost: 0 } })));
     vi.stubGlobal("fetch", fetch);
-    const router = new ModelRouter(loadConfig({ BEYONDER_MODEL_PROVIDER: "auto" }).model);
+    const router = new ModelRouter(loadConfig({ BEYONDER_MODEL_PROVIDER: "auto" }).model, { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model) });
     const candidate = { provider: "kilo-gateway", model: "profile-model", capabilities: ["reasoning-control"], inferenceProfile: disabled, benchmarkCapability: { inferenceProfile: matched ? disabled : "reasoning-low:max-output-2400" } } as ModelCandidate;
     await router.completeForCandidate([], candidate);
     const body = JSON.parse(fetch.mock.calls[0]![1]!.body as string);

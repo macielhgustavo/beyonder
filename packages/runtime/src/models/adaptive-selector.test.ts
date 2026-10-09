@@ -1,3 +1,4 @@
+import { fixtureZeroCost } from './testing/zero-cost-fixture.js';
 import { mkdtemp, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -120,7 +121,7 @@ async function providerStatePath() {
 describe("AdaptiveModelSelector", () => {
   it("uses observed historical latency when operational health has no samples", async () => {
     const path = await providerStatePathFor({ groq: ["llama-3.3-70b-versatile"], gemini: ["gemini-2.5-flash"] });
-    const selector = new AdaptiveModelSelector(path, {
+    const selector = new AdaptiveModelSelector(path, { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model),
       quotaSource: new FixedQuotaSource(),
       operationalHealth: async () => ({ samples: 0, failures: 0, latencyMs: 0 }),
       canAttempt: async (candidate) => ["groq", "gemini"].includes(candidate.provider),
@@ -135,7 +136,7 @@ describe("AdaptiveModelSelector", () => {
   });
   it("generates and ranks multiple compatible zero-money candidates", async () => {
     const path = await providerStatePath();
-    const selector = new AdaptiveModelSelector(path, { quotaSource: new FixedQuotaSource(), random: new SequenceRandom([0.99]) });
+    const selector = new AdaptiveModelSelector(path, { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model), quotaSource: new FixedQuotaSource(), random: new SequenceRandom([0.99]) });
     const route = await selector.route(task(), "normal");
     expect(route.candidates.length).toBeGreaterThanOrEqual(3);
     expect(route.selected).toBe(route.candidates[0]);
@@ -145,7 +146,7 @@ describe("AdaptiveModelSelector", () => {
 
   it("filters incompatible vision tasks and blocks halted inference", async () => {
     const path = await providerStatePath();
-    const selector = new AdaptiveModelSelector(path, { quotaSource: new FixedQuotaSource() });
+    const selector = new AdaptiveModelSelector(path, { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model), quotaSource: new FixedQuotaSource() });
     const vision = await selector.route(task({ requirements: { vision: true } }), "normal");
     expect(vision.candidates).toHaveLength(0);
     const halted = await selector.route(task(), "halted");
@@ -155,7 +156,7 @@ describe("AdaptiveModelSelector", () => {
 
   it("supports deterministic controlled exploration without bypassing candidate constraints", async () => {
     const path = await providerStatePath();
-    const selector = new AdaptiveModelSelector(path, {
+    const selector = new AdaptiveModelSelector(path, { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model),
       quotaSource: new FixedQuotaSource(),
       allowExploration: true,
       random: new SequenceRandom([0, 0])
@@ -168,7 +169,7 @@ describe("AdaptiveModelSelector", () => {
   });
 
   it("uses the best qualified candidate in normal product routing even when randomness would explore", async () => {
-    const selector = new AdaptiveModelSelector(await providerStatePath(), { quotaSource: new FixedQuotaSource(), random: new SequenceRandom([0, 0]) });
+    const selector = new AdaptiveModelSelector(await providerStatePath(), { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model), quotaSource: new FixedQuotaSource(), random: new SequenceRandom([0, 0]) });
     const route = await selector.route(task(), "normal");
     expect(route.candidates.length).toBeGreaterThan(1);
     expect(route.explored).toBe(false);
@@ -177,7 +178,7 @@ describe("AdaptiveModelSelector", () => {
 
   it("uses BIB prior when no real outcomes exist", async () => {
     const path = await providerStatePath();
-    const selector = new AdaptiveModelSelector(path, {
+    const selector = new AdaptiveModelSelector(path, { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model),
       quotaSource: new FixedQuotaSource(),
       random: new SequenceRandom([0.99]),
       capabilitySource: new FixedCapabilitySource({
@@ -191,7 +192,7 @@ describe("AdaptiveModelSelector", () => {
 
   it("uses real outcomes when BIB is absent", async () => {
     const path = await providerStatePath();
-    const selector = new AdaptiveModelSelector(path, {
+    const selector = new AdaptiveModelSelector(path, { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model),
       quotaSource: new FixedQuotaSource(),
       performanceRepository: new FixedPerformanceRepository({
         "groq/llama-3.3-70b-versatile/coding": performance("groq", "llama-3.3-70b-versatile", "coding", 10, 0.8, 0.8)
@@ -206,7 +207,7 @@ describe("AdaptiveModelSelector", () => {
   it("combines BIB prior with real outcomes and exposes evidence even when the quality floor rejects execution", async () => {
     const path = await providerStatePath();
     const telemetry = new CapturingTelemetry();
-    const selector = new AdaptiveModelSelector(path, {
+    const selector = new AdaptiveModelSelector(path, { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model),
       quotaSource: new FixedQuotaSource(),
       telemetry,
       capabilitySource: new FixedCapabilitySource({
@@ -225,7 +226,7 @@ describe("AdaptiveModelSelector", () => {
 
   it("lets BIB prior change routing when economic constraints are equal", async () => {
     const path = await providerStatePath();
-    const selector = new AdaptiveModelSelector(path, {
+    const selector = new AdaptiveModelSelector(path, { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model),
       quotaSource: new FixedQuotaSource(),
       random: new SequenceRandom([0.99]),
       capabilitySource: new FixedCapabilitySource({
@@ -248,7 +249,7 @@ describe("AdaptiveModelSelector", () => {
       "nvidia-nim": ["qwen/qwen2.5-coder-32b-instruct"],
       "cloudflare-workers-ai": ["@cf/meta/llama-3.3-70b-instruct-fp8-fast"]
     });
-    const selector = new AdaptiveModelSelector(path, { quotaSource: new FixedQuotaSource(), random: new SequenceRandom([0.99]) });
+    const selector = new AdaptiveModelSelector(path, { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model), quotaSource: new FixedQuotaSource(), random: new SequenceRandom([0.99]) });
     const route = await selector.route(task({ type: "coding" }), "normal");
     expect(route.candidates.map((candidate) => candidate.provider)).toEqual(expect.arrayContaining([
       "groq",
@@ -257,12 +258,12 @@ describe("AdaptiveModelSelector", () => {
     ]));
   });
 
-  it("penalizes rate-limited NVIDIA without treating capability as zero", async () => {
+  it("rejects exhausted NVIDIA quota while preserving BIB capability", async () => {
     const path = await providerStatePathFor({
       "nvidia-nim": ["qwen/qwen2.5-coder-32b-instruct"],
       groq: ["llama-3.3-70b-versatile"]
     });
-    const selector = new AdaptiveModelSelector(path, {
+    const selector = new AdaptiveModelSelector(path, { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model),
       quotaSource: new FixedQuotaSource({
         "nvidia-nim": { health: "unhealthy", requestQuotaRemaining: 0, resetAt: new Date(Date.now() + 60_000).toISOString() }
       }),
@@ -271,17 +272,16 @@ describe("AdaptiveModelSelector", () => {
       })
     });
     const route = await selector.route(task({ type: "coding" }), "normal");
-    const nvidia = route.candidates.find((candidate) => candidate.provider === "nvidia-nim");
-    expect(nvidia?.capabilityEvidence.bibScore).toBe(0.9);
-    expect(nvidia?.predictedQuality).toBeGreaterThan(0);
-    expect(nvidia?.shadowCostUsd).toBeGreaterThan(0);
+    expect(route.candidates.some(candidate => candidate.provider === "nvidia-nim")).toBe(false);
+    expect(route.rejectedCandidates?.find(candidate => candidate.provider === "nvidia-nim")?.economics?.classification).toBe("FREE_QUOTA_EXHAUSTED");
+    expect((await new AutopilotStateStore(path).read()).providers["nvidia-nim"].validation?.models).toContain("qwen/qwen2.5-coder-32b-instruct");
   });
 
   it("excludes incompatible Cloudflare models from candidates", async () => {
     const path = await providerStatePathFor({
       "cloudflare-workers-ai": ["@cf/baai/bge-base-en-v1.5", "@cf/openai/whisper"]
     });
-    const selector = new AdaptiveModelSelector(path, { quotaSource: new FixedQuotaSource() });
+    const selector = new AdaptiveModelSelector(path, { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model), quotaSource: new FixedQuotaSource() });
     const route = await selector.route(task({ type: "chat" }), "normal");
     expect(route.candidates.some((candidate) => candidate.provider === "cloudflare-workers-ai")).toBe(false);
   });
@@ -291,7 +291,7 @@ describe("AdaptiveModelSelector", () => {
       groq: ["llama-3.3-70b-versatile"],
       reka: ["reka-flash-3"]
     });
-    const selector = new AdaptiveModelSelector(path, { quotaSource: new FixedQuotaSource() });
+    const selector = new AdaptiveModelSelector(path, { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model), quotaSource: new FixedQuotaSource() });
     const normal = await selector.route(task({ type: "chat" }), "normal");
     expect(normal.candidates.map((candidate) => candidate.provider)).toContain("groq");
     expect(normal.candidates.map((candidate) => candidate.provider)).not.toContain("reka");
@@ -346,7 +346,7 @@ function performance(
 it("keeps capability history while excluding currently inaccessible credentials",async()=>{
  const path=await providerStatePathFor({groq:["llama-3.3-70b-versatile"]});
  const before=await readFile(path,'utf8');
- const selector=new AdaptiveModelSelector(path,{quotaSource:new FixedQuotaSource(),credentialAccess:async()=>({identity:'credential://provider/groq',provider:'groq',expected:true,configured:true,present:true,accessible:false,valid:'UNKNOWN',source:'BEYONDER_VAULT',scope:['inference'],status:'VAULT_LOCKED',lastValidated:null})});
+ const selector=new AdaptiveModelSelector(path,{ economicEvidence: async (provider, model) => fixtureZeroCost(provider, model),quotaSource:new FixedQuotaSource(),credentialAccess:async()=>({identity:'credential://provider/groq',provider:'groq',expected:true,configured:true,present:true,accessible:false,valid:'UNKNOWN',source:'BEYONDER_VAULT',scope:['inference'],status:'VAULT_LOCKED',lastValidated:null})});
  const route=await selector.route(task({type:'chat',complexity:0.1,requirements:{directResponse:true}}),'normal');
  expect(route.selected).toBeUndefined();expect(route.capacityStatus).toBe('NEEDS_CAPABILITY');expect(route.rejectedCandidates?.some(c=>c.reasons.some(r=>r.includes('VAULT_LOCKED')&&r.includes('history retained')))).toBe(true);
  expect(await readFile(path,'utf8')).toBe(before);

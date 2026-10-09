@@ -14,7 +14,7 @@ export default async function ResourcesPage() {
     source.getAuditEvents({ limit: 200 })
   ]);
 
-  const ready = providers.filter((provider) => (provider.status === "READY" || provider.status === "KEYLESS") && provider.verified).length;
+  const ready = providers.filter((provider) => (provider.status === "READY" || provider.status === "KEYLESS") && provider.verified && provider.economicModels?.some(model => model.zeroCostReady)).length;
   const unavailable = providers.filter((provider) => ["UNHEALTHY", "RATE_LIMITED", "DISABLED"].includes(provider.status)).length;
   const routingEvents = audit.filter((event) => ["router.needs_capability", "router.capacity_reduced", "router.quality_floor_resolved", "router.candidate_rejected"].includes(event.event)).slice(0, 12);
 
@@ -23,7 +23,7 @@ export default async function ResourcesPage() {
       <PageHeader title="Resources" eyebrow="COMPUTE / CAPACITY" description="Capacidade observável primeiro. Quota, saúde, latência e custo só aparecem quando existe verdade registrada." />
 
       <div className="page-facts resources-facts">
-        <span><strong>{ready}</strong> ready</span>
+        <span><strong>{ready}</strong> zero-cost ready</span>
         <span className={unavailable ? "fact-attention" : ""}><strong>{unavailable}</strong> degraded / unavailable</span>
         <span><strong>{providers.length}</strong> providers</span>
         <span><strong>{providers.filter((provider) => provider.status === "UNKNOWN").length}</strong> unknown</span>
@@ -49,6 +49,20 @@ export default async function ResourcesPage() {
                     <dt>Last validated</dt><dd>{provider.credential.lastValidated ?? "UNKNOWN"}</dd>
                     <dt>Scope</dt><dd>{provider.credential.scope.join(", ")}</dd>
                   </dl>
+                </details>}
+                {provider.economicModels && <details data-testid="zero-cost-readiness">
+                  <summary>Zero-cost execution</summary>
+                  {provider.economicModels.map(model => <dl key={model.model} style={{ overflowWrap: "anywhere" }}>
+                    <dt>Model</dt><dd>{model.model}</dd>
+                    <dt>Price class</dt><dd>{model.costClass}</dd>
+                    <dt>Cost evidence</dt><dd>{model.costEvidenceSource}</dd>
+                    <dt>Free quota</dt><dd>{model.freeQuota}</dd>
+                    <dt>Billing spillover</dt><dd>{String(model.billingSpillover)}</dd>
+                    <dt>Zero-cost ready</dt><dd>{String(model.zeroCostReady)}</dd>
+                    <dt>Inference qualified</dt><dd>{String(model.inferenceQualified)}</dd>
+                    <dt>Verifier qualified</dt><dd>{String(model.verifierQualified)}</dd>
+                    <dt>Reason</dt><dd>{model.reason}</dd>
+                  </dl>)}
                 </details>}
               </div>
               <div data-label="Health"><strong>{provider.health == null ? "UNKNOWN" : formatPercent(provider.health)}</strong><span>{provider.verified ? "verified" : "not verified"}</span></div>

@@ -1,3 +1,4 @@
+import { fixtureZeroCost } from './testing/zero-cost-fixture.js';
 import { describe, expect, it } from "vitest";
 import { mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
@@ -29,7 +30,7 @@ async function selector(models: string[], judges: Record<string, number>, unsafe
       status: "validated", models, modelMetadata: models.map(id => ({ id, role: "instruct", costClass: "FREE_CONFIRMED", capabilities: ["CHAT", "REASONING", "CODING"], contextWindow: 32000, toolCalling: "yes", structuredOutput: "native" }))
     } }
   } });
-  return new AdaptiveModelSelector(filename, { capabilitySource: new Capacity(judges, unsafe) });
+  return new AdaptiveModelSelector(filename, { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model), capabilitySource: new Capacity(judges, unsafe) });
 }
 function task(): IntelligenceTask {
   const input = "Escreva uma função TypeScript que preserve a primeira ocorrência de cada chave string.";

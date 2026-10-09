@@ -1,3 +1,4 @@
+import { fixtureZeroCost } from './testing/zero-cost-fixture.js';
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -13,7 +14,7 @@ import { inferenceAttemptPolicy } from "./router-config.js";
 import type { ModelCandidate } from "./adaptive-types.js";
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
-const candidate = (provider: string, model = "m"): ModelCandidate => ({ provider, model, monetaryCostUsd: 0, shadowCostUsd: 0.001, local: false } as ModelCandidate);
+const candidate = (provider: string, model = "m"): ModelCandidate => ({ economics: fixtureZeroCost(provider, model), provider, model, monetaryCostUsd: 0, shadowCostUsd: 0.001, local: false } as ModelCandidate);
 const attempt = (patch: Partial<InferenceAttempt> = {}): InferenceAttempt => ({ id: "a", taskId: "t", phase: "DIRECT_RESPONSE", attempt: 1, provider: "p", model: "m", status: "FAILED", startedAt: new Date().toISOString(), completedAt: new Date().toISOString(), latencyMs: 10, monetaryCostUsd: 0, shadowCostUsd: 0, failureClass: "RATE_LIMITED", ...patch });
 const runtime = () => createRuntime(loadConfig({ BEYONDER_DB_PATH: ":memory:", BEYONDER_MODEL_PROVIDER: "none" }));
 
@@ -23,7 +24,7 @@ describe("H1 persistent scoped operational health", () => {
     await new AutopilotStateStore(path).write({ version: 1, updatedAt: new Date().toISOString(), providers: { groq: { providerId: "groq", state: "READY", classification: "AUTO_WITH_HUMAN_GATE", attempts: 1, lastUpdatedAt: new Date().toISOString(), validation: { status: "validated", models: ["llama-3.3-70b-versatile"] } } } });
     vi.stubEnv("GROQ_API_KEY", "test-only-auth-material");
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("local discovery offline")));
-    const r = createRuntime(loadConfig({ BEYONDER_DB_PATH: ":memory:", BEYONDER_MODEL_PROVIDER: "auto", BEYONDER_PROVIDER_STATE_PATH: path }));
+    const r = createRuntime(loadConfig({ BEYONDER_DB_PATH: ":memory:", BEYONDER_MODEL_PROVIDER: "auto", BEYONDER_PROVIDER_STATE_PATH: path }), { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model) });
     try {
       const { task } = await r.intelligence.inspect("Reply OK");
       expect((await r.modelRouter.route(task, "normal")).candidates.some((c) => c.provider === "groq")).toBe(true);
@@ -270,7 +271,7 @@ describe("L1 legacy path truth", () => {
     vi.stubEnv("GROQ_API_KEY", "fixture-key");
     const fetch = vi.fn(async () => new Response(JSON.stringify({ choices: [{ message: { content: "Actual fixture response" } }] })));
     vi.stubGlobal("fetch", fetch);
-    const r = createRuntime(loadConfig({ BEYONDER_DB_PATH: ":memory:", BEYONDER_MODEL_PROVIDER: "auto" }));
+    const r = createRuntime(loadConfig({ BEYONDER_DB_PATH: ":memory:", BEYONDER_MODEL_PROVIDER: "auto" }), { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model) });
     try {
       expect((await r.modelRouter.completeForCandidate([], candidate("groq"))).content).toBe("Actual fixture response");
       expect(fetch).toHaveBeenCalledOnce();

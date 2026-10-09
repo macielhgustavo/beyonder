@@ -1,3 +1,4 @@
+import { fixtureZeroCost } from '../models/testing/zero-cost-fixture.js';
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AutopilotStateStore, getProvider, isModelEligibleForWorkload, modelMetadata } from "@beyonder/compute";
 import { mkdtemp } from "node:fs/promises";
@@ -15,7 +16,7 @@ import type { ModelCandidate } from "../models/adaptive-types.js";
 import { inspectTaskTrace } from "./trace.js";
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
-const candidate = (model: string): ModelCandidate => ({ provider: "fixture", model, monetaryCostUsd: 0, shadowCostUsd: 0.001, utility: 1 } as ModelCandidate);
+const candidate = (model: string): ModelCandidate => ({ economics: fixtureZeroCost("fixture", model), provider: "fixture", model, monetaryCostUsd: 0, shadowCostUsd: 0.001, utility: 1 } as ModelCandidate);
 function setup() {
   const runtime = createRuntime(loadConfig({ BEYONDER_DB_PATH: ":memory:", BEYONDER_MODEL_PROVIDER: "none" }));
   vi.spyOn(runtime.modelRouter, "route").mockImplementation(async (task, economicState) => ({ task, economicState, selected: candidate("first"), candidates: [candidate("first"), candidate("second"), candidate("third")], reason: "fixture candidates", explored: false }));
@@ -144,17 +145,17 @@ describe("parsing, budgets and local discovery", () => {
     [401, "paid_model_auth_required", "AUTH_REQUIRED", "model"]
   ])("preserves actual HTTP 200 and classifies upstream %s operational failure", async (code, message, failureClass, failureScope) => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: { code, message } }))));
-    const runtime = createRuntime(loadConfig({ BEYONDER_DB_PATH: ":memory:", BEYONDER_MODEL_PROVIDER: "auto" }));
+    const runtime = createRuntime(loadConfig({ BEYONDER_DB_PATH: ":memory:", BEYONDER_MODEL_PROVIDER: "auto" }), { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model) });
     try {
       const attempts: import("../models/inference.js").InferenceAttempt[] = [];
-      await expect(runCandidates({ taskId: "upstream-envelope", phase: "DIRECT_RESPONSE", candidates: [{ ...candidate("physical-model"), provider: "kilo-gateway" }], maxMonetaryCostUsd: 0, maxShadowCostUsd: 1, maxDurationMs: 1000,
+      await expect(runCandidates({ taskId: "upstream-envelope", phase: "DIRECT_RESPONSE", candidates: [{ ...candidate("physical-model"), provider: "kilo-gateway", economics: fixtureZeroCost("kilo-gateway", "physical-model") }], maxMonetaryCostUsd: 0, maxShadowCostUsd: 1, maxDurationMs: 1000,
         messages: [{ role: "user", content: "answer" }], complete: (messages, model) => runtime.modelRouter.completeForPlanningCandidate(messages, model), validate: response => response.content,
         record: async attempt => { if (attempt.status !== "STARTED") { attempts.push({ ...attempt }); await runtime.modelRouter.recordAttempt(attempt); } }
       })).rejects.toMatchObject({ failureClass, httpStatus: 200, upstreamHttpStatus: code });
       expect(attempts).toHaveLength(1);
       expect(attempts[0]).toMatchObject({ status: "FAILED", httpStatus: 200, upstreamHttpStatus: code, failureClass, failureScope });
       expect((await runtime.modelRouter.operationalHealth.get("kilo-gateway", "physical-model")).failures).toBe(1);
-      expect(await runtime.modelRouter.canAttempt({ ...candidate("physical-model"), provider: "kilo-gateway" })).toBe(false);
+      expect(await runtime.modelRouter.canAttempt({ provider: "kilo-gateway", model: "physical-model" })).toBe(false);
     } finally { runtime.sqlite.close(); }
   });
   it.each([
@@ -163,10 +164,10 @@ describe("parsing, budgets and local discovery", () => {
     { model: "observed-model", choices: [{ message: { content: "partial", reasoning: "PRIVATE_CHAIN" }, finish_reason: "length" }], usage: { total_tokens: 2400, cost: 0 } }
   ])("retains redacted diagnostics for unusable HTTP 200 completions", async envelope => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(envelope))));
-    const runtime = createRuntime(loadConfig({ BEYONDER_DB_PATH: ":memory:", BEYONDER_MODEL_PROVIDER: "auto" }));
+    const runtime = createRuntime(loadConfig({ BEYONDER_DB_PATH: ":memory:", BEYONDER_MODEL_PROVIDER: "auto" }), { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model) });
     try {
       let failure: unknown;
-      try { await runtime.modelRouter.completeForPlanningCandidate([{ role: "user", content: "answer" }], { ...candidate("physical-model"), provider: "kilo-gateway" }); } catch (error) { failure = error; }
+      try { await runtime.modelRouter.completeForPlanningCandidate([{ role: "user", content: "answer" }], { ...candidate("physical-model"), provider: "kilo-gateway", economics: fixtureZeroCost("kilo-gateway", "physical-model") }); } catch (error) { failure = error; }
       expect(failure).toMatchObject({ failureClass: "INVALID_OUTPUT", httpStatus: 200 });
       const diagnostic = (failure as InferenceError).responseBody!;
       expect(diagnostic).not.toContain("SENSITIVE"); expect(diagnostic).not.toContain("PRIVATE_CHAIN");
@@ -179,7 +180,7 @@ describe("parsing, budgets and local discovery", () => {
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "fixture-token");
     const fetch = vi.fn(async () => new Response(JSON.stringify({ choices: [{ message: { content: "OK" } }] })));
     vi.stubGlobal("fetch", fetch);
-    const runtime = createRuntime(loadConfig({ BEYONDER_DB_PATH: ":memory:", BEYONDER_MODEL_PROVIDER: "auto" }));
+    const runtime = createRuntime(loadConfig({ BEYONDER_DB_PATH: ":memory:", BEYONDER_MODEL_PROVIDER: "auto" }), { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model) });
     try {
       await runtime.modelRouter.completeForPlanningCandidate([{ role: "user", content: "OK" }], { ...candidate("model"), provider: "cloudflare-workers-ai" });
       expect(fetch).toHaveBeenCalledWith("https://api.cloudflare.com/client/v4/accounts/fixture-account/ai/v1/chat/completions", expect.objectContaining({ headers: expect.objectContaining({ authorization: "Bearer fixture-token" }) }));
@@ -188,7 +189,7 @@ describe("parsing, budgets and local discovery", () => {
   it.each(["physical-research", "physical-planning", "physical-code"])("keeps the observed BIB JSON profile for %s instead of unmeasured native mode", async model => {
     const fetch = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({ model, choices: [{ message: { content: '{"satisfied":true}' } }] })));
     vi.stubGlobal("fetch", fetch);
-    const runtime = createRuntime(loadConfig({ BEYONDER_DB_PATH: ":memory:", BEYONDER_MODEL_PROVIDER: "auto" }));
+    const runtime = createRuntime(loadConfig({ BEYONDER_DB_PATH: ":memory:", BEYONDER_MODEL_PROVIDER: "auto" }), { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model) });
     try {
       await runtime.modelRouter.completeForStructuredCandidate([{ role: "user", content: "verify" }], { ...candidate(model), provider: "kilo-gateway", structuredOutput: "native", benchmarkCapability: { source: "BIB", score: 1, samples: 2, structuredOutputMode: "prompted" } });
       const body = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body));
@@ -202,7 +203,7 @@ describe("parsing, budgets and local discovery", () => {
     vi.stubEnv("CLOUDFLARE_API_TOKEN", "fixture-token");
     const fetch = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({ choices: [{ message: { content: '{"satisfied":true}' } }] })));
     vi.stubGlobal("fetch", fetch);
-    const runtime = createRuntime(loadConfig({ BEYONDER_DB_PATH: ":memory:", BEYONDER_MODEL_PROVIDER: "auto" }));
+    const runtime = createRuntime(loadConfig({ BEYONDER_DB_PATH: ":memory:", BEYONDER_MODEL_PROVIDER: "auto" }), { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model) });
     try {
       await runtime.modelRouter.completeForStructuredCandidate([{ role: "user", content: "verify" }], { ...candidate("fixture-model"), provider: "cloudflare-workers-ai", structuredOutput });
       const body = JSON.parse(String((fetch.mock.calls[0]?.[1] as RequestInit | undefined)?.body));
@@ -255,13 +256,13 @@ describe("parsing, budgets and local discovery", () => {
     expect(fetch.mock.calls.every(([url]) => /\/api\/(tags|show)$/.test(url))).toBe(true);
   });
   it("passes an explicit JSON schema to local structured verification", async () => {
-    const fetch = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({ message: { content: '{"satisfied":true}' } })));
+    const fetch = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify(String(_url).endsWith("/api/tags") ? { models: [{ name: "fixture-local" }] } : String(_url).endsWith("/api/show") ? { capabilities: ["completion"] } : { message: { content: '{"satisfied":true}' } })));
     vi.stubGlobal("fetch", fetch);
     const runtime = createRuntime(loadConfig({ BEYONDER_DB_PATH: ":memory:", BEYONDER_MODEL_PROVIDER: "ollama", BEYONDER_MODEL_NAME: "fixture-local" }));
     try {
       const schema = { type: "object", required: ["satisfied"], properties: { satisfied: { type: "boolean" } } };
       await runtime.modelRouter.completeForStructuredCandidate([{ role: "user", content: "verify" }], { ...candidate("fixture-local"), provider: "ollama", local: true }, undefined, schema);
-      const body = JSON.parse(String((fetch.mock.calls[0]?.[1] as RequestInit | undefined)?.body));
+      const body = JSON.parse(String((fetch.mock.calls.find(call => String(call[0]).endsWith("/api/chat"))?.[1] as RequestInit | undefined)?.body));
       expect(body).toMatchObject({ model: "fixture-local", stream: false, think: false, format: schema });
     } finally { runtime.sqlite.close(); }
   });
@@ -277,7 +278,7 @@ describe("parsing, budgets and local discovery", () => {
     provider.modelCatalog = [{ id: "llama-3.3-70b-versatile", capabilities: ["CHAT"], structuredOutput: "unsupported", costClass: "FREE_TIER_ELIGIBLE" }];
     try {
       vi.stubGlobal("fetch", vi.fn(async (url: string) => new Response(JSON.stringify(url.endsWith("/api/tags") ? { models: [{ name: "qwen3:4b" }] } : { capabilities: ["completion", "tools"] }))));
-      const selector = new AdaptiveModelSelector(path, { ollamaBaseUrl: "http://localhost:11434" });
+      const selector = new AdaptiveModelSelector(path, { economicEvidence: async (provider, model) => model === "unknown-instruct" ? { ...fixtureZeroCost(provider, model), zeroCostExecutionGuaranteed: false, classification: "UNKNOWN_COST" as const, monetaryCost: { state: "UNKNOWN" as const } } : fixtureZeroCost(provider, model), ollamaBaseUrl: "http://localhost:11434" });
       const task = { id: "auto", input: "Choose a tool", type: "tool-use" as const, complexity: 0.1, risk: 0, estimatedTokens: 100, requirements: { structuredOutput: true } };
       const route = await selector.route(task, "survival");
       expect(route.candidates.some((c) => c.provider === "ollama" && c.model === "qwen3:4b" && c.local && c.monetaryCostUsd === 0)).toBe(true);

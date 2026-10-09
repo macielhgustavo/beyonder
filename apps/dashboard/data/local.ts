@@ -2,7 +2,7 @@ import type { WorkRun, SourceReliability, StepExecution } from "@beyonder/runtim
 import { browserEvidence, discoverOllama } from "@beyonder/runtime";
 import type { WorkRunView } from "./types";
 import Database from "better-sqlite3";
-import { CredentialBroker, AutopilotStateStore, buildComputeInventory, providers as catalogProviders } from "@beyonder/compute";
+import { CredentialBroker, AutopilotStateStore, buildComputeInventory, zeroCostInventory, providers as catalogProviders } from "@beyonder/compute";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { emptyHealthChecks } from "./empty";
@@ -213,6 +213,7 @@ export class LocalDashboardDataSource implements DashboardDataSource {
     db?.close();
     const broker = new CredentialBroker({}, process.env, { providerStatePath: this.providerStatePath });
     const credentials = new Map(await Promise.all(catalogProviders.map(async provider => [provider.id, (await broker.resolve(provider.id)).descriptor] as const)));
+    const economicRows = await zeroCostInventory(this.providerStatePath, broker);
     const views: ProviderView[] = catalogProviders.map((provider) => {
       const item = byId.get(provider.id);
       const observed = healthById.get(provider.id)!;
@@ -233,6 +234,7 @@ export class LocalDashboardDataSource implements DashboardDataSource {
         health: observed.samples ? Math.max(0, 1 - (observed.failures ?? 0) / observed.samples) : null,
         configured,
         credential,
+        economicModels: economicRows.filter(row => row.provider === provider.id).map(({ model, costClass, costEvidenceSource, freeQuota, billingSpillover, zeroCostReady, inferenceQualified, verifierQualified, reason }) => ({ model, costClass, costEvidenceSource, freeQuota, billingSpillover, zeroCostReady, inferenceQualified, verifierQualified, reason })),
         verified,
         setupEnvVar: provider.credentialEnvVars[0],
         lastCheckAt: observed.lastFailureAt && (!observed.lastSuccessAt || observed.lastFailureAt > observed.lastSuccessAt) ? observed.lastFailureAt : observed.lastSuccessAt ?? item?.lastCheckedAt ?? null,

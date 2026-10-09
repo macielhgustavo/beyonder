@@ -13,7 +13,7 @@ describe("BibModelCapabilitySource", () => {
       { ...result(0, false), category, caseId: "unsafe-verdict", errorCode: "VERIFIER_FALSE_APPROVAL", inferenceProfile: "reasoning-low:max-output-2400" }
     ]);
     const source = new BibModelCapabilitySource(store);
-    expect(await source.getVerificationSafetyEvidence("different-provider/free")).toMatchObject({ falseApprovals: 1 });
+    expect(await source.getVerificationSafetyEvidence("different-provider/physical-model")).toMatchObject({ falseApprovals: 1 });
     expect(await source.getVerificationSafetyEvidence("unrelated-model")).toBeNull();
   });
 
@@ -25,7 +25,7 @@ describe("BibModelCapabilitySource", () => {
       { ...result(0, false), category: "verification", status: "TIMEOUT", quality: null, success: null, errorCode: "VERIFIER_FALSE_APPROVAL" },
       { ...result(0, false), category: "coding", errorCode: "VERIFIER_FALSE_APPROVAL" }
     ]);
-    expect(await new BibModelCapabilitySource(store).getVerificationSafetyEvidence("openrouter/free")).toBeNull();
+    expect(await new BibModelCapabilitySource(store).getVerificationSafetyEvidence("vendor/physical-model:free")).toBeNull();
   });
   it.each(["structured-output", "verification", "coding"] as const)("preserves the observed prompted mode when routing %s", async category => {
     const store = new BenchmarkStore(":memory:");
@@ -34,7 +34,7 @@ describe("BibModelCapabilitySource", () => {
     }
     const source = new BibModelCapabilitySource(store);
     const taskType = category === "coding" ? "coding" : "classification";
-    expect(await source.getCapability({ provider: "kilo-gateway", model: "openrouter/free", taskType })).toMatchObject({ structuredOutputMode: "prompted", dimensions: { structuredOutput: { samples: 2 } } });
+    expect(await source.getCapability({ provider: "kilo-gateway", model: "vendor/physical-model:free", taskType })).toMatchObject({ structuredOutputMode: "prompted", dimensions: { structuredOutput: { samples: 2 } } });
   });
 
   it("does not invent an observed request mode for legacy or mixed evidence", async () => {
@@ -42,7 +42,7 @@ describe("BibModelCapabilitySource", () => {
       const store = new BenchmarkStore(":memory:");
       store.saveResults(modes.map((mode, index) => ({ ...result(1, true), category: "structured-output" as const, caseId: `structured-${index}`, structuredOutputMode: mode })));
       const source = new BibModelCapabilitySource(store);
-      expect((await source.getCapability({ provider: "kilo-gateway", model: "openrouter/free", taskType: "classification" }))?.structuredOutputMode).toBeUndefined();
+      expect((await source.getCapability({ provider: "kilo-gateway", model: "vendor/physical-model:free", taskType: "classification" }))?.structuredOutputMode).toBeUndefined();
     }
   });
 
@@ -53,7 +53,7 @@ describe("BibModelCapabilitySource", () => {
       result(0, false)
     ]);
     const source = new BibModelCapabilitySource(store);
-    await expect(source.getCapability({ provider: "kilo-gateway", model: "openrouter/free", taskType: "coding" })).resolves.toMatchObject({
+    await expect(source.getCapability({ provider: "kilo-gateway", model: "vendor/physical-model:free", taskType: "coding" })).resolves.toMatchObject({
       score: 0.5,
       samples: 2,
       source: "BIB"
@@ -99,10 +99,10 @@ describe("BibModelCapabilitySource", () => {
       store.saveResults([0, 1].map(index => ({ ...result(category === "verification" ? 0 : 1, category !== "verification"), caseId: `${category}-${index}`, category })));
     }
     const source = new BibModelCapabilitySource(store);
-    expect(await source.getCapability({ provider: "kilo-gateway", model: "openrouter/free", taskType, dimensions: ["verification"] })).toMatchObject({
+    expect(await source.getCapability({ provider: "kilo-gateway", model: "vendor/physical-model:free", taskType, dimensions: ["verification"] })).toMatchObject({
       score: 0, dimensions: { verification: { score: 0, samples: 2 } }
     });
-    expect((await source.getCapability({ provider: "kilo-gateway", model: "openrouter/free", taskType }))?.dimensions?.coding).toBeUndefined();
+    expect((await source.getCapability({ provider: "kilo-gateway", model: "vendor/physical-model:free", taskType }))?.dimensions?.coding).toBeUndefined();
   });
 
   it("keeps a failed inference profile visible without using it to certify a different profile", async () => {
@@ -112,16 +112,16 @@ describe("BibModelCapabilitySource", () => {
       { ...result(1, true), inferenceProfile: "reasoning-low:max-output-2400" }
     ]);
     const source = new BibModelCapabilitySource(store);
-    expect(await source.getCapabilityScore({ provider: "kilo-gateway", model: "openrouter/free", taskType: "coding", inferenceProfile: "reasoning-low:max-output-2400" })).toBe(1);
-    expect(await source.getCapabilityScore({ provider: "kilo-gateway", model: "openrouter/free", taskType: "coding", inferenceProfile: "reasoning-disabled:max-output-1200" })).toBe(0);
-    expect(await source.getCapabilityScore({ provider: "kilo-gateway", model: "openrouter/free", taskType: "coding", inferenceProfile: "unmeasured" })).toBeNull();
+    expect(await source.getCapabilityScore({ provider: "kilo-gateway", model: "vendor/physical-model:free", taskType: "coding", inferenceProfile: "reasoning-low:max-output-2400" })).toBe(1);
+    expect(await source.getCapabilityScore({ provider: "kilo-gateway", model: "vendor/physical-model:free", taskType: "coding", inferenceProfile: "reasoning-disabled:max-output-1200" })).toBe(0);
+    expect(await source.getCapabilityScore({ provider: "kilo-gateway", model: "vendor/physical-model:free", taskType: "coding", inferenceProfile: "unmeasured" })).toBeNull();
   });
 
   it("does not promote a dimension by repeatedly passing the same easy case", async () => {
     const store = new BenchmarkStore(":memory:");
     store.saveResults([result(1, true), result(1, true), result(1, true)]);
     const source = new BibModelCapabilitySource(store);
-    expect((await source.getCapability({ provider: "kilo-gateway", model: "openrouter/free", taskType: "coding" }))?.dimensions?.coding).toBeUndefined();
+    expect((await source.getCapability({ provider: "kilo-gateway", model: "vendor/physical-model:free", taskType: "coding" }))?.dimensions?.coding).toBeUndefined();
   });
 
   it("offers only profiles with distinct real evaluated cases, retaining negative grades", async () => {
@@ -132,8 +132,8 @@ describe("BibModelCapabilitySource", () => {
       { ...result(0, false), status: "TIMEOUT" as const, quality: null, success: null, inferenceProfile: "unavailable" }
     ]);
     const source = new BibModelCapabilitySource(store);
-    expect(await source.listInferenceProfiles({ provider: "kilo-gateway", model: "openrouter/free" })).toEqual(["reasoning-disabled:max-output-2400"]);
-    expect(await source.getCapabilityScore({ provider: "kilo-gateway", model: "openrouter/free", taskType: "coding", inferenceProfile: "reasoning-disabled:max-output-2400" })).toBe(0);
+    expect(await source.listInferenceProfiles({ provider: "kilo-gateway", model: "vendor/physical-model:free" })).toEqual(["reasoning-disabled:max-output-2400"]);
+    expect(await source.getCapabilityScore({ provider: "kilo-gateway", model: "vendor/physical-model:free", taskType: "coding", inferenceProfile: "reasoning-disabled:max-output-2400" })).toBe(0);
   });
 });
 
@@ -141,7 +141,7 @@ function result(quality: number, success: boolean) {
   return {
     caseId: "coding-001",
     provider: "kilo-gateway",
-    model: "openrouter/free",
+    model: "vendor/physical-model:free",
     category: "coding" as const,
     status: success ? "PASS" as const : "FAIL" as const,
     quality,

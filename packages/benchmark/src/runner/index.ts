@@ -52,6 +52,9 @@ export async function runBenchmark(options: BenchmarkRunOptions): Promise<Benchm
           timestamp: new Date()
         };
       } catch (error) {
+        // A local economic rejection is not an observed physical model failure.
+        // Stop without inserting invented capability/performance evidence.
+        if (error instanceof BenchmarkRequestError && ['ECONOMIC_POLICY_BLOCKED', 'INVALID_COST'].includes(error.errorCode ?? '')) throw error;
         const failure = classifyFailure(error);
         stopModel = shouldStopModel(failure.status);
         result = {
@@ -74,6 +77,9 @@ export async function runBenchmark(options: BenchmarkRunOptions): Promise<Benchm
       }
       results.push(result);
       await options.telemetry?.emit("benchmark.case.completed", { ...result, timestamp: result.timestamp.toISOString() });
+      // A contradictory charge stops the entire qualification, including other
+      // targets/providers. Keep the reported amount and never grade capability.
+      if (result.status === 'BILLING_REQUIRED') return results;
       if (stopModel) break;
       if (target.rateLimitDelayMs) await sleep(target.rateLimitDelayMs);
     }

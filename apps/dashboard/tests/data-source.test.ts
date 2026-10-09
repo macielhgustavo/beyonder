@@ -135,3 +135,11 @@ describe("Control Center data source", () => {
 function insertState(db: Database.Database, key: string, value: unknown) {
   db.prepare("INSERT INTO state VALUES (?, ?, ?)").run(key, JSON.stringify(value), new Date().toISOString());
 }
+
+it('Resources keeps unknown/paid/free price, quota and inference qualification separate',async()=>{
+ dir=mkdtempSync(path.join(tmpdir(),'zero-cost-resource-'));const providerPath=path.join(dir,'providers.json'), now=new Date().toISOString();
+ writeFileSync(providerPath,JSON.stringify({version:1,updatedAt:now,providers:{'kilo-gateway':{providerId:'kilo-gateway',state:'READY',classification:'KEYLESS',attempts:1,lastUpdatedAt:now,validation:{status:'validated',models:['vendor/unknown','vendor/paid','vendor/free:free'],modelMetadata:[{id:'vendor/unknown',capabilities:['CHAT'],costClass:'UNKNOWN_COST'},{id:'vendor/paid',capabilities:['CHAT'],costClass:'PAID'},{id:'vendor/free:free',capabilities:['CHAT'],costClass:'FREE_TIER_ELIGIBLE',costEvidence:{source:'live-catalog',observedAt:now,zeroPrice:true,explicitFreeRoute:true}}]}}}}));
+ const provider=(await new LocalDashboardDataSource(path.join(dir,'absent.sqlite'),providerPath).getProviders()).find(p=>p.id==='kilo-gateway')!;
+ expect(provider.verified).toBe(false);expect(provider.economicModels).toEqual(expect.arrayContaining([expect.objectContaining({model:'vendor/unknown',costClass:'UNKNOWN_COST',zeroCostReady:false}),expect.objectContaining({model:'vendor/paid',costClass:'PAID',zeroCostReady:false}),expect.objectContaining({model:'vendor/free:free',zeroCostReady:true,freeQuota:'UNKNOWN',billingSpillover:false,inferenceQualified:'UNKNOWN',verifierQualified:'UNKNOWN'})]));
+ expect(JSON.stringify(provider.economicModels)).not.toContain('$0');
+});

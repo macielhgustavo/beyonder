@@ -8,10 +8,15 @@ const target: ModelTarget = { provider: "test", providerName: "Test", model: "fr
 describe("benchmark runner", () => {
   it.each([0.01, 0.25, 1.2])("preserves unexpected cost %s without a semantic grade or further requests", async cost => {
     let calls = 0;
-    const results = await runBenchmark({ mode: "smoke", targets: [target], client: { async complete() { calls++; return { provider: target.provider, model: target.model, content: "115", estimatedCostUsd: cost }; } } });
+    const results = await runBenchmark({ mode: "smoke", targets: [target, { ...target, model: 'second-model' }, { ...target, provider: 'another-provider' }], client: { async complete() { calls++; return { provider: target.provider, model: target.model, content: "115", estimatedCostUsd: cost }; } } });
     expect(calls).toBe(1);
     expect(results).toHaveLength(1);
     expect(results[0]).toMatchObject({ status: "BILLING_REQUIRED", quality: null, success: null, monetaryCost: cost });
+  });
+  it('stops on unknown reported usage without materializing a zero-cost BIB row', async () => {
+    let calls = 0;
+    await expect(runBenchmark({ mode: 'smoke', targets: [target, { ...target, model: 'second-model' }], client: { async complete() { calls++; throw new BenchmarkRequestError('Invalid monetary usage.', { errorCode: 'INVALID_COST' }); } } })).rejects.toMatchObject({ errorCode: 'INVALID_COST' });
+    expect(calls).toBe(1);
   });
   it("runs smoke mode with two cases per category and adversarial code/verification", async () => {
     const results = await runBenchmark({ mode: "smoke", targets: [target], client: new EchoClient() });

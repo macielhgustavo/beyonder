@@ -89,7 +89,7 @@ export class OperationalHealthStore {
     await this.state?.update<OperationalHealth>(`provider-health:${provider}`, empty(), (health) => health.cooldown?.reason === "AUTH_REQUIRED" ? { ...health, cooldown: undefined } : health);
   }
   async record(attempt: InferenceAttempt) {
-    if (!this.state || attempt.status === "STARTED" || attempt.phase === "TOOL_EXECUTION") return;
+    if (!this.state || attempt.status === "STARTED" || attempt.phase === "TOOL_EXECUTION" || attempt.failureClass === 'ECONOMIC_POLICY_BLOCKED') return;
     // The bounded per-route sample list makes duplicate terminal callbacks idempotent.
     // This also bounds the effect of ancient outages, unlike lifetime means.
     for (const key of [`model-health:${attempt.provider}:${attempt.model}`, `provider-health:${attempt.provider}`]) {

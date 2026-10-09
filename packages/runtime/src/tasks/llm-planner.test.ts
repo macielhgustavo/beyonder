@@ -1,3 +1,4 @@
+import { fixtureZeroCost } from '../models/testing/zero-cost-fixture.js';
 import { describe, expect, it, vi } from "vitest";
 import { ToolExecutor, ToolRegistry, ToolRisk, ToolSideEffect, createToolInputSchema, type ToolDescriptor, type ToolDefinition } from "@beyonder/tools";
 import type { ModelCandidate, RouteDecision } from "../models/adaptive-types.js";
@@ -22,6 +23,7 @@ function task(): IntelligenceTask {
 
 function candidate(): ModelCandidate {
   return {
+    economics: fixtureZeroCost("fixture-provider", "fixture-model"),
     provider: "fixture-provider",
     model: "fixture-model",
     capabilities: ["text"],
@@ -99,7 +101,7 @@ describe("LlmPlanner", () => {
 
   it("tries the next routed candidate after an operational model failure", async () => {
     const first = candidate();
-    const second = { ...candidate(), provider: "second-provider", model: "second-model" };
+    const second = { ...candidate(), provider: "second-provider", model: "second-model", economics: fixtureZeroCost("second-provider", "second-model") };
     const route = vi.fn(async () => ({ task: task(), economicState: "normal" as const, candidates: [first, second], selected: first, explored: false, reason: "test" }));
     const completeForCandidate = vi.fn()
       .mockRejectedValueOnce(new Error("RATE_LIMITED"))

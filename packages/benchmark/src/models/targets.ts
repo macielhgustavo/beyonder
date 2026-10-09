@@ -1,11 +1,11 @@
-import { buildComputeInventory, getProvider, isModelMetadataEligibleForWorkload, type CredentialBroker } from "@beyonder/compute";
+import { AutopilotStateStore, buildComputeInventory, getProvider, isModelMetadataEligibleForWorkload, resolveZeroCostExecution, readAccountCostEvidence, observedEconomicQuota, type ZeroCostDecision, type CredentialBroker } from "@beyonder/compute";
 import type { ModelTarget } from "../types.js";
 
 const UNSAFE_MODEL_MARKERS = ["verify-current", "auto"];
 type AutopilotState = Parameters<typeof buildComputeInventory>[0];
 type ComputeInventoryEntry = ReturnType<typeof buildComputeInventory>[number];
 
-export interface BenchmarkTargetSelection { provider?: string; models?: string[]; reasoningMode?: "low" | "disabled"; }
+export interface BenchmarkTargetSelection { provider?: string; models?: string[]; reasoningMode?: "low" | "disabled"; economicEvidence?: (provider: string, model: string) => ZeroCostDecision; }
 
 export function selectFreeModelTargets(state: AutopilotState, broker: CredentialBroker, selection: BenchmarkTargetSelection = {}): ModelTarget[] {
   return buildComputeInventory(state).filter(entry => !selection.provider || entry.providerId === selection.provider).flatMap((entry) => targetsForEntry(entry, broker, selection));
@@ -27,11 +27,23 @@ function targetsForEntry(entry: ComputeInventoryEntry, broker: CredentialBroker,
     .filter((model) => isSafeModel(entry.providerId, model))
     .filter((model) => {
       const metadata = entry.modelMetadata.find(row => row.id === model);
-      return metadata && isModelMetadataEligibleForWorkload(metadata, "benchmark_text") && ["FREE_CONFIRMED", "FREE_TIER_ELIGIBLE"].includes(metadata.costClass ?? "UNKNOWN_COST");
+      if (!metadata || metadata.costClass === 'PAID' || !isModelMetadataEligibleForWorkload(metadata, "benchmark_text")) return false;
+      const economics = selection.economicEvidence?.(provider.id, model) ?? resolveZeroCostExecution({ provider, model: metadata });
+      return economics.zeroCostExecutionGuaranteed;
     })
     .filter(model => selection.reasoningMode !== "disabled" || entry.modelMetadata.find(row => row.id === model)?.reasoningControl)
     .slice(0, selection.models ? selection.models.length : 2)
     .map((model) => protectTarget({
+      economics: selection.economicEvidence?.(provider.id, model) ?? resolveZeroCostExecution({ provider, model: entry.modelMetadata.find(m => m.id === model)! }),
+      resolveEconomics: async () => {
+        if (selection.economicEvidence) return selection.economicEvidence(provider.id, model);
+        const state = await new AutopilotStateStore(broker.providerStatePath).read();
+        const current = buildComputeInventory(state).find(row => row.providerId === provider.id);
+        const metadata = current?.modelMetadata.find(row => row.id === model) ?? { id: model, capabilities: [], costClass: 'UNKNOWN_COST' as const };
+        const credential = (await broker.resolve(provider.id)).descriptor;
+        const decision = resolveZeroCostExecution({ provider, model: metadata, credential, quota: observedEconomicQuota(state.providers[provider.id]), accountEvidence: (await readAccountCostEvidence()).find(row => row.provider === provider.id && row.model === model) });
+        return credential.accessible && credential.valid !== false && ['healthy', 'keyless'].includes(current?.status ?? '') ? decision : { ...decision, zeroCostExecutionGuaranteed: false, monetaryCost: { state: 'UNKNOWN' }, reason: 'Current credential/provider accessibility not established.' };
+      },
       provider: entry.providerId,
       providerName: entry.providerName,
       model,
@@ -69,6 +81,6 @@ function rateLimitDelay(entry: ComputeInventoryEntry): number {
 
 /** Keep server-only credential material out of JSON snapshots and telemetry. */
 function protectTarget(target: ModelTarget): ModelTarget {
-  for (const key of ["apiKey", "accountId"] as const) Object.defineProperty(target, key, { value: target[key], writable: false, enumerable: false });
+  for (const key of ["apiKey", "accountId", "resolveEconomics"] as const) Object.defineProperty(target, key, { value: target[key], writable: false, enumerable: false });
   return target;
 }

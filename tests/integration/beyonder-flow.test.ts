@@ -1,3 +1,4 @@
+import { fixtureZeroCost } from '../../packages/runtime/src/models/testing/zero-cost-fixture.js';
 import { mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -27,7 +28,7 @@ describe("Beyonder adaptive intelligence flow", () => {
           lastUpdatedAt: now,
           validation: {
             status: "validated",
-            models: ["llama-3.3-70b-versatile"],
+            models: ["llama-3.3-70b-versatile", "llama-3.1-8b-instant"],
             latencyMs: 80,
             rateLimitHeaders: {
               "x-ratelimit-limit-requests": "1000",
@@ -63,7 +64,7 @@ describe("Beyonder adaptive intelligence flow", () => {
     });
 
     const inventory = buildComputeInventory(await stateStore.read());
-    expect(inventory.some((entry) => entry.status === "keyless" && entry.cost === "$0")).toBe(true);
+    expect(inventory.some((entry) => entry.status === "keyless" && entry.cost === "unknown" && entry.inferenceQualified === false)).toBe(true);
 
     const config = loadConfig({
       BEYONDER_DB_PATH: dbPath,
@@ -73,7 +74,7 @@ describe("Beyonder adaptive intelligence flow", () => {
       BEYONDER_PROVIDER_STATE_PATH: providerStatePath,
       BEYONDER_TOOLS_ENABLED: "false"
     });
-    const runtime = createRuntime(config, { fixture: true });
+    const runtime = createRuntime(config, { fixture: true, economicEvidence: async (provider, model) => fixtureZeroCost(provider, model) });
 
     const seed = await runtime.memory.remember("semantic", "Readiness checks should avoid side effects and preserve scarce quota.", 4, {
       utility: 0.9,

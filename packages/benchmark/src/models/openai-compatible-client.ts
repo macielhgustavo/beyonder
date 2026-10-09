@@ -1,11 +1,27 @@
 import { physicalModelIdentity } from "@beyonder/runtime";
 import type { BenchmarkModelClient, BenchmarkModelMessage, BenchmarkModelResponse, ModelTarget } from "../types.js";
-import { providerFetch as fetch } from "@beyonder/compute";
+import { providerFetch as fetch, requireZeroCostDecision, getProvider } from "@beyonder/compute";
 
 const REQUEST_TIMEOUT_MS = 20_000;
 
 export class OpenAiCompatibleBenchmarkClient implements BenchmarkModelClient {
+  private readonly economicStops = new Set<string>();
+
   async complete(target: ModelTarget, messages: BenchmarkModelMessage[]): Promise<BenchmarkModelResponse> {
+    if (this.economicStops.has(target.provider)) throw new BenchmarkRequestError('Provider contradicted zero-cost evidence; qualification is stopped.', { errorCode: 'ECONOMIC_POLICY_BLOCKED' });
+    try { return await this.completeQualified(target, messages); }
+    catch (error) {
+      if (error instanceof BenchmarkRequestError && ['BILLING_REQUIRED', 'INVALID_COST'].includes(error.errorCode ?? '')) this.economicStops.add(target.provider);
+      throw error;
+    }
+  }
+
+  private async completeQualified(target: ModelTarget, messages: BenchmarkModelMessage[]): Promise<BenchmarkModelResponse> {
+    const economics = target.resolveEconomics ? await target.resolveEconomics() : target.economics;
+    try { requireZeroCostDecision(economics, target.provider, target.model); }
+    catch { throw new BenchmarkRequestError('No execution-specific zero-cost guarantee.', { errorCode: 'ECONOMIC_POLICY_BLOCKED' }); }
+    const provider = getProvider(target.provider);
+    if (!provider?.openAiCompatibleEndpoint || target.baseUrl !== provider.openAiCompatibleEndpoint.replace('{account_id}', target.accountId ?? '')) throw new BenchmarkRequestError('Economic evidence does not authorize this endpoint.', { errorCode: 'ECONOMIC_POLICY_BLOCKED' });
     if (!target.baseUrl) throw new BenchmarkRequestError(`Provider ${target.provider} has no OpenAI-compatible endpoint.`, {
       errorCode: "MISSING_ENDPOINT"
     });
@@ -17,11 +33,13 @@ export class OpenAiCompatibleBenchmarkClient implements BenchmarkModelClient {
         method: "POST",
         headers: requestHeaders(target),
         signal: controller.signal,
+        redirect: 'error',
         body: JSON.stringify({
           model: target.model,
           messages,
           temperature: 0,
           max_tokens: 2400,
+          ...(['openrouter', 'kilo-gateway'].includes(target.provider) ? { provider: { max_price: { prompt: 0, completion: 0 }, allow_fallbacks: false } } : {}),
           ...(target.reasoning ? { reasoning: target.reasoning } : {})
         })
       });
@@ -78,6 +96,7 @@ async function completeCloudflareWorkersAi(
       method: "POST",
       headers: requestHeaders(target),
       signal: controller.signal,
+      redirect: 'error',
       body: JSON.stringify({ messages, temperature: 0, max_tokens: 256 })
     });
     if (!response.ok) {
@@ -128,7 +147,7 @@ export class BenchmarkRequestError extends Error {
 }
 
 function freeResponseCost(reported: unknown): number {
-  if (reported === undefined) return 0; // Targets are selected from explicit free catalog entries.
+  if (reported === undefined) return 0; // The physical request passed the explicit economic gate above.
   if (typeof reported !== "number" || !Number.isFinite(reported) || reported < 0) throw new BenchmarkRequestError("Provider returned invalid monetary usage.", { errorCode: "INVALID_COST" });
   if (reported > 0) throw new BenchmarkRequestError("Provider reported a charge; stop zero-money qualification.", { errorCode: "BILLING_REQUIRED", monetaryCostUsd: reported });
   return reported;

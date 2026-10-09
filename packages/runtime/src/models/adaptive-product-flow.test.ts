@@ -40,6 +40,28 @@ async function selector(staleGroqState = false) {
 }
 
 describe("adaptive product flow", () => {
+  it("discovers and ranks native free-plan candidates across Gemini, Groq and Cloudflare", async () => {
+    const path = join(await mkdtemp(join(tmpdir(), 'beyonder-native-pool-')), 'state.json');
+    const stamp = new Date().toISOString();
+    const nativeModels = { gemini: 'gemini-2.5-flash', groq: 'openai/gpt-oss-120b', 'cloudflare-workers-ai': '@cf/zai-org/glm-4.7-flash' } as const;
+    await new AutopilotStateStore(path).write({ version: 1, updatedAt: stamp, providers: Object.fromEntries(Object.entries(nativeModels).map(([providerId, model]) => [providerId, {
+      providerId, state: 'READY', classification: 'AUTO_WITH_HUMAN_GATE', attempts: 1, lastUpdatedAt: stamp,
+      validation: { status: 'validated', models: [model], modelMetadata: [{ id: model, capabilities: ['CHAT', 'REASONING', 'CODING'], costClass: providerId === 'gemini' ? 'FREE_TIER_ELIGIBLE' : 'PAID' }] }
+    }])) });
+    const selector = new AdaptiveModelSelector(path, {
+      providerAccountPlan: async provider => ({ gemini: 'GEMINI_FREE', groq: 'GROQ_FREE', 'cloudflare-workers-ai': 'CLOUDFLARE_WORKERS_FREE' } as const)[provider as keyof typeof nativeModels],
+      capabilitySource: {
+        async getCapability({ provider, taskType }) { return { score: provider === (taskType === 'coding' ? 'groq' : 'gemini') ? 0.95 : 0.55, samples: 8, source: 'BIB' as const }; },
+        async getCapabilityScore(input) { return (await this.getCapability(input))?.score ?? null; }
+      }
+    });
+    const coding = await selector.route(task('coding'), 'normal');
+    const reasoning = await selector.route(task('reasoning'), 'normal');
+    expect(coding.candidates.map(candidate => candidate.provider)).toEqual(expect.arrayContaining(Object.keys(nativeModels)));
+    expect(coding.selected?.provider).toBe('groq');
+    expect(reasoning.selected?.provider).toBe('gemini');
+    expect(coding.candidates.every(candidate => candidate.monetaryCostUsd === 0 && candidate.economics?.source === 'PROVIDER_FREE_PLAN')).toBe(true);
+  });
   it("keeps a validated free candidate discoverable after stale bootstrap failure", async () => {
     const route = await (await selector(true)).route(task("coding"), "normal");
     expect(route.candidates.some(candidate => candidate.provider === "groq")).toBe(true);

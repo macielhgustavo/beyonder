@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { AutopilotStateStore, CredentialBroker, getProvider, validateProviderDetailed, zeroCostInventory } from '@beyonder/compute';
+import { AutopilotStateStore, CredentialBroker, getProvider, validateProviderDetailed, zeroCostInventory, providerCredentialFingerprint } from '@beyonder/compute';
 import { loadConfig, ModelRouter, physicalModelIdentity, classifyFailure, InferenceError, runCandidates, openDatabase, StateStore, type InferenceAttempt, type ModelCandidate } from '@beyonder/runtime';
 import { randomUUID } from 'node:crypto';
 
@@ -7,12 +7,19 @@ const command = process.argv[2];
 const args = process.argv.slice(3);
 function option(name: string) { const i = args.indexOf(name); return i < 0 ? undefined : args[i + 1]; }
 async function main() {
-  if (!['inventory', 'smoke'].includes(command)) throw new Error('Use inventory or smoke.');
+  if (!['inventory', 'smoke', 'plan-fingerprint'].includes(command)) throw new Error('Use inventory, smoke or plan-fingerprint.');
   const providerId = option('--provider'), requestedModel = option('--model');
   if (command === 'smoke' && (!providerId || !requestedModel)) throw new Error('Smoke requires explicit --provider and --model; one short call, no retries.');
   const config = loadConfig({ ...process.env, BEYONDER_MODEL_PROVIDER: 'auto' });
   const store = new AutopilotStateStore(config.model.providerStatePath);
   const broker = new CredentialBroker({}, process.env, { providerStatePath: config.model.providerStatePath });
+  if (command === 'plan-fingerprint') {
+    if (!providerId || !['gemini', 'groq', 'cloudflare-workers-ai', 'nvidia-nim'].includes(providerId)) throw new Error('Specify a provider supported by native plan policy.');
+    const credential = await broker.resolve(providerId);
+    if (!credential.descriptor.accessible || !credential.apiKey()) throw new Error('Credential is unavailable.');
+    console.log(JSON.stringify({ provider: providerId, credentialSha256: providerCredentialFingerprint(providerId, credential.apiKey()!, credential.get('CLOUDFLARE_ACCOUNT_ID')), accountPlan: 'OPERATOR_VERIFICATION_REQUIRED' }));
+    return;
+  }
   if (args.includes('--refresh-catalog')) {
     const provider = providerId && getProvider(providerId);
     if (!provider) throw new Error('Catalogue refresh requires an explicit supported --provider.');
@@ -34,7 +41,7 @@ async function main() {
       metadataQuality: 1,
       local: providerId === 'ollama',
       externalQuotaConsumption: providerId !== 'ollama',
-      costClass: row.costClass,
+      costClass: row.costEvidenceSource === 'PROVIDER_FREE_PLAN' ? 'FREE_TIER_ELIGIBLE' : row.costClass,
       structuredOutput: 'unknown',
       computeTier: providerId === 'ollama' ? 'LOCAL_EMERGENCY' : 'OTHER_FREE_CLOUD',
       eligible: true,

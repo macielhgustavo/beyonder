@@ -1,5 +1,5 @@
 import { fileURLToPath } from "node:url";
-import { getProvider, CredentialBroker, eligibleModelsForWorkload, resolveZeroCostExecution, modelMetadata, requireZeroCostDecision, type ZeroCostDecision } from "@beyonder/compute";
+import { getProvider, CredentialBroker, eligibleModelsForWorkload, resolveZeroCostExecution, modelMetadata, requireZeroCostDecision, declaredProviderAccountPlan, type ZeroCostDecision } from "@beyonder/compute";
 
 export const NVIDIA_NIM_SMOKE_PROMPT = "Return exactly: BEYONDER_NVIDIA_OK";
 export const NVIDIA_NIM_SMOKE_EXPECTED = "BEYONDER_NVIDIA_OK";
@@ -74,7 +74,7 @@ export async function runNvidiaNimSmoke(
   const attempts: NvidiaNimSmokeAttempt[] = [];
 
   for (const model of candidates) {
-    const economics = await options.economicEvidence?.(model) ?? resolveZeroCostExecution({ provider, model: modelMetadata(provider, model) });
+    const economics = await options.economicEvidence?.(model) ?? resolveZeroCostExecution({ provider, model: modelMetadata(provider, model), accountPlan: declaredProviderAccountPlan(provider.id, apiKey), usageContext: 'DEV_EVAL' });
     try { requireZeroCostDecision(economics, provider.id, model); }
     catch { continue; } // Auth/catalog existence is not monetary authorization.
     try {

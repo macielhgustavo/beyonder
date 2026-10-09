@@ -1,4 +1,4 @@
-import { AutopilotStateStore, buildComputeInventory, getProvider, resolveZeroCostExecution, readAccountCostEvidence, requireZeroCostDecision, isModelMetadataEligibleForWorkload, type ModelWorkload, type ZeroCostDecision } from "@beyonder/compute";
+import { AutopilotStateStore, buildComputeInventory, getProvider, resolveZeroCostExecution, readAccountCostEvidence, requireZeroCostDecision, isModelMetadataEligibleForWorkload, type ModelWorkload, type ZeroCostDecision, type ProviderAccountPlan } from "@beyonder/compute";
 import type { IntelligenceTask } from "../intelligence/contracts.js";
 import type { EconomicState } from "../types.js";
 import type { ModelCapabilitySource } from "./capability-source.js";
@@ -23,6 +23,7 @@ export interface AdaptiveSelectorOptions {
   allowExploration?: boolean;
   canAttempt?: (candidate: Pick<ModelCandidate, "provider" | "model">) => Promise<boolean>;
   credentialAccess?: (provider: string) => Promise<import("@beyonder/credentials").CredentialDescriptor | undefined>;
+  providerAccountPlan?: (provider: string) => Promise<ProviderAccountPlan | undefined>;
   operationalHealth?: (provider: string, model: string) => Promise<{ samples: number; failures: number; latencyMs: number } | undefined>;
   ollamaBaseUrl?: string;
   performanceRepository?: PerformanceRepository;
@@ -110,12 +111,12 @@ export class AdaptiveModelSelector {
       const provider = getProvider(pair.entry.providerId) ?? { id: 'ollama' as const, openAiCompatibleEndpoint: this.options.ollamaBaseUrl };
       const modelMetadata = pair.entry.modelMetadata.find(m => m.id === pair.model)!;
       const accountEvidence = (await readAccountCostEvidence()).find(e => e.provider === pair.entry.providerId && e.model === pair.model);
-      const observedEconomics = resolveZeroCostExecution({ provider, model: modelMetadata, credential: access, accountEvidence, quota: economicQuota });
-      const economics = ['FREE_QUOTA_EXHAUSTED', 'PAID', 'BILLING_RISK'].includes(observedEconomics.classification) ? observedEconomics : await this.options.economicEvidence?.(pair.entry.providerId, pair.model) ?? observedEconomics;
+      const observedEconomics = resolveZeroCostExecution({ provider, model: modelMetadata, credential: access, accountPlan: await this.options.providerAccountPlan?.(pair.entry.providerId), accountEvidence, quota: economicQuota });
+      const economics = ['FREE_QUOTA_EXHAUSTED', 'PAID', 'BILLING_RISK', 'DEV_EVAL_ONLY'].includes(observedEconomics.classification) ? observedEconomics : await this.options.economicEvidence?.(pair.entry.providerId, pair.model) ?? observedEconomics;
       await this.telemetry('debug', 'economic.cost_evidence_resolved', { taskId: task.id, ...economics });
       let costAllowed = true;
       try { requireZeroCostDecision(economics, pair.entry.providerId, pair.model); } catch { costAllowed = false; }
-      if (!costAllowed || modelMetadata.costClass === 'PAID' || pair.entry.cost === 'billing-risk') {
+      if (!costAllowed || modelMetadata.costClass === 'PAID' && economics.source !== 'PROVIDER_FREE_PLAN' || pair.entry.cost === 'billing-risk') {
         const rejected: RejectedCandidate = { provider: pair.entry.providerId, model: pair.model, inferenceProfile: pair.inferenceProfile, computeTier: modelMetadata.costClass === 'PAID' ? 'PAID_DISABLED' : 'OTHER_FREE_CLOUD', economics, reasons: [`economic:${economics.classification}; ${economics.reason}`] };
         rejectedCandidates.push(rejected);
         await this.telemetry('debug', 'router.candidate_rejected_cost', { taskId: task.id, ...rejected });
@@ -241,7 +242,7 @@ export class AdaptiveModelSelector {
         metadataQuality: ROUTER_CONFIG.qualityClassDefaults[pair.entry.qualityClass],
         local: pair.entry.providerId === "ollama",
         externalQuotaConsumption: pair.entry.providerId !== "ollama",
-        costClass: metadata?.costClass,
+        costClass: economics.source === 'PROVIDER_FREE_PLAN' ? 'FREE_TIER_ELIGIBLE' : metadata?.costClass,
         structuredOutput: metadata?.structuredOutput ?? "unknown",
         provider: pair.entry.providerId,
         model: pair.model,

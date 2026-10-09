@@ -243,7 +243,7 @@ describe("AdaptiveModelSelector", () => {
     expect(route.selected?.capabilityEvidence.bibScore).toBe(0.98);
   });
 
-  it("includes NVIDIA, Cloudflare, and Groq when healthy and chat-compatible", async () => {
+  it("includes free providers but excludes NVIDIA Developer from product routing", async () => {
     const path = await providerStatePathFor({
       groq: ["llama-3.3-70b-versatile"],
       "nvidia-nim": ["qwen/qwen2.5-coder-32b-instruct"],
@@ -253,9 +253,10 @@ describe("AdaptiveModelSelector", () => {
     const route = await selector.route(task({ type: "coding" }), "normal");
     expect(route.candidates.map((candidate) => candidate.provider)).toEqual(expect.arrayContaining([
       "groq",
-      "nvidia-nim",
       "cloudflare-workers-ai"
     ]));
+    expect(route.candidates.some(candidate => candidate.provider === 'nvidia-nim')).toBe(false);
+    expect(route.rejectedCandidates?.find(candidate => candidate.provider === 'nvidia-nim')?.economics?.classification).toBe('DEV_EVAL_ONLY');
   });
 
   it("rejects exhausted NVIDIA quota while preserving BIB capability", async () => {
@@ -273,7 +274,7 @@ describe("AdaptiveModelSelector", () => {
     });
     const route = await selector.route(task({ type: "coding" }), "normal");
     expect(route.candidates.some(candidate => candidate.provider === "nvidia-nim")).toBe(false);
-    expect(route.rejectedCandidates?.find(candidate => candidate.provider === "nvidia-nim")?.economics?.classification).toBe("FREE_QUOTA_EXHAUSTED");
+    expect(route.rejectedCandidates?.find(candidate => candidate.provider === "nvidia-nim")?.economics?.classification).toBe("DEV_EVAL_ONLY");
     expect((await new AutopilotStateStore(path).read()).providers["nvidia-nim"].validation?.models).toContain("qwen/qwen2.5-coder-32b-instruct");
   });
 

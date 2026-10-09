@@ -1,7 +1,7 @@
 import type { AppConfig } from "../config/env.js";
 import type { IntelligenceTask, TaskOutcome } from "../intelligence/contracts.js";
 import type { EconomicState, ModelMessage, ModelResponse } from "../types.js";
-import { getProvider, CredentialBroker, providerFetch as fetch, AutopilotStateStore, buildComputeInventory, resolveZeroCostExecution, readAccountCostEvidence, requireZeroCostDecision, isLocalZeroCostEndpoint, type ZeroCostDecision } from "@beyonder/compute";
+import { getProvider, CredentialBroker, providerFetch as fetch, AutopilotStateStore, buildComputeInventory, resolveZeroCostExecution, readAccountCostEvidence, requireZeroCostDecision, isLocalZeroCostEndpoint, declaredProviderAccountPlan, type ZeroCostDecision } from "@beyonder/compute";
 import { redactSecrets } from "@beyonder/tools";
 import { AdaptiveModelSelector, type AdaptiveSelectorOptions } from "./adaptive-selector.js";
 import type { ModelCandidate, RouteDecision, RouterTelemetry } from "./adaptive-types.js";
@@ -24,6 +24,7 @@ export class ModelRouter {
   private readonly credentials: CredentialBroker;
   private readonly selector: AdaptiveModelSelector;
   private readonly performance: PerformanceRepository;
+  private readonly quotaSource: AutopilotQuotaSource;
   readonly operationalHealth: OperationalHealthStore;
 
   constructor(
@@ -32,8 +33,9 @@ export class ModelRouter {
   ) {
     this.credentials = options.credentials ?? new CredentialBroker({}, { ...process.env, ...(config.openAiCompatApiKey ? { OPENAI_COMPAT_API_KEY: config.openAiCompatApiKey } : {}) }, { providerStatePath: config.providerStatePath });
     this.performance = options.performanceRepository ?? new EmptyPerformanceRepository();
+    this.quotaSource = new AutopilotQuotaSource(config.providerStatePath);
     this.operationalHealth = new OperationalHealthStore(options.state);
-    this.selector = new AdaptiveModelSelector(config.providerStatePath, { ...options, credentialAccess: async provider => getProvider(provider) ? (await this.credentials.resolve(provider)).descriptor : undefined, operationalHealth: (provider, model) => this.operationalHealth.get(provider, model), canAttempt: (candidate) => this.canAttempt(candidate), ollamaBaseUrl: config.ollamaBaseUrl, performanceRepository: this.performance });
+    this.selector = new AdaptiveModelSelector(config.providerStatePath, { ...options, quotaSource: options.quotaSource ?? this.quotaSource, credentialAccess: async provider => getProvider(provider) ? (await this.credentials.resolve(provider)).descriptor : undefined, providerAccountPlan: async provider => { if (!getProvider(provider)) return undefined; const resolved = await this.credentials.resolve(provider); return declaredProviderAccountPlan(provider, resolved.apiKey(), resolved.get('CLOUDFLARE_ACCOUNT_ID')); }, operationalHealth: (provider, model) => this.operationalHealth.get(provider, model), canAttempt: (candidate) => this.canAttempt(candidate), ollamaBaseUrl: config.ollamaBaseUrl, performanceRepository: this.performance });
   }
 
   async recordAttempt(attempt: InferenceAttempt): Promise<void> {
@@ -127,11 +129,12 @@ export class ModelRouter {
     const state = await new AutopilotStateStore(this.config.providerStatePath).read();
     const provider = getProvider(providerId);
     const metadata = buildComputeInventory(state).find(e => e.providerId === providerId)?.modelMetadata.find(m => m.id === model) ?? { id: model, capabilities: [], costClass: 'UNKNOWN_COST' as const };
-    const credential = provider ? (await this.credentials.resolve(providerId)).descriptor : undefined;
-    const quota = await (this.options.quotaSource ?? new AutopilotQuotaSource(this.config.providerStatePath)).get(providerId, model);
-    const observed = resolveZeroCostExecution({ provider: provider ?? { id: 'ollama', openAiCompatibleEndpoint: providerId === 'ollama' ? this.config.ollamaBaseUrl : undefined }, model: metadata, credential, quota, accountEvidence: (await readAccountCostEvidence()).find(e => e.provider === providerId && e.model === model) });
+    const resolved = provider ? await this.credentials.resolve(providerId) : undefined;
+    const credential = resolved?.descriptor;
+    const quota = await (this.options.quotaSource ?? this.quotaSource).get(providerId, model);
+    const observed = resolveZeroCostExecution({ provider: provider ?? { id: 'ollama', openAiCompatibleEndpoint: providerId === 'ollama' ? this.config.ollamaBaseUrl : undefined }, model: metadata, credential, accountPlan: declaredProviderAccountPlan(providerId, resolved?.apiKey(), resolved?.get('CLOUDFLARE_ACCOUNT_ID')), quota, accountEvidence: (await readAccountCostEvidence()).find(e => e.provider === providerId && e.model === model) });
     const supplied = await this.options.economicEvidence?.(providerId, model);
-    if (supplied && !['FREE_QUOTA_EXHAUSTED', 'PAID', 'BILLING_RISK'].includes(observed.classification)) return supplied;
+    if (supplied && !['FREE_QUOTA_EXHAUSTED', 'PAID', 'BILLING_RISK', 'DEV_EVAL_ONLY'].includes(observed.classification)) return supplied;
     return observed;
   }
 
@@ -200,6 +203,7 @@ export class ModelRouter {
         redirect: 'error',
         body: JSON.stringify({ model: candidate.model, messages, temperature: 0, max_tokens: maxOutputTokens, stream: false, ...(candidate.provider === 'openrouter' ? { provider: { max_price: { prompt: 0, completion: 0 }, allow_fallbacks: true } } : candidate.provider === 'kilo-gateway' ? { provider: { max_price: { prompt: 0, completion: 0 }, allow_fallbacks: false } } : {}), ...(candidate.capabilities?.includes("reasoning-control") ? { reasoning: candidate.inferenceProfile === "reasoning-disabled:max-output-2400" && candidate.benchmarkCapability?.inferenceProfile === candidate.inferenceProfile ? { enabled: false } : { effort: "low" } } : {}), ...(structured && (candidate.benchmarkCapability?.structuredOutputMode ?? candidate.structuredOutput) === "native" ? { response_format: { type: "json_object" } } : {}) })
       });
+      this.quotaSource.observe(candidate.provider, candidate.model, response.headers);
       if (!response.ok) throw httpFailure(response.status, (await response.text()).replaceAll(apiKey || "\u0000", "[REDACTED]"), response.headers);
       const json = await response.json() as { error?: unknown; model?: string; provider?: string; choices?: Array<{ finish_reason?: string; message?: { content?: string; tool_calls?: unknown[]; function_call?: unknown; provider_metadata?: { gateway?: { routing?: { resolvedProvider?: string; totalProviderAttemptCount?: number } } } } }>; usage?: { total_tokens?: number; cost?: number | string } };
       const completion = json.choices?.[0];

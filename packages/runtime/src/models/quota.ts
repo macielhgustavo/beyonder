@@ -7,15 +7,22 @@ export interface QuotaSource {
 }
 
 export class AutopilotQuotaSource implements QuotaSource {
+  private readonly live = new Map<string, { headers: Record<string, string>; observedAt: number }>();
   constructor(private readonly providerStatePath: string) {}
+
+  observe(provider: string, model: string, responseHeaders: Headers): void {
+    const headers = Object.fromEntries([...responseHeaders.entries()].filter(([name]) => /^(?:x-ratelimit-|ratelimit-|x-rate-limit-)/i.test(name)));
+    if (Object.keys(headers).length) this.live.set(`${provider}/${model}`, { headers, observedAt: Date.now() });
+  }
 
   async get(providerId: string, model?: string): Promise<QuotaSnapshot> {
     const catalog = getProvider(providerId);
     const state = await new AutopilotStateStore(this.providerStatePath).read();
     const progress = state.providers[providerId];
-    const headers = normalizeHeaders(progress?.validation?.rateLimitHeaders ?? {});
+    const live = model ? this.live.get(`${providerId}/${model}`) : undefined;
+    const headers = normalizeHeaders(live && Date.now() - live.observedAt < 300_000 ? live.headers : progress?.validation?.rateLimitHeaders ?? {});
     const limits = catalog?.freeTierLimits;
-    const observedAt = Date.parse(progress?.lastUpdatedAt ?? "");
+    const observedAt = live && Date.now() - live.observedAt < 300_000 ? live.observedAt : Date.parse(progress?.lastUpdatedAt ?? "");
     const resetAt = parseReset(headers["x-ratelimit-reset-requests"] ?? headers["ratelimit-reset"] ?? headers["x-rate-limit-reset"], observedAt);
     const fresh = Number.isFinite(observedAt) && Date.now() - observedAt >= 0 && Date.now() - observedAt < 300_000 && (resetAt === "unknown" || Date.parse(resetAt) > Date.now());
 
@@ -41,7 +48,7 @@ export class AutopilotQuotaSource implements QuotaSource {
       tokenQuotaRemaining: fresh ? headerNumber(headers, ["x-ratelimit-remaining-tokens"]) : "unknown",
       resetAt: fresh ? resetAt : "unknown",
       health: providerHealth(catalog?.authType, progress?.state),
-      lastUpdatedAt: progress?.lastUpdatedAt ?? "unknown"
+      lastUpdatedAt: Number.isFinite(observedAt) ? new Date(observedAt).toISOString() : "unknown"
     };
   }
 

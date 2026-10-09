@@ -39,7 +39,7 @@ export class DeterministicFixtureOpportunitySource implements OpportunitySource 
         metadata: { requiresAccount: true, requiresPayment: true, requiredCapitalUsd: 20 }
       }
     ];
-    return { sourceId: this.id, discoveredAt, items: items.slice(0, context.limit ?? items.length), errors: [] };
+    return { sourceId: this.id, discoveredAt, items: items.slice(0, context.limit ?? items.length), errors: [], classification: "FIXTURE" };
   }
 }
 
@@ -51,7 +51,7 @@ export interface GitHubIssueSourceOptions {
 
 export class GitHubPublicOpportunitySource implements OpportunitySource {
   readonly id = "github-public";
-  readonly classification: OpportunitySourceClassification = "REAL";
+  classification: OpportunitySourceClassification = "DEGRADED";
   private readonly apiBaseUrl: string;
   private readonly repository?: string;
   private readonly fetchImpl: typeof fetch;
@@ -70,15 +70,16 @@ export class GitHubPublicOpportunitySource implements OpportunitySource {
         headers: { accept: "application/vnd.github+json", "user-agent": "beyonder-opportunity-readonly" },
         signal: context.signal
       });
-      if (!response.ok) return { sourceId: this.id, discoveredAt, items: [], errors: [`GitHub returned HTTP ${response.status}.`] };
+      if (!response.ok) return finishDiscovery(this, { sourceId: this.id, discoveredAt, items: [], errors: [`GitHub returned HTTP ${response.status}.`] });
       const issues = await response.json() as Array<{ id?: unknown; html_url?: unknown; title?: unknown; body?: unknown; labels?: Array<{ name?: unknown }>; pull_request?: unknown }>;
+      if (!Array.isArray(issues)) return finishDiscovery(this, { sourceId: this.id, discoveredAt, items: [], errors: ["GitHub returned a malformed payload."] });
       const items = issues
         .filter((issue) => !issue.pull_request && typeof issue.title === "string" && typeof issue.id !== "undefined")
         .map((issue) => githubIssueToRaw(issue, this.id))
         .filter((issue): issue is RawOpportunity => issue !== undefined);
-      return { sourceId: this.id, discoveredAt, items, errors: [] };
+      return finishDiscovery(this, { sourceId: this.id, discoveredAt, items, errors: [] });
     } catch (error) {
-      return { sourceId: this.id, discoveredAt, items: [], errors: [error instanceof Error ? error.message : String(error)] };
+      return finishDiscovery(this, { sourceId: this.id, discoveredAt, items: [], errors: [error instanceof Error ? error.message : String(error)] });
     }
   }
 }
@@ -91,7 +92,7 @@ export interface AgentWorkOpportunitySourceOptions {
 export interface OpenBountyOpportunitySourceOptions { apiBaseUrl?: string; fetchImpl?: typeof fetch; }
 export class OpenBountyPublicOpportunitySource implements OpportunitySource {
   readonly id = "openbounty-public";
-  readonly classification: OpportunitySourceClassification = "REAL";
+  classification: OpportunitySourceClassification = "DEGRADED";
   private readonly apiBaseUrl: string;
   private readonly fetchImpl: typeof fetch;
   constructor(options: OpenBountyOpportunitySourceOptions = {}) { this.apiBaseUrl = (options.apiBaseUrl ?? "https://www.openbounty.app/api/v1").replace(/\/$/, ""); this.fetchImpl = options.fetchImpl ?? fetch; }
@@ -99,12 +100,12 @@ export class OpenBountyPublicOpportunitySource implements OpportunitySource {
     const discoveredAt = context.now ?? new Date().toISOString();
     try {
       const response = await this.fetchImpl(`${this.apiBaseUrl}/bounties?limit=${Math.min(context.limit ?? 20, 100)}`, { headers: { accept: "application/json", "user-agent": "beyonder-opportunity-readonly" }, signal: context.signal });
-      if (!response.ok) return { sourceId: this.id, discoveredAt, items: [], errors: [`Open Bounty returned HTTP ${response.status}.`] };
+      if (!response.ok) return finishDiscovery(this, { sourceId: this.id, discoveredAt, items: [], errors: [`Open Bounty returned HTTP ${response.status}.`] });
       const payload = await response.json() as unknown;
-      if (!payload || typeof payload !== "object" || !Array.isArray((payload as { data?: unknown }).data)) return { sourceId: this.id, discoveredAt, items: [], errors: ["Open Bounty returned a malformed payload."] };
+      if (!payload || typeof payload !== "object" || !Array.isArray((payload as { data?: unknown }).data)) return finishDiscovery(this, { sourceId: this.id, discoveredAt, items: [], errors: ["Open Bounty returned a malformed payload."] });
       const items = (payload as { data: unknown[] }).data.map((item) => openBountyToRaw(item, this.id)).filter((item): item is RawOpportunity => item !== undefined);
-      return { sourceId: this.id, discoveredAt, items, errors: [] };
-    } catch (error) { return { sourceId: this.id, discoveredAt, items: [], errors: [error instanceof Error ? error.message : String(error)] }; }
+      return finishDiscovery(this, { sourceId: this.id, discoveredAt, items, errors: [] });
+    } catch (error) { return finishDiscovery(this, { sourceId: this.id, discoveredAt, items: [], errors: [error instanceof Error ? error.message : String(error)] }); }
   }
 }
 
@@ -119,7 +120,7 @@ function openBountyToRaw(value: unknown, source: string): RawOpportunity | undef
 /** Public, read-only AgentWork catalog adapter. It never registers, applies, messages, or pays. */
 export class AgentWorkPublicOpportunitySource implements OpportunitySource {
   readonly id = "agentwork-public";
-  readonly classification: OpportunitySourceClassification = "DEGRADED";
+  classification: OpportunitySourceClassification = "DEGRADED";
   private readonly apiBaseUrl: string;
   private readonly fetchImpl: typeof fetch;
 
@@ -134,13 +135,14 @@ export class AgentWorkPublicOpportunitySource implements OpportunitySource {
       const response = await this.fetchImpl(`${this.apiBaseUrl}/gigs?status=open`, {
         headers: { accept: "application/json", "user-agent": "beyonder-opportunity-readonly" }, signal: context.signal
       });
-      if (!response.ok) return { sourceId: this.id, discoveredAt, items: [], errors: [`AgentWork returned HTTP ${response.status}.`] };
+      if (!response.ok) return finishDiscovery(this, { sourceId: this.id, discoveredAt, items: [], errors: [`AgentWork returned HTTP ${response.status}.`] });
       const payload = await response.json() as unknown;
+      if (!Array.isArray(payload) && !(payload && typeof payload === "object" && Array.isArray((payload as { gigs?: unknown }).gigs))) return finishDiscovery(this, { sourceId: this.id, discoveredAt, items: [], errors: ["AgentWork returned a malformed payload."] });
       const records = Array.isArray(payload) ? payload : (payload && typeof payload === "object" && Array.isArray((payload as { gigs?: unknown }).gigs) ? (payload as { gigs: unknown[] }).gigs : []);
       const items = records.map((record) => agentWorkToRaw(record, this.id)).filter((item): item is RawOpportunity => item !== undefined);
-      return { sourceId: this.id, discoveredAt, items: items.slice(0, context.limit ?? items.length), errors: [] };
+      return finishDiscovery(this, { sourceId: this.id, discoveredAt, items: items.slice(0, context.limit ?? items.length), errors: [] });
     } catch (error) {
-      return { sourceId: this.id, discoveredAt, items: [], errors: [error instanceof Error ? error.message : String(error)] };
+      return finishDiscovery(this, { sourceId: this.id, discoveredAt, items: [], errors: [error instanceof Error ? error.message : String(error)] });
     }
   }
 }
@@ -191,4 +193,11 @@ function extractReward(input: string) {
   const match = input.match(/\$\s?(\d+(?:\.\d{1,2})?)/i) ?? input.match(/(\d+(?:\.\d{1,2})?)\s?(?:USD|US\$)/i);
   if (!match) return undefined;
   return { amount: Number(match[1]), currency: "USD", type: "FIXED" as const };
+}
+
+/** Availability is observed per discovery; a configured adapter is not proof. */
+function finishDiscovery(source: OpportunitySource, result: OpportunityDiscoveryResult): OpportunityDiscoveryResult {
+  source.classification = result.errors.length === 0 ? "REAL"
+    : result.errors.some(error => /HTTP (?:401|403|404|410)\b/.test(error)) ? "UNAVAILABLE" : "DEGRADED";
+  return { ...result, classification: source.classification };
 }

@@ -102,6 +102,8 @@ export interface WorkRun {
 }
 
 export interface OpportunityDiscoveryResult {
+  /** Observed availability for this discovery, separate from opportunity viability. */
+  classification?: OpportunitySourceClassification;
   sourceId: string;
   discoveredAt: string;
   items: RawOpportunity[];

@@ -72,3 +72,23 @@ describe("opportunity engine", () => {
     expect(result.items).toEqual([]); expect(result.errors[0]).toContain("HTTP 503");
   });
 });
+
+
+it("reports source availability from the current response and preserves fixture identity", async () => {
+  let status = 503;
+  const source = new GitHubPublicOpportunitySource({ repository: "a/b", fetchImpl: async () => new Response(status === 200 ? "[]" : "unavailable", { status }) });
+  expect(source.classification).toBe("DEGRADED");
+  expect((await source.discover()).classification).toBe("DEGRADED");
+  status = 401;
+  expect((await source.discover()).classification).toBe("UNAVAILABLE");
+  status = 200;
+  expect((await source.discover()).classification).toBe("REAL");
+  expect(source.classification).toBe("REAL");
+  expect((await new DeterministicFixtureOpportunitySource().discover()).classification).toBe("FIXTURE");
+});
+it("does not report malformed AgentWork data as a successful empty discovery", async () => {
+  const source = new AgentWorkPublicOpportunitySource({ fetchImpl: async () => new Response(JSON.stringify({ error: "not a catalog" })) });
+  const result = await source.discover();
+  expect(result.classification).toBe("DEGRADED");
+  expect(result.errors[0]).toContain("malformed");
+});

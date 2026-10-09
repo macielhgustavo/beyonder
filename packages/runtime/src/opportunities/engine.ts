@@ -22,7 +22,7 @@ export class OpportunityEngine {
       catch (error) { result = { items: [], errors: [`${source.id}: ${error instanceof Error ? error.message : "Fonte indisponível"}`], discoveredAt: new Date().toISOString() }; }
       errors.push(...result.errors);
       await this.reliability?.record(source.id, { status: sourceHealthFromError(result.errors[0]), latencyMs: Date.now() - started, discovered: result.items.length, error: result.errors[0], malformed: result.errors.some((error) => /malformed/i.test(error)) });
-      await this.telemetry?.record("info", "opportunity.discovery.completed", { source: source.id, count: result.items.length, errors: result.errors.length });
+      await this.telemetry?.record("info", "opportunity.discovery.completed", { source: source.id, count: result.items.length, errors: result.errors.length, classification: source.classification });
       for (const raw of result.items) {
         const opportunity = normalizeOpportunity(raw, result.discoveredAt);
         const existing = await this.store.get(opportunity.id);

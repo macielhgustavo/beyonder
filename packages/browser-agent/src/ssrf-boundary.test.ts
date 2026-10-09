@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { gzipSync } from "node:zlib";
+import { gzipSync, zstdCompressSync } from "node:zlib";
 import { BrowserPolicyEngine, SystemAddressResolver, mergeBrowserPolicy, type AddressResolver } from "./policy.js";
 import { proxyBrowserRequest } from "./playwright-session.js";
 import { decodeBrowserResponse, pinnedRequestOptions, type BrowserNetworkTransport, type BrowserNetworkResponse } from "./pinned-transport.js";
@@ -145,8 +145,14 @@ describe("socket-bound SSRF enforcement", () => {
     expect(decoded.headers).toEqual({ "content-type": "text/html" });
   });
 
+  it("decodes zstd compressed upstream bodies", () => {
+    const decoded = decodeBrowserResponse({ status: 200, headers: { "content-type": "application/json", "content-encoding": "zstd" }, body: zstdCompressSync(Buffer.from('{"version": "3.14.8"}')) }, 1_024);
+    expect(decoded.body.toString()).toBe('{"version": "3.14.8"}');
+    expect(decoded.headers).toEqual({ "content-type": "application/json" });
+  });
+
   it("fails closed for unsupported response encodings", () => {
-    expect(() => decodeBrowserResponse({ status: 200, headers: { "content-encoding": "zstd" }, body: Buffer.from("opaque") }, 1_024)).toThrow(/Unsupported/);
+    expect(() => decodeBrowserResponse({ status: 200, headers: { "content-encoding": "x-unsupported" }, body: Buffer.from("opaque") }, 1_024)).toThrow(/Unsupported/);
   });
 
   it.each(["http://127.0.0.1/admin", "http://[::ffff:7f00:1]/", "http://169.254.169.254/latest/"])("never fulfills an HTTP redirect to a private target: %s", async location => {

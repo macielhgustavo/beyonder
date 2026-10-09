@@ -2,7 +2,7 @@ import { Agent as HttpAgent, request as httpRequest, type RequestOptions } from 
 import { Agent as HttpsAgent, request as httpsRequest } from "node:https";
 import { connect as connectTls } from "node:tls";
 import type { Socket } from "node:net";
-import { brotliDecompressSync, gunzipSync, inflateSync } from "node:zlib";
+import { brotliDecompressSync, gunzipSync, inflateSync, zstdDecompressSync } from "node:zlib";
 import type { BrowserConnectionTarget } from "./policy.js";
 
 export interface BrowserNetworkRequest {
@@ -177,6 +177,7 @@ export function decodeBrowserResponse(response: BrowserNetworkResponse, maxRespo
     if (encoding === "gzip" || encoding === "x-gzip") body = gunzipSync(body, { maxOutputLength: maxResponseBytes });
     else if (encoding === "deflate") body = inflateSync(body, { maxOutputLength: maxResponseBytes });
     else if (encoding === "br") body = brotliDecompressSync(body, { maxOutputLength: maxResponseBytes });
+    else if (encoding === "zstd") body = zstdDecompressSync(body, { maxOutputLength: maxResponseBytes });
     else throw new Error(`Unsupported browser response content encoding '${encoding}'.`);
   }
   if (body.length > maxResponseBytes) throw new Error("Browser response exceeded the egress size limit after decoding.");

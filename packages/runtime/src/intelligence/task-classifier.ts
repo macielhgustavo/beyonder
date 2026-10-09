@@ -7,9 +7,9 @@ const RULES: Array<{ type: IntelligenceTaskType; patterns: RegExp[] }> = [
   {
     type: "coding",
     patterns: [
-      /\b(code|coding|implement|refactor|debug|bug|typescript|javascript|python|sql|api|function|class|interface|repo|repository|commit|test|tests)\b/i,
-      /\b(código|implemente|implementar|refatore|depure|erro|função|classe|interface|repositório|teste|testes)\b/i,
-      /```/
+      /\b(?:refactor|debug|refatore|depure)\b/i,
+      /\b(?:implement|implemente|implementar)\b/i,
+      /\b(?:write|create|escreva|crie)\s+(?:(?:a|an|um|uma)\s+)?(?:(?!\b(?:summary|plan|report|explanation|resumo|plano|relatorio)\b)[\p{L}\d-]+\s+){0,6}(?:code|function|class|interface|test|código|função|classe|teste)s?\b/iu
     ]
   },
   {
@@ -56,6 +56,10 @@ const RULES: Array<{ type: IntelligenceTaskType; patterns: RegExp[] }> = [
     ]
   },
   {
+    type: "synthesis",
+    patterns: [/\b(?:synthesize|sintetize|sintetizar|integrate findings|combine findings)\b/i]
+  },
+  {
     type: "compression",
     patterns: [
       /\b(summarize|compress|shorten|condense|tl;?dr)\b/i,
@@ -82,17 +86,25 @@ export class TaskClassifier {
   classify(input: string): IntelligenceTaskType {
     if (browserIntent(input).navigation) return "browser";
     if (calculatorIntent(input).required) return "tool-use";
-    for (const rule of RULES) {
-      if (rule.patterns.some((pattern) => pattern.test(input))) {
-        if (rule.type === "coding") {
-          // Language/software names are topic clues, not coding requirements.
-          // The goal contract's actual intent remains authoritative.
-          const contract = analyzeGoalContract(input, rule.type);
-          if (contract.primaryIntent === "PLANNING") return "planning";
-          if (["FACTUAL", "COMPARISON", "RESEARCH"].includes(contract.primaryIntent)) return contract.evidenceRequirement === "REQUIRED" || contract.primaryIntent === "RESEARCH" ? "research" : contract.primaryIntent === "COMPARISON" ? "reasoning" : "chat";
-        }
-        return rule.type;
+    // Classify the requested operation, not nouns in supplied content. Keep
+    // instructions before a colon/fenced payload; within that instruction the
+    // first action governs subordinate actions ("write a function to classify").
+    const instruction = input.split(/```|:\s|\n/)[0];
+    const operations = RULES.flatMap(rule => rule.patterns.flatMap(pattern => {
+      const match = pattern.exec(instruction);
+      return match ? [{ rule, position: match.index }] : [];
+    })).sort((a, b) => a.position - b.position);
+    const contract = analyzeGoalContract(input, "chat");
+    if (contract.evidenceRequirement === "REQUIRED" && (operations.length > 0 || /^(?:qual|quais|quem|quando|onde|o que|what|which|who|when|where)\b/i.test(instruction)) && !["CODING", "PLANNING"].includes(contract.primaryIntent)) return "research";
+    for (const { rule } of operations) {
+      if (rule.type === "coding") {
+        // Language/software names are topic clues, not coding requirements.
+        // The goal contract's actual intent remains authoritative.
+        const codingContract = analyzeGoalContract(input, rule.type);
+        if (codingContract.primaryIntent === "PLANNING") return "planning";
+        if (["FACTUAL", "COMPARISON", "RESEARCH"].includes(codingContract.primaryIntent)) return codingContract.evidenceRequirement === "REQUIRED" || codingContract.primaryIntent === "RESEARCH" ? "research" : codingContract.primaryIntent === "COMPARISON" ? "reasoning" : "chat";
       }
+      return rule.type;
     }
     return "chat";
   }

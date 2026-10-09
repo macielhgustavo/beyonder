@@ -441,7 +441,9 @@ function capabilitiesFor(entry: InventoryEntry, model: string): string[] {
 }
 
 export function workloadForTask(taskType: IntelligenceTask["type"]): ModelWorkload {
-  return taskType === "chat" || taskType === "memory" ? "general_chat" : taskType;
+  // Synthesis uses chat-capable models; its task-specific quality remains in
+  // the selector score and performance history.
+  return taskType === "chat" || taskType === "memory" || taskType === "synthesis" ? "general_chat" : taskType;
 }
 
 function serializeCandidate(candidate: ModelCandidate, taskId: string, phase?: IntelligenceTask["inferencePhase"]): Record<string, unknown> {

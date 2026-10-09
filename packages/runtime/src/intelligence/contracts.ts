@@ -9,7 +9,8 @@ export type IntelligenceTaskType =
   | "tool-use"
   | "browser"
   | "memory"
-  | "compression";
+  | "compression"
+  | "synthesis";
 
 export type ObjectiveFreshness = "STATIC" | "RECENT" | "CURRENT" | "REALTIME";
 export type EvidenceRequirement = "NONE" | "PREFERRED" | "REQUIRED";
@@ -17,7 +18,7 @@ export type ObjectiveAmbiguity = "LOW" | "MEDIUM" | "HIGH";
 export type ObjectiveQualityTarget = "MINIMAL" | "STANDARD" | "HIGH";
 export type ObjectiveOutcomeStatus = "SUCCEEDED" | "PARTIAL" | "NEEDS_INPUT" | "NEEDS_CAPABILITY" | "BLOCKED" | "FAILED" | "RECONCILIATION_REQUIRED";
 export type ObjectiveResultKind = "SHORT_ANSWER" | "EXPLANATION" | "COMPARISON" | "CODE" | "PLAN" | "STRUCTURED_DATA" | "CALCULATION";
-export type ObjectiveIntent = "FACTUAL" | "RESEARCH" | "COMPARISON" | "CALCULATION" | "CODING" | "REASONING" | "PLANNING" | "EXTRACTION" | "CLASSIFICATION" | "MEMORY" | "OTHER";
+export type ObjectiveIntent = "FACTUAL" | "RESEARCH" | "COMPARISON" | "CALCULATION" | "CODING" | "REASONING" | "PLANNING" | "EXTRACTION" | "CLASSIFICATION" | "MEMORY" | "SYNTHESIS" | "COMPRESSION" | "OTHER";
 export type RequiredCapability = "web-research" | "browser-read" | "comparison" | "citations" | "calculator" | "coding" | "reasoning" | "planning" | "structured-output" | "memory";
 
 export interface ObjectiveSuccessCriterion {

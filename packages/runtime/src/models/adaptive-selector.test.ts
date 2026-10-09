@@ -131,8 +131,12 @@ describe("AdaptiveModelSelector", () => {
       })
     });
     const route = await selector.route(task({ type: "chat", complexity: 0.1, requirements: { directResponse: true } }), "normal");
-    expect(route.selected?.provider).toBe("gemini");
-    expect(route.candidates.find((candidate) => candidate.provider === "groq")?.latencyPenalty).toBeGreaterThan(0);
+    const slow = route.candidates.find(candidate => candidate.provider === "groq")!;
+    const fast = route.candidates.find(candidate => candidate.provider === "gemini")!;
+    expect(slow.latencyPenalty).toBeGreaterThan(fast.latencyPenalty);
+    expect(slow.latencyPenalty).toBeGreaterThan(0);
+    expect(route.selected).toBe(route.candidates[0]);
+    expect(route.selected!.utility).toBe(Math.max(...route.candidates.map(candidate => candidate.utility)));
   });
   it("generates and ranks multiple compatible zero-money candidates", async () => {
     const path = await providerStatePath();

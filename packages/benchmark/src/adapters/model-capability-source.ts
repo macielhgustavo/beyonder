@@ -5,6 +5,7 @@ import type { BenchmarkCategory, BenchmarkSummary } from "../types.js";
 
 const TASK_TO_BENCHMARK_CATEGORY: Partial<Record<IntelligenceTaskType, BenchmarkCategory>> = {
   chat: "synthesis",
+  synthesis: "synthesis",
   research: "research",
   browser: "research",
   reasoning: "reasoning",

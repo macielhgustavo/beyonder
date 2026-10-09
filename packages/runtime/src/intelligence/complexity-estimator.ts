@@ -21,6 +21,7 @@ const TYPE_BASELINE: Record<IntelligenceTaskType, number> = {
   "tool-use": 0.38,
   browser: 0.4,
   memory: 0.24,
+  synthesis: 0.4,
   compression: 0.26
 };
 
@@ -44,7 +45,7 @@ export class ComplexityEstimator {
     const requirements: IntelligenceRequirements = {
       contextWindow: Math.max(2048, Math.ceil(estimatedTokens * 1.8)),
       structuredOutput: /\b(json|schema|structured|table|csv|yaml|estrutura|estruturado|tabela)\b/i.test(input),
-      reasoning: ["reasoning", "coding", "research", "planning"].includes(type),
+      reasoning: ["reasoning", "coding", "research", "planning", "synthesis"].includes(type),
       vision: /\b(image|screenshot|photo|vision|imagem|print|foto)\b/i.test(input)
     };
 

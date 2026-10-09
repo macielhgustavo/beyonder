@@ -65,3 +65,25 @@ describe("TaskClassifier", () => {
     expect(classifier.classify("Hello, how are you today?")).toBe("chat");
   });
 });
+
+
+describe("operation and content are separate dimensions", () => {
+  const classifier = new TaskClassifier();
+  it.each([
+    ["Implemente uma função TypeScript para ordenar valores.", "coding"],
+    ["Sintetize em um parágrafo os prós e contras de cache local e cache distribuído para uma API pequena.", "synthesis"],
+    ["Synthesize the supplied code review findings into a recommendation: refactor the Python function; add SQL tests.", "synthesis"],
+    ["Summarize this code into two sentences: function classify() { return 'a'; }", "compression"],
+    ["Planeje uma migração gradual de uma API com rollback.", "planning"],
+    ["Prove that the sum of two even integers is even.", "reasoning"],
+    ["Pesquise a versão atual de um software com fontes oficiais.", "research"],
+    ["Extraia nome e prazo: Ana, terça; Bruno, sexta.", "extraction"],
+    ["Classifique estes comentários de código por sentimento: ótimo; ruim.", "classification"],
+    ["Compare local and distributed API caching tradeoffs.", "reasoning"]
+  ])("classifies the governing operation: %s", (input, expected) => {
+    const type = classifier.classify(input);
+    expect(type).toBe(expected);
+    const contract = analyzeGoalContract(input, type);
+    expect(new ComplexityEstimator().estimate(input, type, contract).requirements.coding).toBe(expected === "coding");
+  });
+});

@@ -86,7 +86,12 @@ function detectFreshness(input: string): ObjectiveFreshness {
 function detectIntent(input: string, type: IntelligenceTaskType, comparison: boolean, research: boolean): ObjectiveIntent {
   // Explicit code generation owns its artifact contract even when field names
   // or implementation verbs also mention classification or extraction.
-  if (hasAny(input, SIGNALS.coding) && /\b(?:implemente|refatore|escreva|write|implement|refactor|crie|create)\b/.test(input)) return "CODING";
+  if (type === "synthesis") return "SYNTHESIS";
+  if (type === "compression") return "COMPRESSION";
+  const instruction = input.split(/```|:\s|\n/)[0];
+  // A code artifact requires a governing creation/change verb. A language name
+  // in prose or a quoted code sample does not require generating executable code.
+  if (/^(?:(?:please|por favor)\s*[,:]?\s*)?(?:(?:refactor|refatore|debug|depure|implement|implemente|implementar)\b|(?:write|create|escreva|crie)\s+(?:(?:a|an|um|uma)\s+)?(?:(?!\b(?:summary|plan|report|explanation|resumo|plano|relatorio)\b)[\p{L}\d-]+\s+){0,6}(?:code|function|class|interface|test|codigo|funcao|classe|teste)s?\b)/u.test(instruction)) return "CODING";
   if (type === "classification" || hasAny(input, SIGNALS.classification)) return "CLASSIFICATION";
   if (type === "extraction" || hasAny(input, SIGNALS.extraction)) return "EXTRACTION";
   if (hasAny(input, SIGNALS.calculation) || /\b\d+(?:[.,]\d+)?\s*(?:\*|x|×|\/|\+|-)\s*\d+(?:[.,]\d+)?\b/.test(input)) return "CALCULATION";

@@ -50,7 +50,10 @@ const output = process.env.ACCEPTANCE_DIR ?? "/tmp/beyonder-product-acceptance";
 await fs.mkdir(output, { recursive: true });
 const browser = await chromium.launch({ headless: true });
 const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
-const report = { base, fixture: false, startedAt: new Date().toISOString(), cases: [], consoleErrors: [], pageErrors: [] };
+const reportPath = path.join(output, "report.json");
+const previous = process.env.ACCEPTANCE_RESUME === "1" ? await fs.readFile(reportPath, "utf8").then(JSON.parse).catch(() => null) : null;
+const report = previous ?? { base, fixture: false, startedAt: new Date().toISOString(), cases: [], consoleErrors: [], pageErrors: [] };
+if (report.base !== base) throw new Error("Cannot resume acceptance against a different Control Center.");
 const authFile = process.env.BEYONDER_CONTROL_AUTH_DIR ? path.join(process.env.BEYONDER_CONTROL_AUTH_DIR, "auth-token.json") : null;
 async function authorizeLocalUI() {
   if (!authFile) throw new Error("Product acceptance requires BEYONDER_CONTROL_AUTH_DIR for the isolated Control Center.");
@@ -62,22 +65,24 @@ async function authorizeLocalUI() {
 }
 page.on("console", (message) => { if (message.type() === "error") report.consoleErrors.push(message.text()); });
 page.on("pageerror", (error) => report.pageErrors.push(String(error)));
-const save = () => fs.writeFile(path.join(output, "report.json"), JSON.stringify(report, null, 2));
+const save = () => fs.writeFile(reportPath, JSON.stringify(report, null, 2));
 try {
   await page.goto(base);
   await authorizeLocalUI();
   const onboarding = page.locator('[data-command="completeFirstRun"]');
   if (await onboarding.count()) { await onboarding.click(); await page.locator("#objective").waitFor(); }
   for (const [category, objective] of objectives) {
+    if (report.cases.some((entry) => entry.category === category)) continue;
     const started = Date.now();
     const entry = { category, objective };
     try {
       await page.goto(base);
       await authorizeLocalUI();
       await page.locator("#objective").fill(objective);
-      const responsePromise = page.waitForResponse((response) => response.url().endsWith("/api/control/command") && response.request().method() === "POST");
-      await page.locator('.objective-box button[type="submit"]').click();
-      const response = await responsePromise;
+      const [response] = await Promise.all([
+        page.waitForResponse((response) => response.url().endsWith("/api/control/command") && response.request().method() === "POST"),
+        page.locator('.objective-box button[type="submit"]').click()
+      ]);
       const queued = await response.json();
       if (!queued.ok || !queued.taskId) throw new Error(JSON.stringify(queued));
       entry.taskId = queued.taskId;

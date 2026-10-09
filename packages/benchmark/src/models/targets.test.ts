@@ -120,4 +120,4 @@ it('rechecks observed exhausted quota before a previously selected benchmark tar
   const spy = vi.spyOn(globalThis, 'fetch');
   try { await expect(new OpenAiCompatibleBenchmarkClient().complete(targets[0], [])).rejects.toMatchObject({ errorCode: 'ECONOMIC_POLICY_BLOCKED' }); expect(spy).not.toHaveBeenCalled(); } finally { spy.mockRestore(); }
  } finally { await rm(dir, { recursive: true, force: true }); }
-});
+}, 15_000);

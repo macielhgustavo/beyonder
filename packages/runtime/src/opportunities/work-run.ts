@@ -12,11 +12,15 @@ const itemKey = (id: string) => `work-run:${id}`;
 const TERMINAL: WorkRunState[] = ["COMPLETED", "FAILED", "CANCELLED", "EXPIRED"];
 
 export class WorkRunError extends Error { readonly code = "WORK_RUN_INVALID"; }
-export interface WorkRunStore { save(run: WorkRun): Promise<WorkRun>; get(id: string): Promise<WorkRun | undefined>; list(): Promise<WorkRun[]>; }
+export interface WorkRunStore { save(run: WorkRun): Promise<WorkRun>; get(id: string): Promise<WorkRun | undefined>; list(): Promise<WorkRun[]>; commitSettlement?(expected: WorkRun, completed: WorkRun, ledger: EconomicLedger, metadata: Record<string, unknown>): Promise<WorkRun>; }
 export class StateWorkRunStore implements WorkRunStore {
   constructor(private readonly state: import("../memory/state-store.js").StateStore) {}
   async save(run: WorkRun) { const ids = await this.state.get<string[]>(INDEX, []); await this.state.set(INDEX, ids.includes(run.id) ? ids : [...ids, run.id]); await this.state.set(itemKey(run.id), run); return run; }
   async get(id: string) { return this.state.get<WorkRun | undefined>(itemKey(id), undefined); }
+  async commitSettlement(expected: WorkRun, completed: WorkRun, ledger: EconomicLedger, metadata: Record<string, unknown>) {
+    await ledger.recordRevenueWithState(completed.realizedRewardUsd, `Settlement for work run ${completed.id}`, metadata, { key: itemKey(completed.id), expected, value: completed });
+    return completed;
+  }
   async list() { const ids = await this.state.get<string[]>(INDEX, []); const runs: WorkRun[] = []; for (const id of ids) { const run = await this.get(id); if (run) runs.push(run); } return runs.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)); }
 }
 
@@ -96,22 +100,13 @@ export class WorkRunManager {
   }
   async recordSettlement(id: string, evidence: SettlementEvidence): Promise<WorkRun> {
     const run = await this.requireRun(id);
-    if (run.settlement || run.state === "SETTLED" || run.state === "COMPLETED") throw new WorkRunError("Settlement is already recorded.");
-    if (!["SUBMITTED", "AWAITING_SETTLEMENT"].includes(run.state)) throw new WorkRunError("Settlement requires a submitted deliverable.");
     validateEvidence(evidence);
-
-    // Idempotency check: use settlement evidence externalReference or workRunId as idempotency key
-    const idempotencyKey = evidence.externalReference ?? `work-run:${id}:settlement`;
-    const alreadyRecorded = await this.ledger?.latest(100).then(entries =>
-      entries.some(entry =>
-        entry.type === "revenue" &&
-        JSON.parse(entry.metadata).idempotencyKey === idempotencyKey
-      )
-    ) ?? false;
-
-    if (alreadyRecorded) {
-      throw new WorkRunError("Settlement already recorded in ledger (idempotency key conflict).");
+    if (run.settlement) {
+      if (JSON.stringify(run.settlement.evidence) !== JSON.stringify(evidence)) throw new WorkRunError("Settlement is already recorded with different evidence.");
+      return run;
     }
+    if (!["SUBMITTED", "AWAITING_SETTLEMENT"].includes(run.state)) throw new WorkRunError("Settlement requires a submitted deliverable.");
+    const idempotencyKey = evidence.externalReference ?? `work-run:${id}:settlement`;
 
     const settlement = {
       evidence,
@@ -120,22 +115,17 @@ export class WorkRunManager {
       recordedAt: this.now().toISOString()
     };
 
-    const completed = await this.save(
-      { ...run, state: "COMPLETED", settlement, realizedRewardUsd: evidence.amount },
-      "revenue.realized",
-      { amount: evidence.amount, currency: evidence.currency }
-    );
-
-    // Record revenue in EconomicLedger with idempotency key
+    const next: WorkRun = { ...run, state: "COMPLETED", settlement, realizedRewardUsd: evidence.amount, updatedAt: this.now().toISOString() };
+    let completed: WorkRun;
     if (this.ledger) {
-      await this.ledger.record("revenue", evidence.amount, `Settlement for work run ${id}`, {
-        idempotencyKey,
-        workRunId: id,
-        opportunityId: run.opportunityId,
-        source: run.source,
-        evidenceType: evidence.type,
-        externalReference: evidence.externalReference
+      if (!this.runs.commitSettlement) throw new WorkRunError("Settlement requires an atomic persistent work run store.");
+      completed = await this.runs.commitSettlement(run, next, this.ledger, {
+        idempotencyKey, workRunId: id, opportunityId: run.opportunityId, source: run.source,
+        evidenceType: evidence.type, externalReference: evidence.externalReference
       });
+      await this.audit?.record("info", "revenue.realized", { workRunId: id, amount: evidence.amount, currency: evidence.currency });
+    } else {
+      completed = await this.save(next, "revenue.realized", { amount: evidence.amount, currency: evidence.currency });
     }
 
     await this.memory?.remember("economic", JSON.stringify({

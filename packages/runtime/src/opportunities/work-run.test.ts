@@ -1,3 +1,7 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { classifyEconomicState } from "../economy/economic-state.js";
 import { describe, expect, it } from "vitest";
 import { openDatabase } from "../db/client.js";
 import { StateStore } from "../memory/state-store.js";
@@ -33,8 +37,10 @@ describe("persistent real work loop", () => {
     const source = new OpenBountyPublicOpportunitySource({ fetchImpl: async () => new Response(JSON.stringify({ data: { nope: true } }), { status: 200 }) }); const result = await source.discover(); expect(result.items).toEqual([]); expect(result.errors[0]).toContain("malformed");
   });
 
-  it("records revenue in ledger when settlement is recorded", async () => {
-    const { db, sqlite } = openDatabase(":memory:");
+  it("credits a submitted fixture once across database restart and updates economic state", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "settlement-e2e-"));
+    const path = join(directory, "runtime.sqlite");
+    const { db, sqlite } = openDatabase(path);
     const state = new StateStore(db);
     const opportunities = new StateOpportunityStore(state);
     await opportunities.upsert(item);
@@ -67,9 +73,38 @@ describe("persistent real work loop", () => {
     expect(JSON.parse(revenueEntries[0].metadata).idempotencyKey).toBe("tx-123");
     expect(JSON.parse(revenueEntries[0].metadata).workRunId).toBe(run.id);
 
-    // Check that duplicate settlement throws error
-    await expect(manager.recordSettlement(run.id, settlementEvidence)).rejects.toThrow("Settlement is already recorded");
-
+    expect(classifyEconomicState(await ledger.summary(0))).toBe("growth");
     sqlite.close();
+    const reopened = openDatabase(path);
+    try {
+      const restartedState = new StateStore(reopened.db);
+      const restartedApprovals = new ApprovalGate(restartedState);
+      const restartedLedger = new EconomicLedger(reopened.db);
+      const restarted = new WorkRunManager(new StateWorkRunStore(restartedState), new StateOpportunityStore(restartedState), new OpportunityBridge(restartedApprovals, new FixtureApplicationAdapter(), new FixtureSubmissionAdapter()), restartedApprovals, undefined, undefined, restartedLedger);
+      expect(await restarted.recordSettlement(run.id, settlementEvidence)).toMatchObject({ state: "COMPLETED", realizedRewardUsd: 10 });
+      expect(await restartedLedger.summary(0)).toMatchObject({ revenueUsd: 10, balanceUsd: 10 });
+      expect((await restartedLedger.latest()).filter(entry => entry.type === "revenue")).toHaveLength(1);
+      await expect(restarted.recordSettlement(run.id, { ...settlementEvidence, amount: 99 })).rejects.toThrow("different evidence");
+    } finally { reopened.sqlite.close(); rmSync(directory, { recursive: true, force: true }); }
   });
+  it("rolls back ledger credit if the state write fails and safely retries", async () => {
+    const { db, sqlite } = openDatabase(":memory:");
+    try {
+      const state = new StateStore(db); const ledger = new EconomicLedger(db);
+      const expected = { state: "AWAITING_SETTLEMENT" }; const completed = { state: "COMPLETED" };
+      await state.set("work-run:atomic", expected);
+      sqlite.exec("CREATE TRIGGER reject_completion BEFORE UPDATE ON state BEGIN SELECT RAISE(ABORT, 'simulated storage interruption'); END");
+      const metadata = { idempotencyKey: "fixture-payment", workRunId: "atomic" };
+      await expect(ledger.recordRevenueWithState(5, "fixture", metadata, { key: "work-run:atomic", expected, value: completed })).rejects.toThrow("simulated storage interruption");
+      expect(await ledger.summary(0)).toMatchObject({ revenueUsd: 0, balanceUsd: 0 });
+      expect(await state.get("work-run:atomic", null)).toEqual(expected);
+      sqlite.exec("DROP TRIGGER reject_completion");
+      await ledger.recordRevenueWithState(5, "fixture", metadata, { key: "work-run:atomic", expected, value: completed });
+      for (let i = 0; i < 110; i++) await ledger.record("expense", 0, "unrelated history");
+      await state.set("work-run:other", expected);
+      await expect(ledger.recordRevenueWithState(5, "fixture", { ...metadata, workRunId: "other" }, { key: "work-run:other", expected, value: completed })).rejects.toThrow("different work run");
+      expect(await ledger.summary(0)).toMatchObject({ revenueUsd: 5, balanceUsd: 5 });
+    } finally { sqlite.close(); }
+  });
+
 });

@@ -142,6 +142,7 @@ export class ModelObjectiveVerifier implements CompletionEvaluator {
           await this.router.recordAttempt(attempt);
         },
         canAttempt: this.router.canAttempt.bind(this.router),
+        refreshEconomics: candidate => this.router.economicDecision(candidate.provider, candidate.model),
         messages: [
           { role: "system", content: claimReview ? `${criticalReviewInstructions} ${reviewClock}` : verificationInstructions },
           { role: "user", content: JSON.stringify(claimReview

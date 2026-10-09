@@ -156,6 +156,7 @@ export interface AutonomousTaskOutcome {
   execution: TaskExecution;
   status: CompletionStatus;
   success: boolean;
+  verificationStatus?: "VERIFIED" | "UNVERIFIED" | "REJECTED";
   objectiveStatus?: ObjectiveOutcomeStatus;
   result?: string;
   failureReason?: string;

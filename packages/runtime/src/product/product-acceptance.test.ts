@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { ComplexityEstimator } from "../intelligence/complexity-estimator.js";
 import { analyzeGoalContract } from "../intelligence/goal-contract.js";
 import { TaskClassifier } from "../intelligence/task-classifier.js";
-import { ObjectiveVerifier, isObviousNonAnswer } from "../tasks/completion.js";
+import { ObjectiveVerifier, isObviousNonAnswer, outcomeWithCompletion } from "../tasks/completion.js";
 import type { TaskExecution } from "../tasks/contracts.js";
 import { NON_ANSWER_REGRESSION_RESULTS, PRODUCT_ACCEPTANCE_CORPUS } from "./product-acceptance-corpus.js";
 
@@ -37,6 +37,19 @@ describe("product acceptance corpus", () => {
     const execution = fixtureExecution(objective, type, requirements, goalContract, "Desculpe, não tenho informações disponíveis sobre qual é a linguagem de programação mais usada hoje.");
     const verdict = new ObjectiveVerifier().evaluate(execution);
     expect(verdict).toMatchObject({ taskCompleted: false, objectiveStatus: "NEEDS_CAPABILITY", recoveryRecommendation: "ENABLE_CAPABILITY" });
+  });
+
+  it("retains a produced result with explicit UNVERIFIED status when independent review is unavailable", () => {
+    const objective = "Explique árvores binárias de busca.";
+    const type = new TaskClassifier().classify(objective);
+    const execution = fixtureExecution(objective, type, {}, analyzeGoalContract(objective, type), "Uma árvore binária de busca ordena filhos menores à esquerda e maiores à direita.");
+    const outcome = outcomeWithCompletion({ execution, status: "COMPLETED", success: false, result: execution.result }, {
+      status: "FAIL", objectiveStatus: "NEEDS_CAPABILITY", taskCompleted: false,
+      method: "independent-semantic-objective-verifier", confidence: 1,
+      reason: "No independent free verifier available.", dimensions: [],
+      missingRequirements: ["independent-objective-verification"], recoveryRecommendation: "ENABLE_CAPABILITY"
+    });
+    expect(outcome).toMatchObject({ result: execution.result, verificationStatus: "UNVERIFIED", success: false, status: "BLOCKED" });
   });
 });
 

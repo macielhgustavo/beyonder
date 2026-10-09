@@ -118,6 +118,9 @@ export function outcomeWithCompletion(outcome: AutonomousTaskOutcome, evaluation
   outcome.objectiveStatus = evaluation.objectiveStatus;
   outcome.execution.objectiveStatus = evaluation.objectiveStatus;
   outcome.execution.objectiveVerification = evaluation;
+  outcome.verificationStatus = evaluation.taskCompleted ? "VERIFIED"
+    : outcome.result && evaluation.objectiveStatus === "NEEDS_CAPABILITY" && evaluation.method === "independent-semantic-objective-verifier" ? "UNVERIFIED"
+    : "REJECTED";
   outcome.execution.executionPhase = evaluation.taskCompleted ? "OBJECTIVE_VERIFIED" : "EXECUTION_FINISHED";
   outcome.success = evaluation.taskCompleted;
   const blocked = ["NEEDS_CAPABILITY", "NEEDS_INPUT", "BLOCKED", "RECONCILIATION_REQUIRED"].includes(evaluation.objectiveStatus);

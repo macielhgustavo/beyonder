@@ -512,6 +512,7 @@ export class AutonomousTaskExecutor {
           ? router.completeForStructuredCandidate(messages, candidate, signal)
           : router.completeForPlanningCandidate(messages, candidate, signal), record: router.recordAttempt?.bind(router),
         canAttempt: router.canAttempt?.bind(router),
+        refreshEconomics: candidate => router.economicDecision(candidate.provider, candidate.model),
         messages: [{ role: "system", content: directResponseInstructions(execution.task) }, { role: "user", content: JSON.stringify({ objective: execution.plan.objective, goalContract: execution.task.goalContract, recoveryReason: recovery?.reason }) }, ...(observations.length ? [{ role: "user" as const, content: `Observed tool evidence: ${JSON.stringify(evidenceForSynthesis(observations, execution.plan.objective))}` }] : [])],
         validate(response) {
           return validateDirectResponse(response.content);

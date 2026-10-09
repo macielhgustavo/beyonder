@@ -75,4 +75,21 @@ describe("adaptive product flow", () => {
     expect(result.monetaryCostUsd).toBe(0);
     expect(result.shadowCostUsd).toBeGreaterThan(0);
   });
+
+  it("refreshes expired zero-cost evidence before a physical attempt", async () => {
+    const candidate = (await (await selector()).route(task("coding"), "normal")).candidates[0]!;
+    candidate.economics = { ...candidate.economics!, expiresAt: new Date(0).toISOString() };
+    let refreshed = 0;
+    const result = await runCandidates({
+      taskId: "expired-evidence", phase: "DIRECT_RESPONSE", candidates: [candidate], messages: [],
+      remoteAttemptBudget: 1, localFallbackBudget: 0, maxDurationMs: 1000,
+      maxMonetaryCostUsd: 0, maxShadowCostUsd: 0,
+      refreshEconomics: async selected => { refreshed++; return fixtureZeroCost(selected.provider, selected.model); },
+      complete: async () => ({ provider: candidate.provider, model: candidate.model, content: "OK", estimatedCostUsd: 0 }),
+      validate: response => response.content
+    });
+    expect(refreshed).toBe(1);
+    expect(result.attempts[0]?.status).toBe("SUCCEEDED");
+    expect(result.monetaryCostUsd).toBe(0);
+  });
 });

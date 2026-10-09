@@ -40,6 +40,7 @@ export class AdaptiveExecutionController {
         maxMonetaryCostUsd: policy.maxMonetaryCostUsd, maxShadowCostUsd: policy.maxEffectiveCostUsd, maxDurationMs: 60_000,
         complete: this.router.completeForPlanningCandidate?.bind(this.router) ?? this.router.completeForCandidate.bind(this.router),
         canAttempt: this.router.canAttempt?.bind(this.router), record,
+        refreshEconomics: candidate => this.router.economicDecision(candidate.provider, candidate.model),
         validate: (response) => {
           validateDirectResponse(response.content);
           const evaluation = this.evaluator.evaluate({ task: input.task, output: response.content, spec: input.evaluationSpec });

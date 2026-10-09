@@ -322,6 +322,7 @@ taskCommand
       taskId: inspection.task.id,
       executionId: outcome.execution.id,
       status: outcome.status,
+      verificationStatus: outcome.verificationStatus,
       failureReason: outcome.failureReason,
       failureClass: outcome.execution.failure?.failureClass,
       phase: outcome.execution.failure?.phase,

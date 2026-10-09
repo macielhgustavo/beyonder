@@ -1,5 +1,5 @@
 import { nanoid } from "nanoid";
-import { requireZeroCostDecision } from '@beyonder/compute';
+import { requireZeroCostDecision, type ZeroCostDecision } from '@beyonder/compute';
 import { redactSecrets, redactString } from "@beyonder/tools";
 import { parseReset } from "./quota.js";
 import type { ModelCandidate } from "./adaptive-types.js";
@@ -134,6 +134,7 @@ export async function runCandidates<T>(input: {
   validate: (response: ModelResponse) => T;
   record?: (attempt: InferenceAttempt) => Promise<void>;
   canAttempt?: (candidate: ModelCandidate) => Promise<boolean>;
+  refreshEconomics?: (candidate: ModelCandidate) => Promise<ZeroCostDecision>;
 }): Promise<{ value: T; response: ModelResponse; candidate: ModelCandidate; attempts: InferenceAttempt[]; monetaryCostUsd: number; shadowCostUsd: number }> {
   const start = Date.now();
   const attempts: InferenceAttempt[] = [];
@@ -157,7 +158,15 @@ export async function runCandidates<T>(input: {
 
   for (const candidate of candidates) {
     try { requireZeroCostDecision(candidate.economics, candidate.provider, candidate.model); }
-    catch { last = new InferenceError('Zero-cost execution is not guaranteed; no inference attempt authorized.', 'ECONOMIC_POLICY_BLOCKED'); continue; }
+    catch {
+      // A route can outlive its short price/account evidence while another
+      // candidate runs. Recheck current evidence before rejecting this one.
+      try {
+        if (input.refreshEconomics) candidate.economics = await input.refreshEconomics(candidate);
+        requireZeroCostDecision(candidate.economics, candidate.provider, candidate.model);
+      }
+      catch { last = new InferenceError('Zero-cost execution is not guaranteed; no inference attempt authorized.', 'ECONOMIC_POLICY_BLOCKED'); continue; }
+    }
     if (candidate.costClass === 'PAID' || candidate.monetaryCostUsd !== 0 || candidate.eligible === false) { last = new InferenceError('Paid or ineligible inference is disabled.', 'ECONOMIC_POLICY_BLOCKED'); continue; }
     if (candidate.local) {
       if (localAttempts >= localFallbackBudget) continue;

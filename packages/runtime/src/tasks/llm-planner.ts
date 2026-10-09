@@ -111,6 +111,7 @@ export class LlmPlanner implements Planner {
         complete: this.options.modelRouter.completeForPlanningCandidate?.bind(this.options.modelRouter) ?? this.options.modelRouter.completeForCandidate.bind(this.options.modelRouter),
         record: this.options.modelRouter.recordAttempt?.bind(this.options.modelRouter),
         canAttempt: this.options.modelRouter.canAttempt?.bind(this.options.modelRouter),
+        refreshEconomics: candidate => this.options.modelRouter.economicDecision(candidate.provider, candidate.model),
         validate: (response) => {
         const parsed = parseStructuredObject(response.content);
         const validation = validatePlan(parsed, { availableTools: request.availableTools, budget: request.budget });

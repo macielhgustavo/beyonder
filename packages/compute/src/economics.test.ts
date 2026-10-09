@@ -33,8 +33,14 @@ test('fixed free route + fresh live all-zero pricing has explicit provenance', (
  const d = resolveZeroCostExecution(input); assert.equal(d.zeroCostExecutionGuaranteed, true); assert.equal(d.freeQuota, 'UNKNOWN'); assert.equal(d.billingSpilloverPossible, false); assert.equal(d.source, 'EXPLICIT_FREE_ROUTE_AND_LIVE_PRICE');
  assert.equal(resolveZeroCostExecution({ ...input, provider: getProvider('groq')! }).zeroCostExecutionGuaranteed, false);
  assert.equal(resolveZeroCostExecution({ ...input, model: { ...input.model, costEvidence: undefined } }).zeroCostExecutionGuaranteed, false);
- assert.equal(resolveZeroCostExecution({ ...input, model: { ...input.model, id: 'openrouter/free' } }).zeroCostExecutionGuaranteed, true);
  assert.equal(resolveZeroCostExecution({ ...input, quota: { requestQuotaRemaining: 0, tokenQuotaRemaining: 'unknown', resetAt: 'unknown', lastUpdatedAt: timestamp } }).classification, 'FREE_QUOTA_EXHAUSTED');
+});
+test('official OpenRouter free router does not depend on per-model pricing metadata', () => {
+ const d = resolveZeroCostExecution({ provider: getProvider('openrouter')!, model: { id: 'openrouter/free', capabilities: ['OTHER'], costClass: 'FREE_TIER_ELIGIBLE' }, now });
+ assert.equal(d.classification, 'ZERO_COST_CONFIRMED');
+ assert.equal(d.source, 'OFFICIAL_FREE_ROUTER');
+ assert.equal(d.zeroCostExecutionGuaranteed, true);
+ assert.deepEqual(d.monetaryCost, { state: 'CONFIRMED_ZERO', usd: 0 });
 });
 test('L: unknown never serializes as monetaryCostUsd=0', () => { const d = resolveZeroCostExecution({ provider: getProvider('groq')!, model: { id: 'dynamic-model', capabilities: ['CHAT'] }, now }); assert.deepEqual(d.monetaryCost, { state: 'UNKNOWN' }); assert.throws(() => requireZeroCostDecision(d, 'groq', 'dynamic-model', now)); });
 test('expired/copied/mismatched economic proof cannot authorize a physical attempt', () => { const d = account(); for (const [p,m,t] of [['groq',d.model,now],[d.provider,'other',now],[d.provider,d.model,now+120_000]] as const) assert.throws(() => requireZeroCostDecision(d,p,m,t)); });

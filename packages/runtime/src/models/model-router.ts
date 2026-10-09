@@ -60,9 +60,6 @@ export class ModelRouter {
     if (deadline) await this.options.telemetry?.record("info", "router.cooldown_deadline_repaired", { provider: candidate.provider, model: candidate.model, ...deadline, evidenceSource: "persisted-original-rate-limit-reset" });
     let cooldown = await this.operationalHealth.blocked(candidate.provider, candidate.model);
     if (cooldown?.scope === "provider" && cooldown.reason === "AUTH_REQUIRED" && getProvider(candidate.provider)?.authType === "keyless") {
-      // A real, newer successful keyless inference disproves an old gateway-
-      // wide auth block. This never clears rate/quota cooldowns or uses a mere
-      // public catalog response as proof of inference access.
       const health = await this.operationalHealth.get(candidate.provider);
       const evidence = await this.options.capabilitySource?.getLastSuccessfulRequest?.(candidate.provider);
       const provenAt = Date.parse(evidence?.observedAt ?? "");
@@ -81,8 +78,6 @@ export class ModelRouter {
   }
 
   async route(task: IntelligenceTask, economicState: EconomicState): Promise<RouteDecision> {
-    // Explicit local configuration describes discovery, not permission to bypass
-    // the mission floor or displace suitable free cloud capacity.
     if (this.config.provider === "auto" || this.config.provider === "ollama") return this.selector.route(task, economicState);
     if (this.config.provider === "none" || economicState === "halted") {
       return {
@@ -100,14 +95,8 @@ export class ModelRouter {
     if (this.config.provider === "auto") {
       throw new InferenceError("Auto inference requires an explicit task route and bounded candidate execution.", "INVALID_ACTION");
     }
-
     if (this.config.provider === "none") {
-      return {
-        content: "No paid or remote model configured. Continue with deterministic local policy.",
-        provider: "none",
-        model: "none",
-        estimatedCostUsd: 0
-      };
+      return { content: "No paid or remote model configured. Continue with deterministic local policy.", provider: "none", model: "none", estimatedCostUsd: 0 };
     }
     if (this.config.provider === "ollama") return this.completeWithOllama(messages);
     return this.completeWithOpenAiCompatible(messages);
@@ -131,15 +120,9 @@ export class ModelRouter {
     return this.completeForPlanningCandidate(messages, candidate, signal);
   }
 
-  async quotas() {
-    return this.selector.quotas();
-  }
+  async quotas() { return this.selector.quotas(); }
+  async performanceFor(provider: string, model: string, taskType: IntelligenceTask["type"]) { return this.selector.performanceFor(provider, model, taskType); }
 
-  async performanceFor(provider: string, model: string, taskType: IntelligenceTask["type"]) {
-    return this.selector.performanceFor(provider, model, taskType);
-  }
-
-  /** Re-read authoritative price/account evidence at the physical attempt boundary. */
   async economicDecision(providerId: string, model: string): Promise<ZeroCostDecision> {
     const state = await new AutopilotStateStore(this.config.providerStatePath).read();
     const provider = getProvider(providerId);
@@ -162,7 +145,10 @@ export class ModelRouter {
   }
 
   async completeForZeroCostSmoke(messages: ModelMessage[], candidate: ModelCandidate): Promise<ModelResponse> {
-    return this.completeAutoCandidate(messages, candidate, undefined, false, 32);
+    // 32 tokens is too small for a dynamic free router that may land on a
+    // reasoning model. Keep the probe bounded, but large enough to distinguish
+    // real operational failure from a locally manufactured truncation error.
+    return this.completeAutoCandidate(messages, candidate, undefined, false, 512);
   }
 
   async recordOutcome(outcome: TaskOutcome): Promise<void> {
@@ -171,13 +157,7 @@ export class ModelRouter {
     const model = outcome.model ?? outcome.attempts.at(-1)?.model ?? "none";
     if (provider === "none" || model === "none") return;
     const performance = await this.performance.get(provider, model, outcome.task.type);
-    await this.options.telemetry?.record("info", "performance.updated", {
-      taskId: outcome.task.id,
-      provider,
-      model,
-      taskType: outcome.task.type,
-      performance
-    });
+    await this.options.telemetry?.record("info", "performance.updated", { taskId: outcome.task.id, provider, model, taskType: outcome.task.type, performance });
   }
 
   private async directRoute(task: IntelligenceTask, economicState: EconomicState): Promise<RouteDecision> {
@@ -188,13 +168,7 @@ export class ModelRouter {
     if (!isLocalZeroCostEndpoint(this.config.ollamaBaseUrl) || /(?:[:/-]cloud)$/i.test(model)) throw new InferenceError('Remote/local-cloud inference has no zero-cost guarantee.', 'ECONOMIC_POLICY_BLOCKED');
     if (!(await discoverOllama(this.config.ollamaBaseUrl)).some(entry => entry.models.includes(model))) throw new InferenceError('Local model execution not proven; remote proxy metadata or unavailable local model.', 'ECONOMIC_POLICY_BLOCKED');
     const deadline = signal ?? AbortSignal.timeout(30_000);
-    const response = await fetch(`${this.config.ollamaBaseUrl}/api/chat`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      signal: deadline,
-      redirect: 'error',
-      body: JSON.stringify({ model, messages, stream: false, think: false, ...(format ? { format } : {}), options: { temperature: 0, num_predict: format ? 180 : 1200 } })
-    });
+    const response = await fetch(`${this.config.ollamaBaseUrl}/api/chat`, { method: "POST", headers: { "content-type": "application/json" }, signal: deadline, redirect: 'error', body: JSON.stringify({ model, messages, stream: false, think: false, ...(format ? { format } : {}), options: { temperature: 0, num_predict: format ? 180 : 1200 } }) });
     if (!response.ok) throw httpFailure(response.status, await response.text(), response.headers);
     const json = (await response.json()) as { message?: { content?: string; tool_calls?: unknown[] } };
     if (json.message?.tool_calls?.length) throw new InferenceError("Model returned unsolicited native tool calls while tools are disabled; no tool was executed.", "INVALID_OUTPUT");
@@ -217,21 +191,13 @@ export class ModelRouter {
     if (provider.openAiCompatibleEndpoint.includes("{account_id}") && !accountId) throw new InferenceError("Provider account configuration is unavailable.", "AUTH_REQUIRED");
     const endpoint = provider.openAiCompatibleEndpoint.replace("{account_id}", encodeURIComponent(accountId ?? ""));
     const controller = new AbortController();
-    // Live evidence-bearing synthesis completed correctly in 36.9s on an
-    // otherwise qualified free reasoning model. Keep a bounded per-request
-    // allowance for that profile; the enclosing mission deadline still wins.
     const timer = setTimeout(() => controller.abort(), candidate.capabilities?.includes("reasoning-control") ? 45_000 : 20_000);
     try {
       const response = await fetch(`${endpoint.replace(/\/$/, "")}/chat/completions`, {
         method: "POST",
-        headers: {
-          "content-type": "application/json",
-          ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {})
-        },
+        headers: { "content-type": "application/json", ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}) },
         signal: AbortSignal.any([controller.signal, ...(signal ? [signal] : [])]),
         redirect: 'error',
-        // Keep the hard $0 ceiling, but let OpenRouter use its normal provider
-        // failover so a single upstream 429/503 does not kill the whole request.
         body: JSON.stringify({ model: candidate.model, messages, temperature: 0, max_tokens: maxOutputTokens, stream: false, ...(candidate.provider === 'openrouter' ? { provider: { max_price: { prompt: 0, completion: 0 }, allow_fallbacks: true } } : candidate.provider === 'kilo-gateway' ? { provider: { max_price: { prompt: 0, completion: 0 }, allow_fallbacks: false } } : {}), ...(candidate.capabilities?.includes("reasoning-control") ? { reasoning: candidate.inferenceProfile === "reasoning-disabled:max-output-2400" && candidate.benchmarkCapability?.inferenceProfile === candidate.inferenceProfile ? { enabled: false } : { effort: "low" } } : {}), ...(structured && (candidate.benchmarkCapability?.structuredOutputMode ?? candidate.structuredOutput) === "native" ? { response_format: { type: "json_object" } } : {}) })
       });
       if (!response.ok) throw httpFailure(response.status, (await response.text()).replaceAll(apiKey || "\u0000", "[REDACTED]"), response.headers);
@@ -245,27 +211,18 @@ export class ModelRouter {
         await this.options.state?.set(`economic-stop:${candidate.provider}`, true);
         throw new InferenceError('Provider contradicted zero-cost evidence; execution stopped.', 'ECONOMIC_POLICY_BLOCKED', response.status, undefined, undefined, undefined, undefined, cost !== undefined && Number.isFinite(cost) && cost > 0 ? cost : undefined);
       }
-      // An HTTP 200 can still carry a gateway error or a truncated/empty
-      // completion. Preserve a bounded, redacted diagnostic, without storing
-      // hidden reasoning, so an operator can distinguish these failure modes.
       const diagnostic = () => JSON.stringify(redactSecrets({ model: json.model, error: json.error, usage: json.usage, finishReason: completion?.finish_reason, content: typeof completion?.message?.content === "string" ? completion.message.content.slice(0, 500) : undefined })).slice(0, 1500);
       if (json.error) throw completionEnvelopeFailure(json.error, response.status, response.headers);
       if (completion?.finish_reason === "length") throw new InferenceError("Completion exhausted its output budget before finishing.", "INVALID_OUTPUT", response.status, diagnostic());
       if (!completion?.message || typeof completion.message.content !== "string" || !completion.message.content.trim()) throw new InferenceError("Provider returned an empty or invalid completion envelope.", "INVALID_OUTPUT", response.status, diagnostic());
       if (json.choices?.[0]?.message?.tool_calls?.length || json.choices?.[0]?.message?.function_call) throw new InferenceError("Model returned unsolicited native tool calls while tools are disabled; no tool was executed.", "INVALID_OUTPUT");
       return {
-        content: credential.redact(json.choices?.[0]?.message?.content ?? ""),
-        provider: candidate.provider,
-        model: candidate.model,
-        estimatedCostUsd: cost,
-        attribution: { requestedModel: candidate.model, reportedModel: typeof json.model === 'string' ? credential.redact(json.model) : undefined, upstreamProvider: typeof json.provider === 'string' ? credential.redact(json.provider) : undefined, upstreamAttemptCount: json.choices?.[0]?.message?.provider_metadata?.gateway?.routing?.totalProviderAttemptCount },
-        raw: { usage: json.usage }
+        content: credential.redact(json.choices?.[0]?.message?.content ?? ""), provider: candidate.provider, model: candidate.model, estimatedCostUsd: cost,
+        attribution: { requestedModel: candidate.model, reportedModel: typeof json.model === 'string' ? credential.redact(json.model) : undefined, upstreamProvider: typeof json.provider === 'string' ? credential.redact(json.provider) : undefined, upstreamAttemptCount: json.choices?.[0]?.message?.provider_metadata?.gateway?.routing?.totalProviderAttemptCount }, raw: { usage: json.usage }
       };
     } catch (error) {
       if (error instanceof InferenceError) throw new InferenceError(credential.redact(error.message), error.failureClass, error.httpStatus, error.responseBody ? credential.redact(error.responseBody) : undefined, error.retryAfterAt, error.failureScope, error.upstreamHttpStatus, error.reportedMonetaryCostUsd);
       throw new InferenceError('Provider request failed (network, timeout or malformed response).', signal?.aborted || controller.signal.aborted ? 'TIMEOUT' : 'NETWORK_ERROR');
-    } finally {
-      clearTimeout(timer);
-    }
+    } finally { clearTimeout(timer); }
   }
 }

@@ -70,9 +70,18 @@ function leaseKey(taskId: string) { return `task-execution-lease:${taskId}`; }
 
 function isStale(lease: ExecutionLease, now: number): boolean {
   if (!lease || lease.version !== 1) return false;
+
+  // Check temporal expiration FIRST to prevent PID reuse vulnerabilities
+  if (Date.parse(lease.expiresAt) <= now) {
+    return true;
+  }
+
+  // Only check process existence if lease hasn't expired temporally
   if (lease.ownerHost === hostname()) {
     try { process.kill(lease.ownerPid, 0); return false; }
     catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; }
   }
-  return Date.parse(lease.expiresAt) <= now;
+
+  // For remote hosts, lease is stale only if temporally expired (already checked above)
+  return false;
 }

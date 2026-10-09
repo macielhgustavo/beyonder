@@ -4,6 +4,8 @@ export type OpportunityType = "JOB" | "BOUNTY" | "SERVICE_REQUEST" | "RESEARCH" 
 export type OpportunityStatus = "DISCOVERED" | "NORMALIZED" | "EVALUATED" | "QUEUED" | "IGNORED" | "REQUIRES_APPROVAL" | "EXPIRED" | "UNAVAILABLE" | "EXECUTING" | "COMPLETED" | "FAILED";
 export type OpportunityRewardType = "FIXED" | "RANGE" | "UNKNOWN";
 
+export type OpportunitySourceClassification = "REAL" | "DEGRADED" | "UNAVAILABLE" | "FIXTURE";
+
 export interface OpportunityReward {
   amount?: number;
   minAmount?: number;
@@ -109,6 +111,7 @@ export interface OpportunityDiscoveryResult {
 
 export interface OpportunitySource {
   id: string;
+  classification: OpportunitySourceClassification;
   discover(context?: OpportunitySourceContext): Promise<OpportunityDiscoveryResult>;
 }
 

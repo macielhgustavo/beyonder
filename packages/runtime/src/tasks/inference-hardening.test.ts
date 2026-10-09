@@ -206,7 +206,8 @@ describe("parsing, budgets and local discovery", () => {
     const runtime = createRuntime(loadConfig({ BEYONDER_DB_PATH: ":memory:", BEYONDER_MODEL_PROVIDER: "auto" }), { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model) });
     try {
       await runtime.modelRouter.completeForStructuredCandidate([{ role: "user", content: "verify" }], { ...candidate("fixture-model"), provider: "cloudflare-workers-ai", structuredOutput });
-      const body = JSON.parse(String((fetch.mock.calls[0]?.[1] as RequestInit | undefined)?.body));
+      const completionCall = fetch.mock.calls.find(([url]) => String(url).endsWith('/chat/completions'));
+      const body = JSON.parse(String((completionCall?.[1] as RequestInit | undefined)?.body));
       expect(body).toMatchObject({ model: "fixture-model", stream: false });
       expect(body.response_format).toEqual(structuredOutput === "native" ? { type: "json_object" } : undefined);
       expect(body.max_tokens).toBeGreaterThanOrEqual(1024);

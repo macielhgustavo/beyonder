@@ -9,6 +9,8 @@ export { AutopilotStateStore } from "./state-store.js";
 export { buildComputeInventory } from "./inventory.js";
 export { resolveZeroCostExecution, requireZeroCostDecision, readAccountCostEvidence, isLocalZeroCostEndpoint, observedEconomicQuota, declaredProviderAccountPlan, providerCredentialFingerprint } from './economics.js';
 export type { ZeroCostDecision, AccountCostEvidence, CostDecisionClass, EconomicQuota, ProviderAccountPlan } from './economics.js';
+export { ProviderBillingCapabilityInspector } from './billing-capability.js';
+export type { BillingCapability, BillingCapabilityEvidence } from './billing-capability.js';
 export { zeroCostInventory } from './zero-cost-inventory.js';
 export type { ZeroCostInventoryRow } from './zero-cost-inventory.js';
 export {

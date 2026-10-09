@@ -25,6 +25,12 @@ export function localOutputTokenBudget(messages: ModelMessage[], structured: boo
   return Math.min(2400, Math.max(structured ? 768 : 1200, Math.ceil(promptChars / 8)));
 }
 
+/** Structured reviews need room for a reasoning trace before the short JSON verdict. */
+export function structuredOutputTokenBudget(messages: ModelMessage[]): number {
+  const promptChars = messages.reduce((sum, message) => sum + message.content.length, 0);
+  return Math.min(4800, Math.max(3600, Math.ceil(promptChars / 5)));
+}
+
 export class ModelRouter {
   private readonly economicStops = new Set<string>();
   private readonly credentials: CredentialBroker;
@@ -126,7 +132,7 @@ export class ModelRouter {
 
   async completeForStructuredCandidate(messages: ModelMessage[], candidate: ModelCandidate, signal?: AbortSignal, schema?: Record<string, unknown>): Promise<ModelResponse> {
     if (candidate.provider === "ollama") { await this.assertZeroCost(candidate); return this.completeWithOllama(messages, candidate.model, signal, schema ?? "json"); }
-    if (this.config.provider === "auto" || this.config.provider === "ollama") return this.completeAutoCandidate(messages, candidate, signal, true);
+    if (this.config.provider === "auto" || this.config.provider === "ollama") return this.completeAutoCandidate(messages, candidate, signal, true, candidate.inferenceProfile === "reasoning-disabled:max-output-2400" ? 2400 : structuredOutputTokenBudget(messages));
     return this.completeForPlanningCandidate(messages, candidate, signal);
   }
 

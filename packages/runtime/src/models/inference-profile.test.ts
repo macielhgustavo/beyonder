@@ -81,4 +81,14 @@ describe("observed inference profiles", () => {
     expect(body.max_tokens).toBe(2400);
     expect(body.reasoning).toEqual(matched ? { enabled: false } : { effort: "low" });
   });
+  it("gives structured cloud verification bounded room for reasoning before JSON", async () => {
+    const fetch = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({ model: "profile-model", choices: [{ finish_reason: "stop", message: { content: "{}" } }], usage: { cost: 0 } })));
+    vi.stubGlobal("fetch", fetch);
+    const router = new ModelRouter(loadConfig({ BEYONDER_MODEL_PROVIDER: "auto" }).model, { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model) });
+    const candidate = { provider: "kilo-gateway", model: "profile-model", inferenceProfile: "reasoning-low:max-output-2400", capabilities: ["reasoning-control"] } as ModelCandidate;
+    await router.completeForStructuredCandidate([{ role: "user", content: "Observed evidence ".repeat(1200) }], candidate);
+    const body = JSON.parse(fetch.mock.calls[0]![1]!.body as string);
+    expect(body.max_tokens).toBeGreaterThan(2400);
+    expect(body.max_tokens).toBeLessThanOrEqual(4800);
+  });
 });

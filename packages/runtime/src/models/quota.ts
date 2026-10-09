@@ -16,8 +16,13 @@ export class AutopilotQuotaSource implements QuotaSource {
   }
 
   async get(providerId: string, model?: string): Promise<QuotaSnapshot> {
-    const catalog = getProvider(providerId);
     const state = await new AutopilotStateStore(this.providerStatePath).read();
+    return this.getFromState(providerId, model, state);
+  }
+
+  /** Use the selector's inventory snapshot during ranking; get() remains fresh at execution. */
+  getFromState(providerId: string, model: string | undefined, state: Awaited<ReturnType<AutopilotStateStore["read"]>>): QuotaSnapshot {
+    const catalog = getProvider(providerId);
     const progress = state.providers[providerId];
     const live = model ? this.live.get(`${providerId}/${model}`) : undefined;
     const headers = normalizeHeaders(live && Date.now() - live.observedAt < 300_000 ? live.headers : progress?.validation?.rateLimitHeaders ?? {});

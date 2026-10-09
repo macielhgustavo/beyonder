@@ -116,7 +116,9 @@ export class AdaptiveModelSelector {
         const rejected: RejectedCandidate = { provider: pair.entry.providerId, model: pair.model, inferenceProfile: pair.inferenceProfile, computeTier: pair.entry.providerId === 'ollama' ? 'LOCAL_EMERGENCY' : 'OTHER_FREE_CLOUD', reasons: [`credential:${access.status}; configured=${access.configured}; source=${access.source}; capability history retained`] };
         rejectedCandidates.push(rejected); await this.telemetry('debug', 'router.candidate_rejected', { taskId: task.id, ...rejected }); continue;
       }
-      const economicQuota = await this.quotaSource.get(pair.entry.providerId, pair.model);
+      const economicQuota = this.quotaSource instanceof AutopilotQuotaSource
+        ? this.quotaSource.getFromState(pair.entry.providerId, pair.model, state)
+        : await this.quotaSource.get(pair.entry.providerId, pair.model);
       const provider = getProvider(pair.entry.providerId) ?? { id: 'ollama' as const, openAiCompatibleEndpoint: this.options.ollamaBaseUrl };
       const modelMetadata = pair.entry.modelMetadata.find(m => m.id === pair.model)!;
       const accountEvidence = evidence.find(e => e.provider === pair.entry.providerId && e.model === pair.model);

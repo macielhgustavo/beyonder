@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { AutopilotStateStore, CredentialBroker, getProvider, validateProviderDetailed, zeroCostInventory } from '@beyonder/compute';
-import { loadConfig, ModelRouter, physicalModelIdentity, classifyFailure, InferenceError, runCandidates, openDatabase, StateStore, type InferenceAttempt } from '@beyonder/runtime';
+import { loadConfig, ModelRouter, physicalModelIdentity, classifyFailure, InferenceError, runCandidates, openDatabase, StateStore, type InferenceAttempt, type ModelCandidate } from '@beyonder/runtime';
 import { randomUUID } from 'node:crypto';
 
 const command = process.argv[2];
@@ -28,9 +28,39 @@ async function main() {
   const { db, sqlite } = openDatabase(config.dbPath);
   try {
   const router = new ModelRouter(config.model, { credentials: broker, state: new StateStore(db) });
-  const route = await router.route({ id: 'zero-cost-operational-smoke', input: 'Return exactly OK.', type: 'chat', complexity: 0.05, risk: 0, estimatedTokens: 32, requirements: { directResponse: true } }, 'normal');
-  const candidate = route.candidates.find(c => c.provider === providerId && c.model === requestedModel);
-  if (!candidate) { console.log(JSON.stringify({ command, status: 'NOT_RUN_ROUTING_CONSTRAINT', inferenceCalls: 0, monetaryCostUsd: 0, rejected: route.rejectedCandidates?.filter(c => c.provider === providerId && c.model === requestedModel) }, null, 2)); return; }
+  // Operational smoke is intentionally independent from adaptive routing,
+  // benchmarks and mission quality floors. The caller named the exact route;
+  // this probe answers only whether that zero-cost route can execute now.
+  const candidate: ModelCandidate = {
+    economics: row.economics,
+    inferenceProfile: 'smoke:max-output-32',
+    metadataQuality: 1,
+    local: providerId === 'ollama',
+    externalQuotaConsumption: providerId !== 'ollama',
+    costClass: row.costClass,
+    structuredOutput: 'unknown',
+    computeTier: providerId === 'ollama' ? 'LOCAL_EMERGENCY' : 'OTHER_FREE_CLOUD',
+    eligible: true,
+    provider: providerId!,
+    model: requestedModel!,
+    capabilities: ['text'],
+    contextWindow: 'unknown',
+    toolCalling: 'unknown',
+    predictedQuality: 1,
+    historicalSuccess: 0,
+    reliability: 1,
+    monetaryCostUsd: 0,
+    shadowCostUsd: 0,
+    latencyPenalty: 0,
+    failureRisk: 0,
+    effectiveResourceCost: 0,
+    utility: 1,
+    quota: { provider: providerId!, model: requestedModel!, requestsPerMinute: 'unknown', requestsPerDay: 'unknown', tokensPerMinute: 'unknown', tokensPerDay: 'unknown', requestQuotaTotal: 'unknown', requestQuotaRemaining: 'unknown', tokenQuotaTotal: 'unknown', tokenQuotaRemaining: 'unknown', resetAt: 'unknown', health: 'unknown', lastUpdatedAt: 'unknown' },
+    performance: { provider: providerId!, model: requestedModel!, taskType: 'chat', samples: 0, successes: 0, failures: 0, successRate: 0, avgEvaluationScore: 0, avgLatencyMs: 0, avgMonetaryCostUsd: 0, avgShadowCostUsd: 0, avgAttempts: 0 },
+    benchmarkCapability: null,
+    capabilityEvidence: { bibScore: null, bibSamples: 0, realScore: null, realSamples: 0, predictedScore: 1, source: 'metadata' },
+    explanation: { positives: [], penalties: [], constraints: ['explicit-zero-cost-operational-smoke'] }
+  };
   const started = Date.now();
   let response;
   let terminalAttempt: InferenceAttempt | undefined;
@@ -49,7 +79,7 @@ async function main() {
   const physicalIdentity = physicalModelIdentity(response.attribution?.reportedModel ?? '');
   const requestedIdentity = physicalModelIdentity(requestedModel!);
   const identityAccepted = requestedModel === 'openrouter/free' ? Boolean(physicalIdentity) : Boolean(physicalIdentity && physicalIdentity === requestedIdentity);
-  console.log(JSON.stringify({ command, provider: providerId, model: requestedModel, status: response.content.trim() === 'OK' && identityAccepted ? 'PASS_OPERATIONAL_ONLY' : 'FAIL_RESPONSE_OR_IDENTITY', inferenceCalls: 1, maxOutputTokens: 32, latencyMs: Date.now() - started, monetaryCostUsd: response.estimatedCostUsd, physicalModel: response.attribution?.reportedModel, quota: candidate.quota, economics: candidate.economics, verifierQualified: false, capabilityQualified: false }, null, 2));
+  console.log(JSON.stringify({ command, provider: providerId, model: requestedModel, status: response.content.trim() === 'OK' && identityAccepted ? 'PASS_OPERATIONAL_ONLY' : 'FAIL_RESPONSE_OR_IDENTITY', inferenceCalls: 1, maxOutputTokens: 32, latencyMs: Date.now() - started, monetaryCostUsd: response.estimatedCostUsd, physicalModel: response.attribution?.reportedModel, upstreamProvider: response.attribution?.upstreamProvider, upstreamAttemptCount: response.attribution?.upstreamAttemptCount, quota: candidate.quota, economics: candidate.economics, verifierQualified: false, capabilityQualified: false }, null, 2));
   } finally { sqlite.close(); }
 }
 main().catch(() => { console.error(JSON.stringify({ status: 'STOPPED', error: 'Zero-cost qualification stopped; consult metadata diagnostics. No retry performed.' })); process.exitCode = 1; });

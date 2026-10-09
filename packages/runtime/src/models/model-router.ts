@@ -19,6 +19,12 @@ export interface ModelRouterOptions extends AdaptiveSelectorOptions {
   telemetry?: RouterTelemetry;
 }
 
+/** Keep local output bounded while giving structured judgments enough room. */
+export function localOutputTokenBudget(messages: ModelMessage[], structured: boolean): number {
+  const promptChars = messages.reduce((sum, message) => sum + message.content.length, 0);
+  return Math.min(2400, Math.max(structured ? 768 : 1200, Math.ceil(promptChars / 8)));
+}
+
 export class ModelRouter {
   private readonly economicStops = new Set<string>();
   private readonly credentials: CredentialBroker;
@@ -173,11 +179,12 @@ export class ModelRouter {
     if (!isLocalZeroCostEndpoint(this.config.ollamaBaseUrl) || /(?:[:/-]cloud)$/i.test(model)) throw new InferenceError('Remote/local-cloud inference has no zero-cost guarantee.', 'ECONOMIC_POLICY_BLOCKED');
     if (!(await discoverOllama(this.config.ollamaBaseUrl)).some(entry => entry.models.includes(model))) throw new InferenceError('Local model execution not proven; remote proxy metadata or unavailable local model.', 'ECONOMIC_POLICY_BLOCKED');
     const deadline = signal ?? AbortSignal.timeout(30_000);
-    const response = await fetch(`${this.config.ollamaBaseUrl}/api/chat`, { method: "POST", headers: { "content-type": "application/json" }, signal: deadline, redirect: 'error', body: JSON.stringify({ model, messages, stream: false, think: false, ...(format ? { format } : {}), options: { temperature: 0, num_predict: format ? 180 : 1200 } }) });
+    const response = await fetch(`${this.config.ollamaBaseUrl}/api/chat`, { method: "POST", headers: { "content-type": "application/json" }, signal: deadline, redirect: 'error', body: JSON.stringify({ model, messages, stream: false, think: false, ...(format ? { format } : {}), options: { temperature: 0, num_predict: localOutputTokenBudget(messages, Boolean(format)) } }) });
     if (!response.ok) throw httpFailure(response.status, await response.text(), response.headers);
-    const json = (await response.json()) as { message?: { content?: string; tool_calls?: unknown[] } };
+    const json = (await response.json()) as { model?: string; message?: { content?: string; tool_calls?: unknown[] }; done_reason?: string };
+    if (json.done_reason === "length") throw new InferenceError("Local completion exhausted its output budget before finishing.", "INVALID_OUTPUT");
     if (json.message?.tool_calls?.length) throw new InferenceError("Model returned unsolicited native tool calls while tools are disabled; no tool was executed.", "INVALID_OUTPUT");
-    return { content: json.message?.content ?? "", provider: "ollama", model, estimatedCostUsd: 0, raw: json };
+    return { content: json.message?.content ?? "", provider: "ollama", model, estimatedCostUsd: 0, attribution: { requestedModel: model, reportedModel: json.model || model }, raw: json };
   }
 
   private async completeWithOpenAiCompatible(messages: ModelMessage[]): Promise<ModelResponse> {

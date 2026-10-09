@@ -78,11 +78,18 @@ export class AdaptiveModelSelector {
 
     const state = await new AutopilotStateStore(this.providerStatePath).read();
     const inventory = [...buildComputeInventory(state), ...(this.options.ollamaBaseUrl ? await discoverOllama(this.options.ollamaBaseUrl) : [])];
+    // Plan, credential and billing state are provider properties for this one
+    // ranking snapshot. Actual execution checks them again before each POST.
+    const evidence = await readAccountCostEvidence();
+    const credentialAccess = memoizeProviderRead(this.options.credentialAccess);
+    const accountPlan = memoizeProviderRead(this.options.providerAccountPlan);
+    const billingCapability = memoizeProviderRead(this.options.billingCapability);
     const viablePairs = inventory.flatMap((entry) => this.expandCompatible(entry, task));
     const alternativesAvailable = Math.max(0, viablePairs.length - 1);
     const consideredCandidates: ModelCandidate[] = [];
     const candidates: ModelCandidate[] = [];
     const rejectedCandidates: RejectedCandidate[] = [];
+    const costFilterCounts = new Map<string, number>();
 
     await this.telemetry("info", "router.candidates_generated", {
       taskId: task.id,
@@ -104,7 +111,7 @@ export class AdaptiveModelSelector {
     }
 
     for (const pair of profiledPairs) {
-      const access = await this.options.credentialAccess?.(pair.entry.providerId);
+      const access = await credentialAccess(pair.entry.providerId);
       if (access && (!access.accessible || access.valid === false)) {
         const rejected: RejectedCandidate = { provider: pair.entry.providerId, model: pair.model, inferenceProfile: pair.inferenceProfile, computeTier: pair.entry.providerId === 'ollama' ? 'LOCAL_EMERGENCY' : 'OTHER_FREE_CLOUD', reasons: [`credential:${access.status}; configured=${access.configured}; source=${access.source}; capability history retained`] };
         rejectedCandidates.push(rejected); await this.telemetry('debug', 'router.candidate_rejected', { taskId: task.id, ...rejected }); continue;
@@ -112,19 +119,20 @@ export class AdaptiveModelSelector {
       const economicQuota = await this.quotaSource.get(pair.entry.providerId, pair.model);
       const provider = getProvider(pair.entry.providerId) ?? { id: 'ollama' as const, openAiCompatibleEndpoint: this.options.ollamaBaseUrl };
       const modelMetadata = pair.entry.modelMetadata.find(m => m.id === pair.model)!;
-      const accountEvidence = (await readAccountCostEvidence()).find(e => e.provider === pair.entry.providerId && e.model === pair.model);
-      const observedEconomics = resolveZeroCostExecution({ provider, model: modelMetadata, credential: access, accountPlan: await this.options.providerAccountPlan?.(pair.entry.providerId), billingCapability: await this.options.billingCapability?.(pair.entry.providerId), installationPosture: this.options.installationPosture, accountEvidence, quota: economicQuota });
+      const accountEvidence = evidence.find(e => e.provider === pair.entry.providerId && e.model === pair.model);
+      const observedEconomics = resolveZeroCostExecution({ provider, model: modelMetadata, credential: access, accountPlan: await accountPlan(pair.entry.providerId), billingCapability: await billingCapability(pair.entry.providerId), installationPosture: this.options.installationPosture, accountEvidence, quota: economicQuota });
       const economics = ['FREE_QUOTA_EXHAUSTED', 'PAID', 'BILLING_RISK', 'DEV_EVAL_ONLY'].includes(observedEconomics.classification) ? observedEconomics : await this.options.economicEvidence?.(pair.entry.providerId, pair.model) ?? observedEconomics;
-      await this.telemetry('debug', 'economic.cost_evidence_resolved', { taskId: task.id, ...economics });
       let costAllowed = true;
       try { requireZeroCostDecision(economics, pair.entry.providerId, pair.model); } catch { costAllowed = false; }
       if (!costAllowed || modelMetadata.costClass === 'PAID' && !['PROVIDER_FREE_PLAN', 'PROVIDER_BILLING_API', 'INSTALLATION_ZERO_BILLING_POSTURE'].includes(economics.source) || pair.entry.cost === 'billing-risk') {
         const rejected: RejectedCandidate = { provider: pair.entry.providerId, model: pair.model, inferenceProfile: pair.inferenceProfile, computeTier: modelMetadata.costClass === 'PAID' ? 'PAID_DISABLED' : 'OTHER_FREE_CLOUD', economics, reasons: [`economic:${economics.classification}; ${economics.reason}`] };
         rejectedCandidates.push(rejected);
-        await this.telemetry('debug', 'router.candidate_rejected_cost', { taskId: task.id, ...rejected });
+        const group = `${pair.entry.providerId}:${economics.classification}`;
+        costFilterCounts.set(group, (costFilterCounts.get(group) ?? 0) + 1);
         if (economics.classification === 'FREE_QUOTA_EXHAUSTED') await this.telemetry('info', 'quota.free_tier_exhausted', { provider: pair.entry.providerId, model: pair.model, reason: economics.reason });
         continue;
       }
+      await this.telemetry('debug', 'economic.cost_evidence_resolved', { taskId: task.id, ...economics });
       await this.telemetry('debug', 'economic.zero_cost_guarantee', { taskId: task.id, ...economics });
       const unsafeVerdicts = task.inferencePhase === "OBJECTIVE_VERIFICATION"
         ? await this.capabilitySource.getVerificationSafetyEvidence?.(pair.model) : undefined;
@@ -333,6 +341,8 @@ export class AdaptiveModelSelector {
       }
     }
 
+    if (costFilterCounts.size) await this.telemetry('debug', 'router.cost_filter_summary', { taskId: task.id, counts: Object.fromEntries(costFilterCounts) });
+
     candidates.sort((a, b) => (b.routingScore ?? -Infinity) - (a.routingScore ?? -Infinity) || b.predictedQuality - a.predictedQuality);
     // Multiple qualified modes are alternatives for one physical candidate,
     // not additional providers, verifier independence, or fresh quota capacity.
@@ -428,6 +438,16 @@ export class AdaptiveModelSelector {
   private async telemetry(level: "debug" | "info" | "warn" | "error", event: string, details: Record<string, unknown>) {
     await this.options.telemetry?.record(level, event, details);
   }
+}
+
+function memoizeProviderRead<T>(read: ((provider: string) => Promise<T>) | undefined): (provider: string) => Promise<T | undefined> {
+  const cache = new Map<string, Promise<T>>();
+  return provider => {
+    if (!read) return Promise.resolve(undefined);
+    let result = cache.get(provider);
+    if (!result) { result = read(provider); cache.set(provider, result); }
+    return result;
+  };
 }
 
 function capabilitiesFor(entry: InventoryEntry, model: string): string[] {

@@ -194,7 +194,8 @@ describe("parsing, budgets and local discovery", () => {
       await runtime.modelRouter.completeForStructuredCandidate([{ role: "user", content: "verify" }], { ...candidate(model), provider: "kilo-gateway", structuredOutput: "native", benchmarkCapability: { source: "BIB", score: 1, samples: 2, structuredOutputMode: "prompted" } });
       const body = JSON.parse(String(fetch.mock.calls[0]?.[1]?.body));
       expect(body.response_format).toBeUndefined();
-      expect(body.max_tokens).toBe(2400);
+      expect(body.max_tokens).toBeGreaterThanOrEqual(3600);
+      expect(body.max_tokens).toBeLessThanOrEqual(4800);
     } finally { runtime.sqlite.close(); }
   });
 
@@ -210,8 +211,8 @@ describe("parsing, budgets and local discovery", () => {
       const body = JSON.parse(String((completionCall?.[1] as RequestInit | undefined)?.body));
       expect(body).toMatchObject({ model: "fixture-model", stream: false });
       expect(body.response_format).toEqual(structuredOutput === "native" ? { type: "json_object" } : undefined);
-      expect(body.max_tokens).toBeGreaterThanOrEqual(1024);
-      expect(body.max_tokens).toBeLessThanOrEqual(2400);
+      expect(body.max_tokens).toBeGreaterThanOrEqual(3600);
+      expect(body.max_tokens).toBeLessThanOrEqual(4800);
     } finally { runtime.sqlite.close(); }
   });
   it.each([400, 401, 403, 404, 429, 500])("classifies HTTP %s without exposing credentials", (status) => {

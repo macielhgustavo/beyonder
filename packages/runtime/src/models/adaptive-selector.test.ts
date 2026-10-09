@@ -148,6 +148,35 @@ describe("AdaptiveModelSelector", () => {
     expect(route.candidates[0]?.utility).toBeGreaterThanOrEqual(route.candidates.at(-1)?.utility ?? -1);
   });
 
+  it("reads stable account state once per provider during a multi-model ranking", async () => {
+    const path = await providerStatePathFor({ groq: ["llama-3.3-70b-versatile", "openai/gpt-oss-20b"] });
+    const reads = { credential: [] as string[], plan: [] as string[], billing: [] as string[] };
+    const selector = new AdaptiveModelSelector(path, {
+      economicEvidence: async (provider, model) => fixtureZeroCost(provider, model),
+      quotaSource: new FixedQuotaSource(),
+      credentialAccess: async provider => { reads.credential.push(provider); return undefined; },
+      providerAccountPlan: async provider => { reads.plan.push(provider); return undefined; },
+      billingCapability: async provider => { reads.billing.push(provider); return undefined; }
+    });
+    const route = await selector.route(task({ type: "chat", requirements: { directResponse: true } }), "normal");
+    expect(route.candidates.filter(candidate => candidate.provider === "groq").length).toBeGreaterThanOrEqual(2);
+    for (const values of Object.values(reads)) {
+      expect(values).toContain("groq");
+      expect(values.length).toBe(new Set(values).size);
+    }
+  });
+
+  it("summarizes cost rejections while retaining each rejected candidate in the route", async () => {
+    const path = await providerStatePathFor({ ovh: ["Meta-Llama-3_3-70B-Instruct", "Qwen3.5-9B"], groq: ["llama-3.3-70b-versatile"] });
+    const telemetry = new CapturingTelemetry();
+    const route = await new AdaptiveModelSelector(path, { quotaSource: new FixedQuotaSource(), telemetry }).route(task({ type: "chat", requirements: { directResponse: true } }), "normal");
+    const rejected = route.rejectedCandidates?.filter(candidate => candidate.provider === "ovh") ?? [];
+    expect(rejected.length).toBeGreaterThanOrEqual(2);
+    const summary = telemetry.events.find(event => event.event === "router.cost_filter_summary");
+    expect(Object.entries(summary?.details?.counts as Record<string, number>).filter(([key]) => key.startsWith("ovh:")).reduce((total, [, count]) => total + count, 0)).toBeGreaterThanOrEqual(2);
+    expect(telemetry.events.some(event => event.event === "router.candidate_rejected_cost")).toBe(false);
+  });
+
   it("filters incompatible vision tasks and blocks halted inference", async () => {
     const path = await providerStatePath();
     const selector = new AdaptiveModelSelector(path, { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model), quotaSource: new FixedQuotaSource() });

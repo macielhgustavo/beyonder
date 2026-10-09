@@ -1,6 +1,7 @@
 import { nanoid } from "nanoid";
 import type { AuditLog } from "../audit/audit-log.js";
 import type { MemoryEngine } from "../memory/memory-engine.js";
+import type { EconomicLedger } from "../economy/ledger.js";
 import { ApprovalDeniedError, ApprovalGate } from "./approval.js";
 import type { OpportunityStore } from "./store.js";
 import type { Opportunity, PreparedApplication, SettlementEvidence, WorkRun, WorkRunState, DeliverableType, ExecutionState, ExternalActionEvidence } from "./contracts.js";
@@ -20,7 +21,16 @@ export class StateWorkRunStore implements WorkRunStore {
 }
 
 export class WorkRunManager {
-  constructor(private readonly runs: WorkRunStore, private readonly opportunities: OpportunityStore, private readonly bridge: OpportunityBridge, private readonly approvals: ApprovalGate, private readonly audit?: AuditLog, private readonly memory?: MemoryEngine, private readonly now: () => Date = () => new Date()) {}
+  constructor(
+    private readonly runs: WorkRunStore,
+    private readonly opportunities: OpportunityStore,
+    private readonly bridge: OpportunityBridge,
+    private readonly approvals: ApprovalGate,
+    private readonly audit?: AuditLog,
+    private readonly memory?: MemoryEngine,
+    private readonly ledger?: EconomicLedger,
+    private readonly now: () => Date = () => new Date()
+  ) {}
 
   async list() { return this.runs.list(); }
   async inspect(id: string) { return this.runs.get(id); }
@@ -84,7 +94,64 @@ export class WorkRunManager {
     await this.approvals.consume(this.submissionApproval(run), "SUBMIT_DELIVERABLE", run.opportunityId, run.taskId ?? "");
     return this.save({ ...run, state: "AWAITING_SETTLEMENT", deliverable: { ...run.deliverable, metadata: { ...run.deliverable.metadata, submissionEvidence: evidence } } }, "deliverable.confirmed", { executedBy: evidence.executedBy });
   }
-  async recordSettlement(id: string, evidence: SettlementEvidence): Promise<WorkRun> { const run = await this.requireRun(id); if (run.settlement || run.state === "SETTLED" || run.state === "COMPLETED") throw new WorkRunError("Settlement is already recorded."); if (!["SUBMITTED", "AWAITING_SETTLEMENT"].includes(run.state)) throw new WorkRunError("Settlement requires a submitted deliverable."); validateEvidence(evidence); const settlement = { evidence, realizedRewardUsd: evidence.amount, realizedNetRevenueUsd: evidence.amount - run.monetaryCostUsd, recordedAt: this.now().toISOString() }; const completed = await this.save({ ...run, state: "COMPLETED", settlement, realizedRewardUsd: evidence.amount }, "revenue.realized", { amount: evidence.amount, currency: evidence.currency }); await this.memory?.remember("economic", JSON.stringify({ workRunId: id, opportunityId: run.opportunityId, source: run.source, estimatedRewardUsd: run.estimatedRewardUsd, simulatedRewardUsd: run.simulatedRewardUsd ?? 0, realizedRewardUsd: evidence.amount, settlementEvidence: evidence, monetaryCostUsd: run.monetaryCostUsd, shadowCostUsd: run.shadowCostUsd }), 4, { source: "work-run-settlement" }); return completed; }
+  async recordSettlement(id: string, evidence: SettlementEvidence): Promise<WorkRun> {
+    const run = await this.requireRun(id);
+    if (run.settlement || run.state === "SETTLED" || run.state === "COMPLETED") throw new WorkRunError("Settlement is already recorded.");
+    if (!["SUBMITTED", "AWAITING_SETTLEMENT"].includes(run.state)) throw new WorkRunError("Settlement requires a submitted deliverable.");
+    validateEvidence(evidence);
+
+    // Idempotency check: use settlement evidence externalReference or workRunId as idempotency key
+    const idempotencyKey = evidence.externalReference ?? `work-run:${id}:settlement`;
+    const alreadyRecorded = await this.ledger?.latest(100).then(entries =>
+      entries.some(entry =>
+        entry.type === "revenue" &&
+        JSON.parse(entry.metadata).idempotencyKey === idempotencyKey
+      )
+    ) ?? false;
+
+    if (alreadyRecorded) {
+      throw new WorkRunError("Settlement already recorded in ledger (idempotency key conflict).");
+    }
+
+    const settlement = {
+      evidence,
+      realizedRewardUsd: evidence.amount,
+      realizedNetRevenueUsd: evidence.amount - run.monetaryCostUsd,
+      recordedAt: this.now().toISOString()
+    };
+
+    const completed = await this.save(
+      { ...run, state: "COMPLETED", settlement, realizedRewardUsd: evidence.amount },
+      "revenue.realized",
+      { amount: evidence.amount, currency: evidence.currency }
+    );
+
+    // Record revenue in EconomicLedger with idempotency key
+    if (this.ledger) {
+      await this.ledger.record("revenue", evidence.amount, `Settlement for work run ${id}`, {
+        idempotencyKey,
+        workRunId: id,
+        opportunityId: run.opportunityId,
+        source: run.source,
+        evidenceType: evidence.type,
+        externalReference: evidence.externalReference
+      });
+    }
+
+    await this.memory?.remember("economic", JSON.stringify({
+      workRunId: id,
+      opportunityId: run.opportunityId,
+      source: run.source,
+      estimatedRewardUsd: run.estimatedRewardUsd,
+      simulatedRewardUsd: run.simulatedRewardUsd ?? 0,
+      realizedRewardUsd: evidence.amount,
+      settlementEvidence: evidence,
+      monetaryCostUsd: run.monetaryCostUsd,
+      shadowCostUsd: run.shadowCostUsd
+    }), 4, { source: "work-run-settlement" });
+
+    return completed;
+  }
 
   private submissionApproval(run: WorkRun): string { const id = run.deliverable?.metadata?.submissionApprovalId; if (typeof id !== "string") throw new WorkRunError("Submission approval is missing."); return id; }
   private async requireOpportunity(id: string): Promise<Opportunity> { const opportunity = await this.opportunities.get(id); if (!opportunity) throw new WorkRunError(`Opportunity ${id} was not found.`); return opportunity; }

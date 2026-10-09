@@ -110,7 +110,7 @@ export function createRuntime(config: AppConfig, options: RuntimeOptions = {}): 
   const approvals = new ApprovalGate(state, audit);
   const opportunityBridge = new OpportunityBridge(approvals, options.fixture ? new FixtureApplicationAdapter() : new ManualApplicationAdapter(), options.fixture ? new FixtureSubmissionAdapter() : new ManualSubmissionAdapter(), audit);
   const workRuns = new StateWorkRunStore(state);
-  const workRunManager = new WorkRunManager(workRuns, opportunityStore, opportunityBridge, approvals, audit, memory);
+  const workRunManager = new WorkRunManager(workRuns, opportunityStore, opportunityBridge, approvals, audit, memory, ledger);
   const taskExecutorWithPlanner = new AutonomousTaskExecutor({
     memory,
     modelRouter,

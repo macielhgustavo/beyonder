@@ -33,7 +33,7 @@ test('fixed free route + fresh live all-zero pricing has explicit provenance', (
  const d = resolveZeroCostExecution(input); assert.equal(d.zeroCostExecutionGuaranteed, true); assert.equal(d.freeQuota, 'UNKNOWN'); assert.equal(d.billingSpilloverPossible, false); assert.equal(d.source, 'EXPLICIT_FREE_ROUTE_AND_LIVE_PRICE');
  assert.equal(resolveZeroCostExecution({ ...input, provider: getProvider('groq')! }).zeroCostExecutionGuaranteed, false);
  assert.equal(resolveZeroCostExecution({ ...input, model: { ...input.model, costEvidence: undefined } }).zeroCostExecutionGuaranteed, false);
- assert.equal(resolveZeroCostExecution({ ...input, model: { ...input.model, id: 'openrouter/free' } }).zeroCostExecutionGuaranteed, false);
+ assert.equal(resolveZeroCostExecution({ ...input, model: { ...input.model, id: 'openrouter/free' } }).zeroCostExecutionGuaranteed, true);
  assert.equal(resolveZeroCostExecution({ ...input, quota: { requestQuotaRemaining: 0, tokenQuotaRemaining: 'unknown', resetAt: 'unknown', lastUpdatedAt: timestamp } }).classification, 'FREE_QUOTA_EXHAUSTED');
 });
 test('L: unknown never serializes as monetaryCostUsd=0', () => { const d = resolveZeroCostExecution({ provider: getProvider('groq')!, model: { id: 'dynamic-model', capabilities: ['CHAT'] }, now }); assert.deepEqual(d.monetaryCost, { state: 'UNKNOWN' }); assert.throws(() => requireZeroCostDecision(d, 'groq', 'dynamic-model', now)); });

@@ -54,6 +54,8 @@ const reportPath = path.join(output, "report.json");
 const previous = process.env.ACCEPTANCE_RESUME === "1" ? await fs.readFile(reportPath, "utf8").then(JSON.parse).catch(() => null) : null;
 const report = previous ?? { base, fixture: false, startedAt: new Date().toISOString(), cases: [], consoleErrors: [], pageErrors: [] };
 if (report.base !== base) throw new Error("Cannot resume acceptance against a different Control Center.");
+if (report.cases.length < objectives.length) delete report.completedAt;
+delete report.stoppedAt;
 const authFile = process.env.BEYONDER_CONTROL_AUTH_DIR ? path.join(process.env.BEYONDER_CONTROL_AUTH_DIR, "auth-token.json") : null;
 async function authorizeLocalUI() {
   if (!authFile) throw new Error("Product acceptance requires BEYONDER_CONTROL_AUTH_DIR for the isolated Control Center.");
@@ -114,10 +116,17 @@ try {
         entry.refreshPreserved &&= visibleResult === entry.mission.result;
       }
       if (!entry.refreshPreserved) throw new Error("Persisted result or authoritative Home state changed across refresh");
-    } catch (error) { entry.harnessError = String(error); }
+    } catch (error) {
+      if (page.isClosed()) throw error;
+      entry.harnessError = String(error);
+    }
     entry.timeToResultMs = Date.now() - started;
     report.cases.push(entry);
     await save();
     console.log(JSON.stringify({ category, taskId: entry.taskId, status: entry.mission?.status, objectiveStatus: entry.mission?.objectiveStatus, timeToResultMs: entry.timeToResultMs, error: entry.harnessError }));
   }
-} finally { report.completedAt = new Date().toISOString(); await save(); await browser.close(); }
+} finally {
+  if (report.cases.length === objectives.length) report.completedAt = new Date().toISOString();
+  else report.stoppedAt = new Date().toISOString();
+  await save(); await browser.close();
+}

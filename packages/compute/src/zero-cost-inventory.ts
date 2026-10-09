@@ -2,7 +2,7 @@ import { providers } from './catalog.js';
 import { CredentialBroker } from './broker.js';
 import { AutopilotStateStore } from './state-store.js';
 import { buildComputeInventory } from './inventory.js';
-import { declaredProviderAccountPlan, observedEconomicQuota, readAccountCostEvidence, resolveZeroCostExecution, type ZeroCostDecision } from './economics.js';
+import { declaredProviderAccountPlan, installationBillingPosture, observedEconomicQuota, readAccountCostEvidence, resolveZeroCostExecution, type ZeroCostDecision } from './economics.js';
 import { ProviderBillingCapabilityInspector } from './billing-capability.js';
 import type { CredentialDescriptor } from '@beyonder/credentials';
 
@@ -28,7 +28,7 @@ export async function zeroCostInventory(statePath: string, broker = new Credenti
     const entry = inventory.find(e => e.providerId === provider.id)!;
     for (const model of entry.modelMetadata.length ? entry.modelMetadata : [{ id: '(no observed model)', capabilities: [] }]) {
       const progress = state.providers[provider.id];
-      const economics = resolveZeroCostExecution({ provider, model, credential, accountPlan, billingCapability, accountEvidence: evidence.find(e => e.provider === provider.id && e.model === model.id), quota: observedEconomicQuota(progress) });
+      const economics = resolveZeroCostExecution({ provider, model, credential, accountPlan, billingCapability, installationPosture: installationBillingPosture(), accountEvidence: evidence.find(e => e.provider === provider.id && e.model === model.id), quota: observedEconomicQuota(progress) });
       const operational = entry.bootstrapReady === true && entry.modelCatalogReady === true;
       const zeroCostReady = credential.accessible && credential.valid !== false && operational && economics.zeroCostExecutionGuaranteed;
       rows.push({ provider: provider.id, model: model.id, credentialAccess: credential.accessible, credential, bootstrapReady: entry.bootstrapReady === true, catalogStatus: state.providers[provider.id]?.validation?.status ?? 'not-run', costClass: economics.costClass, costEvidenceSource: economics.source, freeQuota: economics.freeQuota, billingSpillover: economics.billingSpilloverPossible, zeroCostReady, inferenceQualified: zeroCostReady ? 'UNKNOWN' : false, verifierQualified: zeroCostReady ? 'UNKNOWN' : false, reason: !credential.accessible ? `credential:${credential.status}` : !operational ? 'Bootstrap/catalog not observed; neither skipped validation nor keyless is inference qualification.' : economics.reason, economics });

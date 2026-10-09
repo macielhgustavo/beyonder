@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { getProvider } from './catalog.js';
-import { declaredProviderAccountPlan, providerCredentialFingerprint, requireZeroCostDecision, resolveZeroCostExecution, type ProviderAccountPlan } from './economics.js';
+import { declaredProviderAccountPlan, installationBillingPosture, providerCredentialFingerprint, requireZeroCostDecision, resolveZeroCostExecution, type ProviderAccountPlan } from './economics.js';
 import type { ModelCatalogEntry } from './types.js';
 
 function policy(providerId: string, model: ModelCatalogEntry, accountPlan?: ProviderAccountPlan, extra: { usageContext?: 'DEV_EVAL'; quota?: Parameters<typeof resolveZeroCostExecution>[0]['quota'] } = {}) {
@@ -61,4 +61,17 @@ test('NVIDIA Developer is dev/eval only even if a test injects zero-cost evidenc
   assert.equal(policy('nvidia-nim', model, 'NVIDIA_DEVELOPER').classification, 'DEV_EVAL_ONLY');
   const evalDecision = policy('nvidia-nim', model, 'NVIDIA_DEVELOPER', { usageContext: 'DEV_EVAL' });
   requireZeroCostDecision(evalDecision, 'nvidia-nim', model.id);
+});
+
+test('one installation zero-billing posture admits listed native free-tier models without admin reads or individual fingerprints', () => {
+  assert.equal(installationBillingPosture({ BEYONDER_EXTERNAL_BILLING_ENABLED: 'false' }), 'DISABLED');
+  assert.equal(installationBillingPosture({}), 'UNKNOWN');
+  for (const [providerId, model] of [['gemini', chat('gemini-2.5-flash')], ['groq', chat('openai/gpt-oss-120b', 'PAID')], ['cloudflare-workers-ai', chat('@cf/zai-org/glm-4.7-flash', 'PAID')]] as const) {
+    const decision = resolveZeroCostExecution({ provider: getProvider(providerId)!, model, installationPosture: 'DISABLED' });
+    assert.equal(decision.source, 'INSTALLATION_ZERO_BILLING_POSTURE');
+    requireZeroCostDecision(decision, providerId, model.id);
+    assert.equal(resolveZeroCostExecution({ provider: getProvider(providerId)!, model, installationPosture: 'ENABLED' }).classification, 'BILLING_RISK');
+  }
+  assert.equal(resolveZeroCostExecution({ provider: getProvider('gemini')!, model: chat('not-confirmed-free'), installationPosture: 'DISABLED' }).zeroCostExecutionGuaranteed, false);
+  assert.equal(resolveZeroCostExecution({ provider: getProvider('cloudflare-workers-ai')!, model: chat('@cf/moonshotai/kimi-k2.6'), installationPosture: 'DISABLED' }).classification, 'PAID');
 });

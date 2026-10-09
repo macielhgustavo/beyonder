@@ -1,4 +1,4 @@
-import { AutopilotStateStore, buildComputeInventory, getProvider, resolveZeroCostExecution, readAccountCostEvidence, requireZeroCostDecision, isModelMetadataEligibleForWorkload, type ModelWorkload, type ZeroCostDecision, type ProviderAccountPlan, type BillingCapabilityEvidence } from "@beyonder/compute";
+import { AutopilotStateStore, buildComputeInventory, getProvider, resolveZeroCostExecution, readAccountCostEvidence, requireZeroCostDecision, isModelMetadataEligibleForWorkload, type ModelWorkload, type ZeroCostDecision, type ProviderAccountPlan, type BillingCapabilityEvidence, type InstallationBillingPosture } from "@beyonder/compute";
 import type { IntelligenceTask } from "../intelligence/contracts.js";
 import type { EconomicState } from "../types.js";
 import type { ModelCapabilitySource } from "./capability-source.js";
@@ -25,6 +25,7 @@ export interface AdaptiveSelectorOptions {
   credentialAccess?: (provider: string) => Promise<import("@beyonder/credentials").CredentialDescriptor | undefined>;
   providerAccountPlan?: (provider: string) => Promise<ProviderAccountPlan | undefined>;
   billingCapability?: (provider: string) => Promise<BillingCapabilityEvidence | undefined>;
+  installationPosture?: InstallationBillingPosture;
   operationalHealth?: (provider: string, model: string) => Promise<{ samples: number; failures: number; latencyMs: number } | undefined>;
   ollamaBaseUrl?: string;
   performanceRepository?: PerformanceRepository;
@@ -112,12 +113,12 @@ export class AdaptiveModelSelector {
       const provider = getProvider(pair.entry.providerId) ?? { id: 'ollama' as const, openAiCompatibleEndpoint: this.options.ollamaBaseUrl };
       const modelMetadata = pair.entry.modelMetadata.find(m => m.id === pair.model)!;
       const accountEvidence = (await readAccountCostEvidence()).find(e => e.provider === pair.entry.providerId && e.model === pair.model);
-      const observedEconomics = resolveZeroCostExecution({ provider, model: modelMetadata, credential: access, accountPlan: await this.options.providerAccountPlan?.(pair.entry.providerId), billingCapability: await this.options.billingCapability?.(pair.entry.providerId), accountEvidence, quota: economicQuota });
+      const observedEconomics = resolveZeroCostExecution({ provider, model: modelMetadata, credential: access, accountPlan: await this.options.providerAccountPlan?.(pair.entry.providerId), billingCapability: await this.options.billingCapability?.(pair.entry.providerId), installationPosture: this.options.installationPosture, accountEvidence, quota: economicQuota });
       const economics = ['FREE_QUOTA_EXHAUSTED', 'PAID', 'BILLING_RISK', 'DEV_EVAL_ONLY'].includes(observedEconomics.classification) ? observedEconomics : await this.options.economicEvidence?.(pair.entry.providerId, pair.model) ?? observedEconomics;
       await this.telemetry('debug', 'economic.cost_evidence_resolved', { taskId: task.id, ...economics });
       let costAllowed = true;
       try { requireZeroCostDecision(economics, pair.entry.providerId, pair.model); } catch { costAllowed = false; }
-      if (!costAllowed || modelMetadata.costClass === 'PAID' && !['PROVIDER_FREE_PLAN', 'PROVIDER_BILLING_API'].includes(economics.source) || pair.entry.cost === 'billing-risk') {
+      if (!costAllowed || modelMetadata.costClass === 'PAID' && !['PROVIDER_FREE_PLAN', 'PROVIDER_BILLING_API', 'INSTALLATION_ZERO_BILLING_POSTURE'].includes(economics.source) || pair.entry.cost === 'billing-risk') {
         const rejected: RejectedCandidate = { provider: pair.entry.providerId, model: pair.model, inferenceProfile: pair.inferenceProfile, computeTier: modelMetadata.costClass === 'PAID' ? 'PAID_DISABLED' : 'OTHER_FREE_CLOUD', economics, reasons: [`economic:${economics.classification}; ${economics.reason}`] };
         rejectedCandidates.push(rejected);
         await this.telemetry('debug', 'router.candidate_rejected_cost', { taskId: task.id, ...rejected });
@@ -243,7 +244,7 @@ export class AdaptiveModelSelector {
         metadataQuality: ROUTER_CONFIG.qualityClassDefaults[pair.entry.qualityClass],
         local: pair.entry.providerId === "ollama",
         externalQuotaConsumption: pair.entry.providerId !== "ollama",
-        costClass: ['PROVIDER_FREE_PLAN', 'PROVIDER_BILLING_API'].includes(economics.source) ? 'FREE_TIER_ELIGIBLE' : metadata?.costClass,
+        costClass: ['PROVIDER_FREE_PLAN', 'PROVIDER_BILLING_API', 'INSTALLATION_ZERO_BILLING_POSTURE'].includes(economics.source) ? 'FREE_TIER_ELIGIBLE' : metadata?.costClass,
         structuredOutput: metadata?.structuredOutput ?? "unknown",
         provider: pair.entry.providerId,
         model: pair.model,

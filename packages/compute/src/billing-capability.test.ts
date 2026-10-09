@@ -43,7 +43,16 @@ test('Gemini paid billing beats an exceptional manual free declaration', async (
   const fetcher: typeof fetch = async input => String(input).includes('lookupKey') ? json({ parent: 'projects/123456' }) : json({ billingEnabled: true });
   const evidence = await new ProviderBillingCapabilityInspector(broker, undefined, fetcher, { GOOGLE_CLOUD_ACCESS_TOKEN: 'test-oauth-token' }).inspect('gemini');
   assert.equal(evidence.capability, 'BILLING_CAPABILITY_PRESENT');
-  assert.equal(resolveZeroCostExecution({ provider: getProvider('gemini')!, model: { id: 'gemini-2.5-flash', capabilities: ['CHAT'] }, accountPlan: 'GEMINI_FREE', billingCapability: evidence }).classification, 'BILLING_RISK');
+  assert.equal(resolveZeroCostExecution({ provider: getProvider('gemini')!, model: { id: 'gemini-2.5-flash', capabilities: ['CHAT'] }, accountPlan: 'GEMINI_FREE', installationPosture: 'DISABLED', billingCapability: evidence }).classification, 'BILLING_RISK');
+});
+
+test('Gemini inference does not require administrative OAuth when installation billing is disabled', async () => {
+  const broker = new CredentialBroker({}, { GEMINI_API_KEY: 'test-gemini-key' }, { providerStatePath: await location() });
+  const never: typeof fetch = async () => { throw new Error('Administrative API must not be called without OAuth'); };
+  const evidence = await new ProviderBillingCapabilityInspector(broker, undefined, never, {}).inspect('gemini');
+  assert.equal(evidence.capability, 'BILLING_CAPABILITY_UNKNOWN');
+  const model = { id: 'gemini-2.5-flash', capabilities: ['CHAT'] as const };
+  requireZeroCostDecision(resolveZeroCostExecution({ provider: getProvider('gemini')!, model: { ...model, capabilities: [...model.capabilities] }, billingCapability: evidence, installationPosture: 'DISABLED' }), 'gemini', model.id);
 });
 
 test('Gemini service account requests the distinct read scopes required by key lookup and billing info', async () => {
@@ -88,7 +97,9 @@ test('Cloudflare complete no-subscription and no-payment-method reads establish 
   const empty: typeof fetch = async () => json({ success: true, result: [], result_info: { total_count: 0 } });
   assert.equal((await new ProviderBillingCapabilityInspector(broker, undefined, empty).inspect('cloudflare-workers-ai')).capability, 'NO_BILLING_CAPABILITY');
   const denied: typeof fetch = async () => json({ success: false }, 403);
-  assert.equal((await new ProviderBillingCapabilityInspector(broker, undefined, denied).inspect('cloudflare-workers-ai')).capability, 'BILLING_CAPABILITY_UNKNOWN');
+  const deniedEvidence = await new ProviderBillingCapabilityInspector(broker, undefined, denied).inspect('cloudflare-workers-ai');
+  assert.equal(deniedEvidence.capability, 'BILLING_CAPABILITY_UNKNOWN');
+  requireZeroCostDecision(resolveZeroCostExecution({ provider: getProvider('cloudflare-workers-ai')!, model: { id: '@cf/zai-org/glm-4.7-flash', capabilities: ['CHAT'] }, billingCapability: deniedEvidence, installationPosture: 'DISABLED' }), 'cloudflare-workers-ai', '@cf/zai-org/glm-4.7-flash');
   const incomplete: typeof fetch = async input => String(input).includes('payment-methods')
     ? json({ success: true, result: [] })
     : json({ success: true, result: [], result_info: { total_count: 0 } });
@@ -114,5 +125,8 @@ test('Groq public model API is not misread as billing evidence; exceptional over
   const evidence = await new ProviderBillingCapabilityInspector(broker, undefined, never).inspect('groq');
   assert.equal(evidence.capability, 'BILLING_CAPABILITY_UNKNOWN');
   assert.equal(resolveZeroCostExecution({ provider: getProvider('groq')!, model: { id: 'openai/gpt-oss-120b', capabilities: ['CHAT'] }, billingCapability: evidence }).classification, 'BILLING_STATE_UNKNOWN');
+  const installationDecision = resolveZeroCostExecution({ provider: getProvider('groq')!, model: { id: 'openai/gpt-oss-120b', capabilities: ['CHAT'] }, billingCapability: evidence, installationPosture: 'DISABLED' });
+  assert.equal(installationDecision.source, 'INSTALLATION_ZERO_BILLING_POSTURE');
+  requireZeroCostDecision(installationDecision, 'groq', 'openai/gpt-oss-120b');
   assert.equal(resolveZeroCostExecution({ provider: getProvider('groq')!, model: { id: 'openai/gpt-oss-120b', capabilities: ['CHAT'] }, billingCapability: evidence, accountPlan: 'GROQ_FREE' }).zeroCostExecutionGuaranteed, true);
 });

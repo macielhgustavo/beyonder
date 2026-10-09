@@ -7,6 +7,12 @@ import type { ModelCatalogEntry, ProviderCatalogEntry } from './types.js';
 export type EconomicTruth = boolean | 'UNKNOWN';
 export type CostDecisionClass = 'ZERO_COST_CONFIRMED' | 'FREE_QUOTA_CONFIRMED' | 'UNKNOWN_COST' | 'PAID' | 'BILLING_RISK' | 'FREE_QUOTA_EXHAUSTED' | 'BILLING_STATE_UNKNOWN' | 'DEV_EVAL_ONLY';
 export type ProviderAccountPlan = 'GEMINI_FREE' | 'GROQ_FREE' | 'CLOUDFLARE_WORKERS_FREE' | 'NVIDIA_DEVELOPER';
+export type InstallationBillingPosture = 'DISABLED' | 'ENABLED' | 'UNKNOWN';
+/** One installation-wide operator assertion; absent or malformed values confer no economic proof. */
+export function installationBillingPosture(env: NodeJS.ProcessEnv = process.env): InstallationBillingPosture {
+  return env.BEYONDER_EXTERNAL_BILLING_ENABLED === 'false' ? 'DISABLED'
+    : env.BEYONDER_EXTERNAL_BILLING_ENABLED === 'true' ? 'ENABLED' : 'UNKNOWN';
+}
 const PLAN_FINGERPRINT_ENV: Partial<Record<string, [ProviderAccountPlan, string]>> = {
   gemini: ['GEMINI_FREE', 'BEYONDER_GEMINI_FREE_TIER_CREDENTIAL_SHA256'],
   groq: ['GROQ_FREE', 'BEYONDER_GROQ_FREE_PLAN_CREDENTIAL_SHA256'],
@@ -43,7 +49,7 @@ export interface AccountCostEvidence {
 export interface ZeroCostDecision {
   version: 1; provider: string; model: string;
   costClass: NonNullable<ModelCatalogEntry['costClass']>;
-  classification: CostDecisionClass; source: 'NONE' | 'LOCAL_ENDPOINT' | 'EXPLICIT_FREE_ROUTE_AND_LIVE_PRICE' | 'OFFICIAL_FREE_ROUTER' | 'PROVIDER_FREE_PLAN' | 'PROVIDER_BILLING_API' | AccountCostEvidence['source'];
+  classification: CostDecisionClass; source: 'NONE' | 'LOCAL_ENDPOINT' | 'EXPLICIT_FREE_ROUTE_AND_LIVE_PRICE' | 'OFFICIAL_FREE_ROUTER' | 'PROVIDER_FREE_PLAN' | 'PROVIDER_BILLING_API' | 'INSTALLATION_ZERO_BILLING_POSTURE' | AccountCostEvidence['source'];
   checkedAt: string; expiresAt: string;
   accountBillingState: AccountCostEvidence['accountBillingState'];
   freeTierEligible: EconomicTruth; freeQuota: FreeQuotaState;
@@ -81,7 +87,7 @@ export function isLocalZeroCostEndpoint(endpoint: string): boolean {
 export function resolveZeroCostExecution(input: {
   provider: ProviderCatalogEntry | { id: 'ollama'; openAiCompatibleEndpoint?: string; billingRisk?: boolean };
   model: ModelCatalogEntry; accountEvidence?: AccountCostEvidence; credential?: CredentialDescriptor;
-  quota?: EconomicQuota; now?: number; accountPlan?: ProviderAccountPlan; billingCapability?: BillingCapabilityEvidence; usageContext?: 'PRODUCT' | 'DEV_EVAL';
+  quota?: EconomicQuota; now?: number; accountPlan?: ProviderAccountPlan; billingCapability?: BillingCapabilityEvidence; installationPosture?: InstallationBillingPosture; usageContext?: 'PRODUCT' | 'DEV_EVAL';
 }): ZeroCostDecision {
   const now = input.now ?? Date.now(), provider = input.provider, model = input.model;
   const decision: ZeroCostDecision = { version: 1, provider: provider.id, model: model.id, costClass: model.costClass ?? 'UNKNOWN_COST', classification: 'UNKNOWN_COST', source: 'NONE', checkedAt: new Date(now).toISOString(), expiresAt: new Date(now).toISOString(), accountBillingState: 'UNKNOWN', freeTierEligible: ['FREE_CONFIRMED', 'FREE_TIER_ELIGIBLE'].includes(model.costClass ?? '') ? true : 'UNKNOWN', freeQuota: 'UNKNOWN', spendCap: 'UNKNOWN', providerBillingBehavior: 'UNKNOWN', billingSpilloverPossible: 'UNKNOWN', zeroCostExecutionGuaranteed: false, monetaryCost: { state: 'UNKNOWN' }, reason: 'No execution-specific zero-cost evidence.' };
@@ -104,19 +110,22 @@ export function resolveZeroCostExecution(input: {
 
   if (['gemini', 'groq', 'cloudflare-workers-ai', 'nvidia-nim'].includes(provider.id)) {
     const required: Partial<Record<string, ProviderAccountPlan>> = { gemini: 'GEMINI_FREE', groq: 'GROQ_FREE', 'cloudflare-workers-ai': 'CLOUDFLARE_WORKERS_FREE', 'nvidia-nim': 'NVIDIA_DEVELOPER' };
+    const posture = input.installationPosture ?? installationBillingPosture();
     const inspected = input.billingCapability;
     if (inspected?.provider === provider.id && inspected.contradicted) return reject('BILLING_RISK', 'A provider response contradicted the prior zero-cost decision.');
     const matchingInspection = inspected?.provider === provider.id && inspected.credentialSha256 && inspected.capability !== 'BILLING_CAPABILITY_UNKNOWN';
     if (matchingInspection && inspected.capability === 'BILLING_CAPABILITY_PRESENT') return reject('BILLING_RISK', 'Provider account inspection found billing capability; no hard zero-spend protection is available.');
+    if (posture === 'ENABLED') return reject('BILLING_RISK', 'Installation reports external billing enabled; this provider has no request-level zero price cap.');
     const automaticFree = matchingInspection && inspected.capability === 'NO_BILLING_CAPABILITY';
-    if (!automaticFree && input.accountPlan !== required[provider.id]) return reject('BILLING_STATE_UNKNOWN', 'Automatic account billing inspection is unknown and no exceptional credential-bound override exists.');
+    const installationFree = posture === 'DISABLED' && provider.id !== 'nvidia-nim';
+    if (!automaticFree && !installationFree && input.accountPlan !== required[provider.id]) return reject('BILLING_STATE_UNKNOWN', 'No billing inspection, installation zero-billing posture, or exceptional credential-bound override is available.');
     const eligible = provider.id === 'gemini' ? GEMINI_FREE_TEXT_MODELS.has(model.id)
       : provider.id === 'groq' ? GROQ_FREE_TEXT_MODELS.has(model.id)
       : provider.id === 'nvidia-nim' ? input.usageContext === 'DEV_EVAL' && model.costClass !== 'PAID'
       : CLOUDFLARE_FREE_TEXT_MODELS.has(model.id) && model.capabilities.some(cap => ['CHAT', 'REASONING', 'CODING'].includes(cap));
     if (!eligible) return reject('UNKNOWN_COST', 'Model is not confirmed for this provider free-plan text policy.');
-    Object.assign(decision, { source: automaticFree ? 'PROVIDER_BILLING_API' : 'PROVIDER_FREE_PLAN', accountBillingState: 'DISABLED', freeTierEligible: true, billingSpilloverPossible: false, spendCap: 'ENFORCED_ZERO', providerBillingBehavior: 'REJECT_AFTER_FREE_QUOTA' });
-    return confirm('FREE_QUOTA_CONFIRMED', automaticFree ? 'Provider account inspection found no billing capability; unknown quota can only cause an operational failure.' : 'Exceptional credential-bound free-plan override; unknown quota may cause a rate-limit response.', new Date(now + 60_000).toISOString());
+    Object.assign(decision, { source: automaticFree ? 'PROVIDER_BILLING_API' : installationFree ? 'INSTALLATION_ZERO_BILLING_POSTURE' : 'PROVIDER_FREE_PLAN', accountBillingState: 'DISABLED', freeTierEligible: true, billingSpilloverPossible: false, spendCap: 'ENFORCED_ZERO', providerBillingBehavior: 'REJECT_AFTER_FREE_QUOTA' });
+    return confirm('FREE_QUOTA_CONFIRMED', automaticFree ? 'Provider account inspection found no billing capability; unknown quota can only cause an operational failure.' : installationFree ? 'Installation declares external billing disabled; provider free-tier model cannot spill into a paid account under this posture.' : 'Exceptional credential-bound free-plan override; unknown quota may cause a rate-limit response.', new Date(now + 60_000).toISOString());
   }
 
   // OpenRouter publishes openrouter/free as its dedicated free-model router. The
@@ -182,5 +191,5 @@ function isAccountEvidence(row: unknown): row is AccountCostEvidence {
     && ['REJECT_AFTER_FREE_QUOTA', 'MAY_CHARGE', 'UNKNOWN'].includes(String(v.providerBillingBehavior)) && [true, false, 'UNKNOWN'].includes(v.billingSpilloverPossible as EconomicTruth);
 }
 export function requireZeroCostDecision(decision: ZeroCostDecision | undefined, provider: string, model: string, now = Date.now()): asserts decision is ZeroCostDecision {
-  if (!decision?.zeroCostExecutionGuaranteed || !['ZERO_COST_CONFIRMED', 'FREE_QUOTA_CONFIRMED'].includes(decision.classification) || decision.source === 'NONE' || decision.costClass === 'PAID' && !['PROVIDER_FREE_PLAN', 'PROVIDER_BILLING_API'].includes(decision.source) || decision.billingSpilloverPossible === true || decision.monetaryCost.state !== 'CONFIRMED_ZERO' || decision.monetaryCost.usd !== 0 || decision.provider !== provider || decision.model !== model || !fresh(decision.checkedAt, now, 300_000) || !(Date.parse(decision.expiresAt) > now)) throw new Error('ZERO_COST_EXECUTION_NOT_GUARANTEED');
+  if (!decision?.zeroCostExecutionGuaranteed || !['ZERO_COST_CONFIRMED', 'FREE_QUOTA_CONFIRMED'].includes(decision.classification) || decision.source === 'NONE' || decision.costClass === 'PAID' && !['PROVIDER_FREE_PLAN', 'PROVIDER_BILLING_API', 'INSTALLATION_ZERO_BILLING_POSTURE'].includes(decision.source) || decision.billingSpilloverPossible === true || decision.monetaryCost.state !== 'CONFIRMED_ZERO' || decision.monetaryCost.usd !== 0 || decision.provider !== provider || decision.model !== model || !fresh(decision.checkedAt, now, 300_000) || !(Date.parse(decision.expiresAt) > now)) throw new Error('ZERO_COST_EXECUTION_NOT_GUARANTEED');
 }

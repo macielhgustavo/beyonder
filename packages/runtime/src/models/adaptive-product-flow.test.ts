@@ -49,10 +49,7 @@ describe("adaptive product flow", () => {
       validation: { status: 'validated', models: [model], modelMetadata: [{ id: model, capabilities: ['CHAT', 'REASONING', 'CODING'], costClass: providerId === 'gemini' ? 'FREE_TIER_ELIGIBLE' : 'PAID' }] }
     }])) });
     const selector = new AdaptiveModelSelector(path, {
-      providerAccountPlan: async provider => provider === 'groq' ? 'GROQ_FREE' : undefined,
-      billingCapability: async provider => provider === 'gemini' || provider === 'cloudflare-workers-ai'
-        ? { provider, credentialSha256: 'fixture-credential-fingerprint', capability: 'NO_BILLING_CAPABILITY', source: provider === 'gemini' ? 'GOOGLE_CLOUD_BILLING_API' : 'CLOUDFLARE_SUBSCRIPTIONS_API', checkedAt: new Date().toISOString(), reason: 'Provider billing API fixture.' }
-        : undefined,
+      installationPosture: 'DISABLED',
       capabilitySource: {
         async getCapability({ provider, taskType }) { return { score: provider === (taskType === 'coding' ? 'groq' : 'gemini') ? 0.95 : 0.55, samples: 8, source: 'BIB' as const }; },
         async getCapabilityScore(input) { return (await this.getCapability(input))?.score ?? null; }
@@ -64,8 +61,7 @@ describe("adaptive product flow", () => {
     expect(coding.selected?.provider).toBe('groq');
     expect(reasoning.selected?.provider).toBe('gemini');
     expect(coding.candidates.every(candidate => candidate.monetaryCostUsd === 0)).toBe(true);
-    expect(coding.candidates.filter(candidate => candidate.provider !== 'groq').every(candidate => candidate.economics?.source === 'PROVIDER_BILLING_API')).toBe(true);
-    expect(coding.candidates.find(candidate => candidate.provider === 'groq')?.economics?.source).toBe('PROVIDER_FREE_PLAN');
+    expect(coding.candidates.every(candidate => candidate.economics?.source === 'INSTALLATION_ZERO_BILLING_POSTURE')).toBe(true);
   });
   it("keeps a validated free candidate discoverable after stale bootstrap failure", async () => {
     const route = await (await selector(true)).route(task("coding"), "normal");

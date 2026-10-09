@@ -41,7 +41,7 @@ async function main() {
       metadataQuality: 1,
       local: providerId === 'ollama',
       externalQuotaConsumption: providerId !== 'ollama',
-      costClass: ['PROVIDER_FREE_PLAN', 'PROVIDER_BILLING_API'].includes(row.costEvidenceSource) ? 'FREE_TIER_ELIGIBLE' : row.costClass,
+      costClass: ['PROVIDER_FREE_PLAN', 'PROVIDER_BILLING_API', 'INSTALLATION_ZERO_BILLING_POSTURE'].includes(row.costEvidenceSource) ? 'FREE_TIER_ELIGIBLE' : row.costClass,
       structuredOutput: 'unknown',
       computeTier: providerId === 'ollama' ? 'LOCAL_EMERGENCY' : 'OTHER_FREE_CLOUD',
       eligible: true,

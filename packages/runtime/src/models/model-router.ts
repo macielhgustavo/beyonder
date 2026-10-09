@@ -230,10 +230,9 @@ export class ModelRouter {
         },
         signal: AbortSignal.any([controller.signal, ...(signal ? [signal] : [])]),
         redirect: 'error',
-        // A catalog declaration is not proof that native JSON mode was evaluated.
-        // Keep the observed BIB request mode instead of silently changing the
-        // inference profile used to establish structured-output capability.
-        body: JSON.stringify({ model: candidate.model, messages, temperature: 0, max_tokens: maxOutputTokens, stream: false, ...(['openrouter', 'kilo-gateway'].includes(candidate.provider) ? { provider: { max_price: { prompt: 0, completion: 0 }, allow_fallbacks: false } } : {}), ...(candidate.capabilities?.includes("reasoning-control") ? { reasoning: candidate.inferenceProfile === "reasoning-disabled:max-output-2400" && candidate.benchmarkCapability?.inferenceProfile === candidate.inferenceProfile ? { enabled: false } : { effort: "low" } } : {}), ...(structured && (candidate.benchmarkCapability?.structuredOutputMode ?? candidate.structuredOutput) === "native" ? { response_format: { type: "json_object" } } : {}) })
+        // Keep the hard $0 ceiling, but let OpenRouter use its normal provider
+        // failover so a single upstream 429/503 does not kill the whole request.
+        body: JSON.stringify({ model: candidate.model, messages, temperature: 0, max_tokens: maxOutputTokens, stream: false, ...(candidate.provider === 'openrouter' ? { provider: { max_price: { prompt: 0, completion: 0 }, allow_fallbacks: true } } : candidate.provider === 'kilo-gateway' ? { provider: { max_price: { prompt: 0, completion: 0 }, allow_fallbacks: false } } : {}), ...(candidate.capabilities?.includes("reasoning-control") ? { reasoning: candidate.inferenceProfile === "reasoning-disabled:max-output-2400" && candidate.benchmarkCapability?.inferenceProfile === candidate.inferenceProfile ? { enabled: false } : { effort: "low" } } : {}), ...(structured && (candidate.benchmarkCapability?.structuredOutputMode ?? candidate.structuredOutput) === "native" ? { response_format: { type: "json_object" } } : {}) })
       });
       if (!response.ok) throw httpFailure(response.status, (await response.text()).replaceAll(apiKey || "\u0000", "[REDACTED]"), response.headers);
       const json = await response.json() as { error?: unknown; model?: string; provider?: string; choices?: Array<{ finish_reason?: string; message?: { content?: string; tool_calls?: unknown[]; function_call?: unknown; provider_metadata?: { gateway?: { routing?: { resolvedProvider?: string; totalProviderAttemptCount?: number } } } } }>; usage?: { total_tokens?: number; cost?: number | string } };

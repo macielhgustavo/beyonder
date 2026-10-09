@@ -1,8 +1,9 @@
 import type { NextRequest } from "next/server";
+import { assertValidAuthToken, validateAuthToken, getOrCreateAuthToken } from "./auth-token.js";
 
 const SAFE_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
 
-export function assertLocalRequest(request: NextRequest) {
+export async function assertLocalRequest(request: NextRequest) {
   const host = request.headers.get("host") ?? "";
   let hostname: string;
   try { hostname = new URL(`http://${host}`).hostname; } catch { throw new Error("Host inválido."); }
@@ -16,6 +17,13 @@ export function assertLocalRequest(request: NextRequest) {
       throw new Error("Origin is not allowed for Control Center commands.");
     }
   }
+
+  // Validate auth token for mutating operations
+  const token = assertValidAuthToken(request);
+  const isValid = await validateAuthToken(token);
+  if (!isValid) {
+    throw new Error("Invalid or expired authentication token");
+  }
 }
 
 export function commandHeaders() {
@@ -23,4 +31,8 @@ export function commandHeaders() {
     "cache-control": "no-store",
     "x-beyonder-local-only": "true"
   };
+}
+
+export function getAuthToken(): Promise<string> {
+  return getOrCreateAuthToken();
 }

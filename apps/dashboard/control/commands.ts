@@ -36,7 +36,8 @@ export type ControlCommand =
   | { type: "setStartup"; enabled: boolean }
   | { type: "confirmApplication" | "confirmSubmission"; workRunId: string; externalReference?: string; notes?: string }
   | { type: "recordSettlement"; workRunId: string; amount: number; currency: "USD" | "USDC"; source: string; externalReference: string }
-  | { type: "setSecret"; providerId: string; envVar: string; value: string; vaultPassword: string };
+  | { type: "setSecret"; providerId: string; envVar: string; value: string; vaultPassword: string }
+  | { type: "getAuthToken" };
 
 const root = globalThis as typeof globalThis & { beyonderControl?: { stopping: boolean; emergency: boolean; shutdownResponseSent: boolean; active: number; controllers: Set<AbortController>; browsers: Set<ReturnType<typeof createRuntime>["browser"]>; serial: Promise<void> } };
 const lifecycle = root.beyonderControl ??= { stopping: false, emergency: false, shutdownResponseSent: false, active: 0, controllers: new Set(), browsers: new Set(), serial: Promise.resolve() };
@@ -112,6 +113,11 @@ async function dispatch(command: ControlCommand) {
       return recordEvidence(command);
     case "setSecret":
       return setSecret(command);
+    case "getAuthToken": {
+      const { getOrCreateAuthToken } = await import("./auth-token.js");
+      const token = await getOrCreateAuthToken();
+      return { ok: true, token };
+    }
   }
 }
 

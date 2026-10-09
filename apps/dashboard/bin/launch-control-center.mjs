@@ -63,7 +63,7 @@ async function supervise() {
     if (!existsSync(join(repoRoot, "apps/dashboard/.next/BUILD_ID"))) throw new Error("Execute pnpm control-center:build antes de abrir o Beyonder.");
     child = spawn(process.execPath, [join(repoRoot, "apps/dashboard/node_modules/next/dist/bin/next"), "start", "--hostname", "127.0.0.1", "--port", String(port)], {
       cwd: join(repoRoot, "apps/dashboard"), stdio: "inherit",
-      env: { ...process.env, BEYONDER_REPO_ROOT: repoRoot, BEYONDER_NODE_PATH: process.execPath, BEYONDER_DB_PATH: resolve(repoRoot, process.env.BEYONDER_DB_PATH ?? "data/beyonder.sqlite"), NODE_ENV: "production" }
+      env: { ...process.env, DOTENV_CONFIG_PATH: process.env.DOTENV_CONFIG_PATH ?? join(repoRoot, ".env"), BEYONDER_REPO_ROOT: repoRoot, BEYONDER_NODE_PATH: process.execPath, BEYONDER_DB_PATH: resolve(repoRoot, process.env.BEYONDER_DB_PATH ?? "data/beyonder.sqlite"), NODE_ENV: "production" }
     });
     writeFileSync(temporary, JSON.stringify({ pid: process.pid, childPid: child.pid, repoRoot }), { mode: 0o600 });
     renameSync(temporary, lockPath);
@@ -80,7 +80,7 @@ async function main() {
   if (process.argv.includes("--restart")) {
     const result = await health();
     if (result) {
-      const response = await fetch(`${url}/api/control/command`, { method: "POST", headers: { "content-type": "application/json", origin: url }, body: JSON.stringify({ type: "safeShutdown" }) });
+      const response = await fetch(`${url}/api/control/command`, { method: "POST", headers: { "content-type": "application/json", origin: url, authorization: `Bearer ${JSON.parse(readFileSync(join(process.env.BEYONDER_CONTROL_AUTH_DIR ?? join(homedir(), ".beyonder", "control-center"), "auth-token.json"), "utf8")).token}` }, body: JSON.stringify({ type: "safeShutdown" }) });
       if (!response.ok) throw new Error("Não foi possível solicitar parada segura.");
       for (let i = 0; i < 120 && running(); i++) await delay(500);
       if (running()) throw new Error("Aguardando conclusão da parada segura. Tente reiniciar depois.");

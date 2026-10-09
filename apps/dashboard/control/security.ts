@@ -1,28 +1,36 @@
 import type { NextRequest } from "next/server";
-import { assertValidAuthToken, validateAuthToken, getOrCreateAuthToken } from "./auth-token.js";
+import { assertValidAuthToken, validateAuthToken, getOrCreateAuthToken } from "./auth-token";
 
 const SAFE_HOSTS = new Set(["127.0.0.1", "localhost", "[::1]"]);
 
-export async function assertLocalRequest(request: NextRequest) {
+export class ControlAuthError extends Error {
+  constructor(message: string, readonly status = 401) { super(message); }
+}
+
+export function assertLocalOrigin(request: NextRequest) {
   const host = request.headers.get("host") ?? "";
   let hostname: string;
-  try { hostname = new URL(`http://${host}`).hostname; } catch { throw new Error("Host inválido."); }
+  try { hostname = new URL(`http://${host}`).hostname; } catch { throw new ControlAuthError("Host inválido.", 403); }
   if (!SAFE_HOSTS.has(hostname)) {
-    throw new Error("Control Center only accepts local requests.");
+    throw new ControlAuthError("Control Center only accepts local requests.", 403);
   }
   const origin = request.headers.get("origin");
   if (origin) {
     const parsed = new URL(origin);
     if (!SAFE_HOSTS.has(parsed.hostname) || parsed.host !== host) {
-      throw new Error("Origin is not allowed for Control Center commands.");
+      throw new ControlAuthError("Origin is not allowed for Control Center commands.", 403);
     }
   }
 
-  // Validate auth token for mutating operations
-  const token = assertValidAuthToken(request);
+}
+
+export async function assertLocalRequest(request: NextRequest) {
+  assertLocalOrigin(request);
+  let token: string;
+  try { token = assertValidAuthToken(request); } catch { throw new ControlAuthError("Authentication required"); }
   const isValid = await validateAuthToken(token);
   if (!isValid) {
-    throw new Error("Invalid or expired authentication token");
+    throw new ControlAuthError("Invalid or expired authentication token");
   }
 }
 

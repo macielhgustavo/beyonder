@@ -1,10 +1,9 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile, chmod } from "node:fs/promises";
 
-const TOKEN_DIR = join(homedir(), ".beyonder", "control-center");
-const TOKEN_FILE = join(TOKEN_DIR, "auth-token.json");
+function tokenFile() { return join(process.env.BEYONDER_CONTROL_AUTH_DIR ?? join(homedir(), ".beyonder", "control-center"), "auth-token.json"); }
 
 export interface AuthToken {
   token: string;
@@ -13,14 +12,19 @@ export interface AuthToken {
 }
 
 export async function getOrCreateAuthToken(): Promise<string> {
+  const TOKEN_FILE = tokenFile();
+  const TOKEN_DIR = join(TOKEN_FILE, "..");
   try {
     const data = await readFile(TOKEN_FILE, "utf-8");
     const stored: AuthToken = JSON.parse(data);
+    await chmod(TOKEN_FILE, 0o600);
+    if (!/^[a-f0-9]{64}$/.test(stored.token)) throw new Error("Invalid token file");
     if (stored.expiresAt && new Date(stored.expiresAt) < new Date()) {
       throw new Error("Token expired");
     }
     return stored.token;
-  } catch {
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     // Generate new token
     const token = randomBytes(32).toString("hex");
     const authToken: AuthToken = {
@@ -28,8 +32,13 @@ export async function getOrCreateAuthToken(): Promise<string> {
       createdAt: new Date().toISOString(),
       expiresAt: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString() // 1 year
     };
-    await mkdir(TOKEN_DIR, { recursive: true });
-    await writeFile(TOKEN_FILE, JSON.stringify(authToken, null, 2), { mode: 0o600 });
+    await mkdir(TOKEN_DIR, { recursive: true, mode: 0o700 });
+    try {
+      await writeFile(TOKEN_FILE, JSON.stringify(authToken, null, 2), { mode: 0o600, flag: "wx" });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") return getOrCreateAuthToken();
+      throw error;
+    }
     return token;
   }
 }
@@ -40,7 +49,7 @@ export function hashToken(token: string): string {
 
 export async function validateAuthToken(providedToken: string): Promise<boolean> {
   const storedToken = await getOrCreateAuthToken();
-  return hashToken(providedToken) === hashToken(storedToken);
+  return timingSafeEqual(Buffer.from(hashToken(providedToken), "hex"), Buffer.from(hashToken(storedToken), "hex"));
 }
 
 export function extractAuthToken(request: Request): string | undefined {
@@ -67,8 +76,4 @@ export function authHeaders(token: string) {
     "authorization": `Bearer ${token}`,
     "x-beyonder-auth": token
   };
-}
-
-export function getAuthTokenForUI(): Promise<string> {
-  return getOrCreateAuthToken();
 }

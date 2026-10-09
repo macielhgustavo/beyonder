@@ -12,7 +12,7 @@ for (const test of [
   { host: "127.0.0.1:4187", origin: base, contentType: "application/json", body: { type: "setSecret", providerId: "groq", envVar: "PATH", value: "test-key", vaultPassword: "test-passphrase" } }
 ]) {
   const response = await POST(new NextRequest(`${base}/api/control/command`, { method: "POST", headers: { host: test.host, origin: test.origin, "content-type": test.contentType }, body: JSON.stringify(test.body) }));
-  if (response.status !== 400 || (await response.json()).ok !== false || response.headers.has("access-control-allow-origin")) throw new Error("Unsafe request accepted");
+  if (![400, 401, 403].includes(response.status) || (await response.json()).ok !== false || response.headers.has("access-control-allow-origin")) throw new Error("Unsafe request accepted");
 }
 console.log(JSON.stringify({ status: "PASS", checks: 7, monetaryCostUsd: 0 }));
 

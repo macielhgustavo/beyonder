@@ -16,8 +16,7 @@ export const commandSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("setSecret"), providerId: id, envVar: id, value: z.string().min(1).max(16384), vaultPassword: z.string().min(12).max(256) }).strict(),
   z.object({ type: z.literal("confirmApplication"), workRunId: id, externalReference: z.string().max(1000).optional(), notes: note }).strict(),
   z.object({ type: z.literal("confirmSubmission"), workRunId: id, externalReference: z.string().max(1000).optional(), notes: note }).strict(),
-  z.object({ type: z.literal("recordSettlement"), workRunId: id, amount: z.number().finite().positive(), currency: z.enum(["USD", "USDC"]), source: id, externalReference: z.string().min(1).max(1000) }).strict(),
-  simple("getAuthToken")
+  z.object({ type: z.literal("recordSettlement"), workRunId: id, amount: z.number().finite().positive(), currency: z.enum(["USD", "USDC"]), source: id, externalReference: z.string().min(1).max(1000) }).strict()
 ]);
 export function validateCommand(value: unknown) {
   const command = commandSchema.parse(value);

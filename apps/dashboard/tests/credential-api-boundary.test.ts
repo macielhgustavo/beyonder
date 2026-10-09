@@ -1,12 +1,15 @@
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { POST } from '../app/api/control/command/route';
+import { getAuthToken } from '../control/security';
+let authToken: string;
+beforeAll(async () => { authToken = await getAuthToken(); });
 const secret='opaque-secret-with-no-known-prefix';
 afterEach(()=>vi.unstubAllEnvs());
-function request(body:string){return new NextRequest('http://127.0.0.1:4187/api/control/command',{method:'POST',headers:{host:'127.0.0.1:4187',origin:'http://127.0.0.1:4187','content-type':'application/json'},body});}
+function request(body:string){return new NextRequest('http://127.0.0.1:4187/api/control/command',{method:'POST',headers:{host:'127.0.0.1:4187',origin:'http://127.0.0.1:4187','content-type':'application/json',authorization:`Bearer ${authToken}`},body});}
 it.each([secret,JSON.stringify({type:'recordSettlement',workRunId:'test',amount:1,currency:secret,source:'test',externalReference:'test'})])('API validation never echoes opaque secret values or JSON parser snippets',async body=>{
  const response=await POST(request(body));expect(response.status).toBe(400);const payload=await response.text();expect(payload).not.toContain(secret.slice(0,10));expect(payload).not.toContain(secret);
 });

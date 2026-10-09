@@ -23,3 +23,12 @@ describe("Control Center HTTP security", () => {
     }))).rejects.toThrow();
   });
 });
+
+it("rejects absent and incorrect tokens without echoing them", async () => {
+  for (const token of [undefined, "invalid-secret-value"]) {
+    const request = new NextRequest("http://127.0.0.1:4187/api/control/command", {
+      headers: { host: "127.0.0.1:4187", ...(token ? { authorization: `Bearer ${token}` } : {}) }
+    });
+    await expect(assertLocalRequest(request)).rejects.toMatchObject({ status: 401 });
+  }
+});

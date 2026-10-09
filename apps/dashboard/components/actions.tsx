@@ -1,4 +1,5 @@
 "use client";
+import { controlAuthHeaders } from "./control-authentication";
 
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
@@ -148,7 +149,7 @@ export function SecretForm({ providerId, envVar }: { providerId: string; envVar:
 async function command(payload: Command): Promise<Record<string, unknown> & { ok?: boolean; error?: unknown }> {
   const response = await fetch("/api/control/command", {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: { "content-type": "application/json", ...controlAuthHeaders() },
     body: JSON.stringify(payload)
   });
   return await response.json() as Record<string, unknown> & { ok?: boolean; error?: unknown };

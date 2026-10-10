@@ -62,6 +62,25 @@ function fakeRouter(models: string[], complete: (system: string, model: string) 
 }
 
 describe("objective verification truth", () => {
+  it("accepts the observed recommendation alias only when the strict verdict remains valid", async () => {
+    const { router, complete } = fakeRouter(["verifier"], () => JSON.stringify({
+      satisfied: true, confidence: 0.9, relevance: true, completeness: true,
+      consistentWithEvidence: true, reason: "The comparison is supported.",
+      missingRequirements: [], recommendation: "NONE"
+    }));
+    expect(await new ModelObjectiveVerifier(router).evaluate(execution(comparisonTask(), "Queues buffer work; append-only logs retain events and support replay."))).toMatchObject({ taskCompleted: true, objectiveStatus: "SUCCEEDED" });
+    expect(complete).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects a conflicting recommendation alias instead of silently choosing a verdict", async () => {
+    const { router } = fakeRouter(["verifier"], () => JSON.stringify({
+      satisfied: true, confidence: 0.9, relevance: true, completeness: true,
+      consistentWithEvidence: true, reason: "The comparison is supported.",
+      missingRequirements: [], recommendation: "NONE", recoveryRecommendation: "RETRY_SYNTHESIS"
+    }));
+    expect(await new ModelObjectiveVerifier(router).evaluate(execution(comparisonTask(), "Queues buffer work; append-only logs retain events and support replay."))).toMatchObject({ taskCompleted: false, objectiveStatus: "NEEDS_CAPABILITY" });
+  });
+
   it.each(["Qual é a capital do Canadá?", "O que significa HTTP 410?", "Para que serve uma chave primária em SQL?"])("independently verifies static factual relevance for %s", async (input) => {
     const task = { ...comparisonTask(), input, type: "chat" as const, requirements: { directResponse: true }, goalContract: analyzeGoalContract(input, "chat") };
     const { router } = fakeRouter(["producer", "verifier"], () => JSON.stringify({ satisfied: false, confidence: 0.95, relevance: false, completeness: false, consistentWithEvidence: true, reason: "Neighboring answer is irrelevant", missingRequirements: ["relevant-answer"], recoveryRecommendation: "NONE" }));

@@ -247,9 +247,15 @@ function requiresSemanticVerification(execution: TaskExecution, criteria: Comple
 }
 
 function semanticVerdict(value: Record<string, unknown>): SemanticVerdict {
-  const allowed = new Set(["satisfied", "confidence", "relevance", "completeness", "consistentWithEvidence", "reason", "missingRequirements", "recoveryRecommendation"]);
-  if (Object.keys(value).some((key) => !allowed.has(key))) throw new InferenceError("Verifier returned unexpected fields.", "INVALID_OUTPUT");
   const normalized = { ...value };
+  // Observed free verifiers sometimes use this single alias while returning
+  // every substantive verdict field. Normalize it before strict validation.
+  if (Object.hasOwn(normalized, "recommendation") && !Object.hasOwn(normalized, "recoveryRecommendation")) {
+    normalized.recoveryRecommendation = normalized.recommendation;
+    delete normalized.recommendation;
+  }
+  const allowed = new Set(["satisfied", "confidence", "relevance", "completeness", "consistentWithEvidence", "reason", "missingRequirements", "recoveryRecommendation"]);
+  if (Object.keys(normalized).some((key) => !allowed.has(key))) throw new InferenceError("Verifier returned unexpected fields.", "INVALID_OUTPUT");
   if (typeof normalized.confidence === "number" && normalized.confidence > 1 && normalized.confidence <= 100) normalized.confidence /= 100;
   const recommendations: RecoveryRecommendation[] = ["NONE", "ACQUIRE_EVIDENCE", "RETRY_SYNTHESIS", "ALTERNATE_MODEL", "REQUEST_INPUT", "ENABLE_CAPABILITY", "RECONCILE"];
   if (typeof normalized.satisfied !== "boolean" || typeof normalized.relevance !== "boolean" || typeof normalized.completeness !== "boolean" || typeof normalized.consistentWithEvidence !== "boolean" || typeof normalized.reason !== "string" || typeof normalized.confidence !== "number" || !Number.isFinite(normalized.confidence) || normalized.confidence < 0 || normalized.confidence > 1 || !Array.isArray(normalized.missingRequirements) || !normalized.missingRequirements.every((item) => typeof item === "string") || !recommendations.includes(normalized.recoveryRecommendation as RecoveryRecommendation)) throw new InferenceError("Verifier returned an invalid structured verdict.", "INVALID_OUTPUT");

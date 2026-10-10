@@ -198,7 +198,9 @@ export class AdaptiveModelSelector {
         source: capabilityEvidence.source
       });
 
-      const quota = await this.quotaSource.get(pair.entry.providerId, pair.model);
+      const quota = this.quotaSource instanceof AutopilotQuotaSource
+        ? this.quotaSource.getFromState(pair.entry.providerId, pair.model, state)
+        : await this.quotaSource.get(pair.entry.providerId, pair.model);
       if (quota.health === "unknown") quota.health = pair.entry.status === "keyless" ? "keyless" : "healthy";
       await this.telemetry("debug", "quota.updated", { provider: pair.entry.providerId, model: pair.model, quota });
 

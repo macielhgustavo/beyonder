@@ -2,13 +2,13 @@ import { fixtureZeroCost } from './testing/zero-cost-fixture.js';
 import { mkdtemp, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AutopilotStateStore } from "@beyonder/compute";
 import type { IntelligenceTask } from "../intelligence/contracts.js";
 import { AdaptiveModelSelector } from "./adaptive-selector.js";
 import type { ModelCapabilityEvidence, ModelCapabilityRequest, ModelCapabilitySource } from "./capability-source.js";
 import type { PerformanceRepository } from "./performance-repository.js";
-import type { QuotaSource } from "./quota.js";
+import { AutopilotQuotaSource, type QuotaSource } from "./quota.js";
 import type { HistoricalPerformance, QuotaSnapshot, RouterTelemetry } from "./adaptive-types.js";
 import type { RandomSource } from "./random.js";
 
@@ -164,6 +164,18 @@ describe("AdaptiveModelSelector", () => {
       expect(values).toContain("groq");
       expect(values.length).toBe(new Set(values).size);
     }
+  });
+
+  it("does not reread persistent quota state for each scored candidate", async () => {
+    const path = await providerStatePathFor({ groq: ["llama-3.3-70b-versatile", "openai/gpt-oss-20b"] });
+    const quotaSource = new AutopilotQuotaSource(path);
+    const read = vi.spyOn(quotaSource, "get");
+    const route = await new AdaptiveModelSelector(path, {
+      economicEvidence: async (provider, model) => fixtureZeroCost(provider, model),
+      quotaSource
+    }).route(task({ type: "chat", requirements: { directResponse: true } }), "normal");
+    expect(route.candidates.filter(candidate => candidate.provider === "groq").length).toBeGreaterThanOrEqual(2);
+    expect(read).not.toHaveBeenCalled();
   });
 
   it("summarizes cost rejections while retaining each rejected candidate in the route", async () => {

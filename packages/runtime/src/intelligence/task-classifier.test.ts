@@ -21,7 +21,7 @@ describe("TaskClassifier", () => {
     expect(contract.requiredCapabilities).toContain("coding");
   });
 
-  it.each(["Qual é a versão estável atual do Python?", "Qual é a versão atual do TypeScript?", "Compare as versões atuais de JavaScript e Python com fontes oficiais."])("does not require coding capacity for current software knowledge: %s", input => {
+  it.each(["Qual é a versão estável atual do Python?", "Qual é a versão atual do TypeScript?", "Compare as versões atuais de JavaScript e Python com fontes oficiais.", "Compare TIOBE e Stack Overflow atuais sobre linguagens: explique metodologia e por que os resultados podem discordar."])("does not require coding capacity for current software knowledge: %s", input => {
     const type = classifier.classify(input);
     expect(type).toBe("research");
     expect(new ComplexityEstimator().estimate(input, type).requirements).toMatchObject({ coding: false, browser: true, reasoning: true });

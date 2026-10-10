@@ -95,7 +95,9 @@ export class TaskClassifier {
       return match ? [{ rule, position: match.index }] : [];
     })).sort((a, b) => a.position - b.position);
     const contract = analyzeGoalContract(input, "chat");
-    if (contract.evidenceRequirement === "REQUIRED" && (operations.length > 0 || /^(?:qual|quais|quem|quando|onde|o que|what|which|who|when|where)\b/i.test(instruction)) && !["CODING", "PLANNING"].includes(contract.primaryIntent)) return "research";
+    if (contract.evidenceRequirement === "REQUIRED" &&
+        (operations.length > 0 || contract.primaryIntent === "COMPARISON" || /^(?:qual|quais|quem|quando|onde|o que|what|which|who|when|where)\b/i.test(instruction)) &&
+        !["CODING", "PLANNING"].includes(contract.primaryIntent)) return "research";
     for (const { rule } of operations) {
       if (rule.type === "coding") {
         // Language/software names are topic clues, not coding requirements.

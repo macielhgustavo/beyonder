@@ -94,3 +94,5 @@ export {
   SqliteCapabilityStore
 } from "./store/mission-store.js";
 export type { MissionStore } from "./store/mission-store.js";
+export { MissionOrchestrator, recoverMissionOnRestart } from "./orchestrator/mission-orchestrator.js";
+export type { MissionEventRecorder } from "./orchestrator/mission-orchestrator.js";

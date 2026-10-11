@@ -308,7 +308,7 @@ describe("Phase 3: Live Paid Canary Execution (V06_LIVE_CANARY_READY)", () => {
     const freeCandidate = createFreeCandidate();
 
     const complete = vi.fn()
-      .mockRejectedValueOnce(new InferenceError("Provider returned HTTP 500.", "PROVIDER_UNAVAILABLE", 500))
+      .mockRejectedValueOnce(new InferenceError("Provider returned HTTP 401 Unauthorized.", "AUTH_REQUIRED", 401))
       .mockResolvedValueOnce({
         provider: "groq",
         model: "llama-3.3-70b-versatile",

@@ -13,7 +13,14 @@ import type { RandomSource } from "./random.js";
 import { MathRandomSource } from "./random.js";
 import { ROUTER_CONFIG, getEconomicRoutingPolicy } from "./router-config.js";
 import { ShadowCostCalculator } from "./shadow-cost.js";
-import { calculateEffectiveResourceCost, calculateUtility, resolveMonetaryReference } from "./utility.js";
+import {
+  calculateEffectiveResourceCost,
+  calculateUtility,
+  resolveMonetaryReference,
+  type MonetaryReferencePriors,
+  type MonetaryReferenceResolver,
+  type MonetaryReferenceContext
+} from "./utility.js";
 import { discoverOllama } from "./ollama-discovery.js";
 import type { PricingRegistry, PricingSnapshot } from "../economy/pricing-registry.js";
 import { type CostEstimator, DefaultCostEstimator } from "../economy/cost-estimator.js";
@@ -47,6 +54,9 @@ export interface AdaptiveSelectorOptions {
   maxSingleInferenceUsd?: number;
   allowedPaidProviders?: string[];
   monetaryReferenceUsd?: number;
+  monetaryReferencePriors?: MonetaryReferencePriors;
+  monetaryReferenceResolver?: MonetaryReferenceResolver;
+  monetaryReferenceContext?: Partial<MonetaryReferenceContext>;
 }
 
 type InventoryEntry = ReturnType<typeof buildComputeInventory>[number];
@@ -215,9 +225,9 @@ export class AdaptiveModelSelector {
           worstCaseCostUsd = microsToUsd(costEstimate.worstCaseCostMicros);
 
           let affordable = true;
-          const phase = task.inferencePhase === "OBJECTIVE_VERIFICATION"
+          const phase: "producer" | "verifier" | "recovery" = task.inferencePhase === "OBJECTIVE_VERIFICATION"
             ? "verifier"
-            : task.inferencePhase === "REPLANNING"
+            : (task.inferencePhase as string) === "REPLANNING"
             ? "recovery"
             : "producer";
           const budgetScope = { objectiveId: task.id, phase };
@@ -372,7 +382,14 @@ export class AdaptiveModelSelector {
         structuredOutput: "unknown" as const
       };
       const structuredPenalty = task.requirements.structuredOutput && metadata?.structuredOutput !== "native" ? metadata?.structuredOutput === "prompted" ? 0.02 : 0.08 : 0;
-      const monetaryReferenceUsd = this.options.monetaryReferenceUsd ?? resolveMonetaryReference(task);
+      const monetaryReferenceUsd = this.options.monetaryReferenceUsd ?? resolveMonetaryReference(
+        {
+          task,
+          ...this.options.monetaryReferenceContext
+        },
+        this.options.monetaryReferencePriors,
+        this.options.monetaryReferenceResolver
+      );
       const utility = calculateUtility({
         predictedQuality,
         historicalSuccess: performance.successRate,

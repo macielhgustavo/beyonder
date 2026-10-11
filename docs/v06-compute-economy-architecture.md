@@ -1,11 +1,13 @@
 # Beyonder v0.6 — Autonomous Compute Economy Architecture
 
 ## Status
-**PHASE 4 COMPLETE** — Full Multi-Provider Economy (`V06_FULL_ECONOMY_READY=true`)
+**V0.6 ADVERSARIALLY QUALIFIED & FROZEN** (`V06_ECONOMIC_SAFETY_FROZEN=true`)
 - Phase 1: Economic Foundation Ready (`V06_ECONOMIC_FOUNDATION_READY=true`)
 - Phase 2: Shadow Paid Routing & Pricing Discovery Ready (`V06_SHADOW_ROUTING_READY=true`)
-- Phase 3: Live Paid Canary Execution Ready (`V06_LIVE_CANARY_READY=true`)
+- Phase 3: Paid Execution Path Ready (`PAID_EXECUTION_PATH_READY=true`, `LIVE_PAID_VALIDATED=false`, `REAL_PAID_REQUEST_EXECUTED=false`, `ACTUAL_PAID_SPEND_USD=0.00`)
 - Phase 4: Full Multi-Provider Economy Ready (`V06_FULL_ECONOMY_READY=true`)
+- Development Policy: Zero Real Spend Enforced (`PAID_EXECUTION_ENABLED=false`)
+- Adversarial Qualification: Complete (`PHASE_BUDGET_MATH_SAFE=true`, `UNKNOWN_OUTCOME_SAFE=true`, `MULTI_PROVIDER_BILLING_SAFE=true`, `MONETARY_REFERENCE_BOOTSTRAP_ONLY=true`, `ROLE_AWARE_LEARNING_SAFE=true`, `FALSE_SUCCESS_POISONING_BLOCKED=true`, `PAID_SPECULATIVE_EXECUTION_DISABLED=true`, `ZERO_COST_DEVELOPMENT_POLICY_ENFORCED=true`)
 
 ## Base Commit
 `6ddea2a` on `origin/main` (stable v0.5 HEAD).

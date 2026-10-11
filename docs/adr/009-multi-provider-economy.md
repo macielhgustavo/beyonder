@@ -27,27 +27,30 @@ To operate a production compute economy safely and autonomously, the runtime mus
   3. A new reservation is atomically acquired for the fallback candidate.
   4. Upon successful completion, only the actual cost of the winning candidate is settled.
 
-### 2. Hierarchical Phase Budget Allocation
-Every objective budget account is partitioned into sub-accounts corresponding to execution phases, enforcing hard limits:
+### 2. Hierarchical Phase Budget Allocation (Overcommit-Proof)
+Every objective budget account is partitioned into sibling accounts and subbudgets, guaranteeing `sum(reservableHardCommitments) <= objectiveHardCap`:
 - **Producer Phase:** 60% of objective hard cap (`derivePhaseCap("producer", cap)`).
 - **Verifier Phase:** 25% of objective hard cap (`derivePhaseCap("verifier", cap)`).
 - **Recovery / Replanning Phase:** 15% of objective hard cap (`derivePhaseCap("recovery", cap)`).
-- **Adjudication Phase:** 10% of objective hard cap (`derivePhaseCap("adjudication", cap)`).
+- **Adjudication Phase (Subbudget):** Explicitly modeled as a child account of `verifier`, capped at 40% of the verifier cap (`derivePhaseCap("adjudication", verifierCap)` = 10% of total objective cap).
 
-In both live routing (`canAfford`) and shadow routing (`canAffordHypothetical`), worst-case costs are checked against the phase-specific budget account (`phase:${objectiveId}:${phase}`). A candidate whose worst-case cost exceeds its phase ceiling is rejected with `NEEDS_BUDGET`, preventing a runaway producer from starving subsequent verification or recovery phases.
+Because sibling hard caps ($60\% + 25\% + 15\% = 100\%$) and subbudgets use integer floor arithmetic, hard commitments across sibling phases can never exceed 100% of the parent objective hard cap.
 
-### 3. Task Value-Aware Reference Scaling
-In economic utility scoring, the hyperbolic cost normalization reference parameter (`monetaryReferenceUsd`) is dynamically scaled per task:
-- **Routine Chat / Extraction (`complexity <= 0.4` or `type: "chat"`):** $\text{Reference} = \$0.05$. Cheap paid ($<\$0.001$) and free models outcompete expensive models, penalizing marginal gains heavily.
-- **Standard Tasks (`0.4 < complexity < 0.8`):** $\text{Reference} = \$0.10$. Balanced cost/quality trade-off.
-- **High-Complexity Tasks (`complexity >= 0.8`, coding, reasoning):** $\text{Reference} = \$0.25$. Elevated reference permits frontier models (e.g., Claude 3.5 Sonnet, DeepSeek R1) with material capability advantages ($+30\%$) to legitimately win.
-- **Objective Verification (`inferencePhase: "OBJECTIVE_VERIFICATION"`):** $\text{Reference} = \$0.50$. Maximizes verifier accuracy and safety evidence.
+### 3. Dispatch Failure Lifecycle & Speculative Concurrency Control
+- **Speculative Billable Concurrency:** Speculative racing is disabled (`numberOfConcurrentBillableDispatchesPerDecision <= 1`).
+- **Failure Classification:**
+  - `PRE_DISPATCH`: Candidate rejected before transmission $\rightarrow$ `release()`.
+  - `CONFIRMED_NOT_BILLED`: Upstream gateway explicitly rejects before model execution (HTTP 400, 401, 403, 404, 405, 422) $\rightarrow$ `release()`.
+  - `CONFIRMED_BILLED`: Provider reports actual incurred charge $\rightarrow$ `settle()`.
+  - `UNKNOWN_AFTER_DISPATCH`: Any uncertainty after socket write (timeout, socket reset, ECONNRESET, HTTP 500/502/503/504, response lost, malformed JSON, process crash) $\rightarrow$ `UNKNOWN_OUTCOME` via `budgetAccountant.markUnknown()`. The conservative commitment remains locked and can never be reused or spent as available capital.
 
-### 4. Closed-Loop Cost/Quality Learning
-- Task completion records structured outcomes via `memoryEngine.recordOutcome()` and `modelRouter.recordOutcome()`, appending an economic memory entry containing `provider`, `model`, `taskType`, `success`, `evaluationScore`, `latencyMs`, and `monetaryCostUsd`.
-- `MemoryPerformanceRepository.get(provider, model, taskType)` dynamically aggregates these empirical observations into `HistoricalPerformance`.
-- `predictCapability()` blends benchmark priors with real-world observed success rates and evaluation scores.
-- Models with consistent high-quality execution gain positive ranking reinforcement; models exhibiting failures, invalid outputs, or high latency receive increased failure risk and lower utility.
+### 4. Monetary Reference Decoupling (Bootstrap Priors & Context Seam)
+Reference values ($0.05, $0.10, $0.25, $0.50) are treated as cold-start priors (`DEFAULT_MONETARY_REFERENCE_PRIORS`) rather than universal economic truths. An architectural seam (`MonetaryReferenceContext`, `MonetaryReferenceResolver`) allows dynamic resolution based on remaining budget, objective value, mission value, risk, and historical marginal utility.
+
+### 5. Closed-Loop Learning & False-Success Protection
+- Outome taxonomy: `VERIFIED_SUCCESS`, `UNVERIFIED_SUCCESS`, `FALSE_SUCCESS`, `REJECTED`, `SYSTEM_FAILURE`.
+- **False-Success Poisoning Blocked:** When a candidate claims success but evaluation fails, it is classified as `FALSE_SUCCESS`. Positive reinforcement is strictly blocked; it is counted as a failure (`failures += 1`).
+- **Role Segregation:** Performance records preserve role (`producer` vs `verifier`), provider, physical model, task class, verification confidence, and source. Producer and verifier performance are never merged blindly.
 
 ---
 

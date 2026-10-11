@@ -22,9 +22,59 @@ export interface InferenceAttempt {
   attribution?: ModelResponse["attribution"];
   failureScope?: "provider" | "model";
 }
+export type DispatchBillingStatus =
+  | "PRE_DISPATCH"
+  | "CONFIRMED_NOT_BILLED"
+  | "CONFIRMED_BILLED"
+  | "UNKNOWN_AFTER_DISPATCH";
+
+export const MAX_CONCURRENT_BILLABLE_DISPATCHES_PER_DECISION = 1;
+
 export class InferenceError extends Error {
-  constructor(message: string, readonly failureClass: FailureClass, readonly httpStatus?: number, readonly responseBody?: string, readonly retryAfterAt?: string, readonly failureScope?: "provider" | "model", readonly upstreamHttpStatus?: number, readonly reportedMonetaryCostUsd?: number) { super(message); }
+  constructor(
+    message: string,
+    readonly failureClass: FailureClass,
+    readonly httpStatus?: number,
+    readonly responseBody?: string,
+    readonly retryAfterAt?: string,
+    readonly failureScope?: "provider" | "model",
+    readonly upstreamHttpStatus?: number,
+    readonly reportedMonetaryCostUsd?: number,
+    readonly billingStatus?: DispatchBillingStatus
+  ) {
+    super(message);
+  }
 }
+
+export function classifyDispatchBillingStatus(
+  error: unknown,
+  isDispatched: boolean
+): DispatchBillingStatus {
+  if (!isDispatched) {
+    return "PRE_DISPATCH";
+  }
+
+  if (error && typeof error === "object" && "billingStatus" in error) {
+    const custom = (error as { billingStatus?: DispatchBillingStatus }).billingStatus;
+    if (custom) return custom;
+  }
+
+  const err = classifyFailure(error);
+  if (err.reportedMonetaryCostUsd !== undefined && err.reportedMonetaryCostUsd > 0) {
+    return "CONFIRMED_BILLED";
+  }
+
+  const status = err.httpStatus ?? err.upstreamHttpStatus;
+  if (status !== undefined) {
+    // Rejections confirmed at the gateway before model execution:
+    if ([400, 401, 403, 404, 405, 422].includes(status)) {
+      return "CONFIRMED_NOT_BILLED";
+    }
+  }
+
+  return "UNKNOWN_AFTER_DISPATCH";
+}
+
 export function classifyFailure(error: unknown): InferenceError {
   if (error instanceof InferenceError) return error;
   const message = redactString(error instanceof Error ? error.message : String(error)).slice(0, 1000);
@@ -167,6 +217,7 @@ export async function runCandidates<T>(input: {
   const candidates = input.candidates.filter(candidate => !candidate.local || isAcceptableLocalFallback(candidate));
   let remoteAttempts = 0;
   let localAttempts = 0;
+  let activeBillableDispatches = 0;
 
   const unavailableModels = new Map<string, Set<string>>();
   for (let index = 0; index < candidates.length; index++) {
@@ -287,10 +338,23 @@ export async function runCandidates<T>(input: {
     let timer: ReturnType<typeof setTimeout> | undefined;
     let response: ModelResponse | undefined;
 
+    let isDispatched = false;
+    if (isPaidCandidate) {
+      if (activeBillableDispatches >= MAX_CONCURRENT_BILLABLE_DISPATCHES_PER_DECISION) {
+        if (reservation) input.budgetAccountant?.release(reservation.id, "Speculative billable dispatch limit reached");
+        throw new InferenceError(
+          `Billable speculative parallelism is disabled: active billable dispatches (${activeBillableDispatches}) exceeds limit (${MAX_CONCURRENT_BILLABLE_DISPATCHES_PER_DECISION}).`,
+          "ECONOMIC_POLICY_BLOCKED"
+        );
+      }
+      activeBillableDispatches++;
+    }
+
     // Immediately before HTTP dispatch, mark in-flight
     if (reservation) {
       input.budgetAccountant?.markSent(reservation.id);
     }
+    isDispatched = true;
 
     try {
       response = await Promise.race([input.complete(input.messages, candidate, controller.signal), new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new InferenceError("Inference deadline exceeded.", "TIMEOUT")); }, Math.max(1, input.maxDurationMs - (Date.now() - start))); })]);
@@ -354,18 +418,23 @@ export async function runCandidates<T>(input: {
     } catch (error) {
       last = classifyFailure(error);
       if (reservation) {
-        if (last.reportedMonetaryCostUsd !== undefined && last.reportedMonetaryCostUsd > 0) {
+        const billingStatus = classifyDispatchBillingStatus(error, isDispatched);
+        if (billingStatus === "CONFIRMED_BILLED") {
           try {
             input.budgetAccountant?.settle({
               reservationId: reservation.id,
-              actualCostMicros: usdToMicros(last.reportedMonetaryCostUsd),
-              providerReportedCostUsd: last.reportedMonetaryCostUsd
+              actualCostMicros: usdToMicros(last.reportedMonetaryCostUsd ?? 0),
+              providerReportedCostUsd: last.reportedMonetaryCostUsd ?? 0
             });
           } catch { /* already settled */ }
-        } else {
+        } else if (billingStatus === "CONFIRMED_NOT_BILLED" || billingStatus === "PRE_DISPATCH") {
           try {
             input.budgetAccountant?.release(reservation.id, last.message);
           } catch { /* already settled or released */ }
+        } else {
+          try {
+            input.budgetAccountant?.markUnknown(reservation.id, last.message);
+          } catch { /* already marked unknown */ }
         }
         reservation = null;
       }
@@ -391,6 +460,9 @@ export async function runCandidates<T>(input: {
       Object.assign(attempt, { status: "FAILED", failureClass: last.failureClass, failureScope: last.failureScope, httpStatus: last.httpStatus, upstreamHttpStatus: last.upstreamHttpStatus, error: last.message, responseBody: last.responseBody, retryAfterAt: last.retryAfterAt });
       if (last.failureClass === 'ECONOMIC_POLICY_BLOCKED') throw last;
     } finally {
+      if (isPaidCandidate && isDispatched) {
+        activeBillableDispatches = Math.max(0, activeBillableDispatches - 1);
+      }
       if (timer) clearTimeout(timer);
       attempt.completedAt = new Date().toISOString();
       attempt.latencyMs = Date.now() - Date.parse(attempt.startedAt);

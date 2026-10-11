@@ -119,7 +119,13 @@ export class BudgetAccountant {
   ): boolean {
     if (worstCaseMicros === 0) return true;
     const targetCap = hypotheticalObjectiveCapMicros ?? this.config.defaultObjectiveHardCapMicros;
-    const effectiveCap = scope.phase ? derivePhaseCap(scope.phase, targetCap) : targetCap;
+    let effectiveCap = targetCap;
+    if (scope.phase === "adjudication") {
+      const verifierCap = derivePhaseCap("verifier", targetCap);
+      effectiveCap = derivePhaseCap("adjudication", verifierCap);
+    } else if (scope.phase) {
+      effectiveCap = derivePhaseCap(scope.phase, targetCap);
+    }
     if (worstCaseMicros > effectiveCap) return false;
     if (this.config.maxSingleInferenceMicros && worstCaseMicros > this.config.maxSingleInferenceMicros) {
       return false;
@@ -447,6 +453,41 @@ export class BudgetAccountant {
   }
 
   /**
+   * Transition an in-flight reservation (REQUEST_SENT) to UNKNOWN_OUTCOME.
+   * Keeps the conservative worst-case reservation locked in budget_accounts
+   * so the capital CANNOT be reused or overspent until external reconciliation.
+   *
+   * @see Invariant 1, Invariant 2, Threat T-3
+   */
+  markUnknown(reservationId: string, reason: string): void {
+    const markUnknownTx = this.sqlite.transaction(() => {
+      const row = this.sqlite
+        .prepare("SELECT * FROM spend_reservations WHERE id = ?")
+        .get(reservationId) as Record<string, unknown> | undefined;
+
+      if (!row) throw new Error(`Reservation '${reservationId}' not found`);
+      const reservation = mapReservationRow(row);
+      if (reservation.state === "UNKNOWN_OUTCOME") {
+        return;
+      }
+      assertReservationTransition(reservation.state, "UNKNOWN_OUTCOME");
+
+      const timestamp = this.now();
+      this.sqlite
+        .prepare(`
+          UPDATE spend_reservations
+          SET state = 'UNKNOWN_OUTCOME',
+              error = ?,
+              settled_at = ?
+          WHERE id = ?
+        `)
+        .run(reason, timestamp, reservationId);
+    });
+
+    markUnknownTx();
+  }
+
+  /**
    * Crash recovery on startup.
    *
    * Scans for reservations left in non-terminal states from a prior process run:
@@ -640,7 +681,10 @@ export class BudgetAccountant {
     hierarchy.push(dayId);
     hierarchy.push(objId);
 
-    if (scope.phase) {
+    if (scope.phase === "adjudication") {
+      hierarchy.push(`phase:${scope.objectiveId}:verifier`);
+      hierarchy.push(`phase:${scope.objectiveId}:adjudication`);
+    } else if (scope.phase) {
       hierarchy.push(`phase:${scope.objectiveId}:${scope.phase}`);
     }
 
@@ -675,11 +719,22 @@ export class BudgetAccountant {
         timestamp
       );
     } else if (id.startsWith("phase:")) {
+      const parts = id.split(":");
+      const phaseName = parts[2] as BudgetScope["phase"];
       const objId = `objective:${scope.objectiveId}`;
-      const parent = this.getOrCreateAccount(objId, scope);
-      // Allocate phase cap proportionally: e.g. verifier gets 25%, recovery gets 15%, etc.
-      const phaseCap = derivePhaseCap(scope.phase, parent.hardCapMicros);
-      this.insertAccount(id, "phase", objId, phaseCap, ZERO_MICROS, timestamp);
+      if (phaseName === "adjudication") {
+        // Adjudication is explicitly a subbudget of verifier
+        const verifierAccount = this.getOrCreateAccount(`phase:${scope.objectiveId}:verifier`, scope);
+        const adjudicationCap = minMicros(
+          derivePhaseCap("adjudication", verifierAccount.hardCapMicros),
+          verifierAccount.hardCapMicros
+        );
+        this.insertAccount(id, "phase", verifierAccount.id, adjudicationCap, ZERO_MICROS, timestamp);
+      } else {
+        const parent = this.getOrCreateAccount(objId, scope);
+        const phaseCap = derivePhaseCap(phaseName, parent.hardCapMicros);
+        this.insertAccount(id, "phase", objId, phaseCap, ZERO_MICROS, timestamp);
+      }
     } else if (id === "global") {
       this.ensureGlobalAccount();
     }
@@ -721,19 +776,30 @@ export class BudgetAccountant {
   }
 }
 
-export function derivePhaseCap(phase: BudgetScope["phase"], objectiveCap: Microdollars): Microdollars {
-  if (!phase) return objectiveCap;
+export const SIBLING_PHASE_ALLOCATION_RATIOS = {
+  producer: 0.60,
+  verifier: 0.25,
+  recovery: 0.15
+} as const;
+
+export const SUBPHASE_ALLOCATION_RATIOS = {
+  // Adjudication is a subphase of verifier: capped at 40% of verifier cap (= 10% of total objective cap)
+  adjudication: 0.40
+} as const;
+
+export function derivePhaseCap(phase: BudgetScope["phase"], parentCap: Microdollars): Microdollars {
+  if (!phase) return parentCap;
   switch (phase) {
     case "producer":
-      return Math.round(objectiveCap * 0.60) as Microdollars;
+      return Math.floor(parentCap * SIBLING_PHASE_ALLOCATION_RATIOS.producer) as Microdollars;
     case "verifier":
-      return Math.round(objectiveCap * 0.25) as Microdollars;
+      return Math.floor(parentCap * SIBLING_PHASE_ALLOCATION_RATIOS.verifier) as Microdollars;
     case "recovery":
-      return Math.round(objectiveCap * 0.15) as Microdollars;
+      return Math.floor(parentCap * SIBLING_PHASE_ALLOCATION_RATIOS.recovery) as Microdollars;
     case "adjudication":
-      return Math.round(objectiveCap * 0.10) as Microdollars;
+      return Math.floor(parentCap * SUBPHASE_ALLOCATION_RATIOS.adjudication) as Microdollars;
     default:
-      return objectiveCap;
+      return parentCap;
   }
 }
 

@@ -60,6 +60,70 @@ export interface MemoryStats {
   economic: number;
 }
 
+export type ClosedLoopOutcomeCategory =
+  | "VERIFIED_SUCCESS"
+  | "UNVERIFIED_SUCCESS"
+  | "FALSE_SUCCESS"
+  | "REJECTED"
+  | "SYSTEM_FAILURE";
+
+export type ClosedLoopRole = "producer" | "verifier";
+
+export function resolveOutcomeRole(outcome: TaskOutcome): ClosedLoopRole {
+  if (
+    outcome.phase === "OBJECTIVE_VERIFICATION" ||
+    outcome.task?.inferencePhase === "OBJECTIVE_VERIFICATION" ||
+    (outcome as any).role === "verifier"
+  ) {
+    return "verifier";
+  }
+  return "producer";
+}
+
+export function classifyTaskOutcome(outcome: TaskOutcome): ClosedLoopOutcomeCategory {
+  const objectiveStatus = String(outcome.evaluation?.criteria?.objectiveStatus ?? "");
+  const isExplicitFalseSuccess =
+    outcome.evaluation?.criteria?.falseSuccess === true ||
+    outcome.evaluation?.criteria?.reconciledStatus === "FALSE_SUCCESS" ||
+    (outcome.success === true && (objectiveStatus === "FAILED" || outcome.evaluation?.passed === false));
+
+  if (isExplicitFalseSuccess) {
+    return "FALSE_SUCCESS";
+  }
+
+  if (!outcome.success) {
+    if (outcome.failureClass && ["INVALID_OUTPUT", "INVALID_ACTION"].includes(outcome.failureClass)) {
+      return "REJECTED";
+    }
+    if (outcome.evaluation && outcome.evaluation.passed === false) {
+      return "REJECTED";
+    }
+    if (["NEEDS_CAPABILITY", "NEEDS_INPUT", "CANCELLED", "RECONCILIATION_REQUIRED"].includes(objectiveStatus)) {
+      return "SYSTEM_FAILURE";
+    }
+    if (outcome.failureClass && [
+      "ECONOMIC_POLICY_BLOCKED", "BUDGET_EXHAUSTED", "TIMEOUT", "NETWORK_ERROR",
+      "PROVIDER_UNAVAILABLE", "AUTH_REQUIRED", "FORBIDDEN", "RATE_LIMITED",
+      "MODEL_UNAVAILABLE", "BAD_REQUEST", "TOOL_UNAVAILABLE"
+    ].includes(outcome.failureClass)) {
+      return "SYSTEM_FAILURE";
+    }
+    return "REJECTED";
+  }
+
+  const hasVerification = Boolean(
+    outcome.evaluation &&
+    outcome.evaluation.passed === true &&
+    (outcome.evaluation.confidence === undefined || outcome.evaluation.confidence > 0)
+  );
+
+  if (hasVerification) {
+    return "VERIFIED_SUCCESS";
+  }
+
+  return "UNVERIFIED_SUCCESS";
+}
+
 export class MemoryEngine {
   private readonly working = new WorkingMemory();
 
@@ -122,14 +186,25 @@ export class MemoryEngine {
     const qualityEvaluated = !["NEEDS_CAPABILITY", "NEEDS_INPUT", "CANCELLED", "RECONCILIATION_REQUIRED"].includes(String(objectiveStatus ?? ""))
       && (!outcome.failureClass || ["INVALID_OUTPUT", "INVALID_ACTION"].includes(outcome.failureClass));
     const evaluationScore = qualityEvaluated ? outcome.evaluation?.score ?? null : null;
+    const role = resolveOutcomeRole(outcome);
+    const outcomeCategory = classifyTaskOutcome(outcome);
+    const verificationConfidence = outcome.evaluation?.confidence ?? (outcome.evaluation?.passed ? outcome.evaluation.score : null);
+    const verificationSource = outcome.evaluation?.method ?? (outcome.evaluation ? "evaluation" : "none");
+
     const commonMetadata = {
       phase: outcome.phase,
+      role,
+      outcomeCategory,
+      verificationConfidence,
+      verificationSource,
       failureClass: outcome.failureClass,
       taskType: outcome.task.type,
+      taskClass: outcome.task.type,
       provider: outcome.provider ?? outcome.attempts.at(-1)?.provider ?? "none",
       model: outcome.model ?? outcome.attempts.at(-1)?.model ?? "none",
+      physicalModel: outcome.model ?? outcome.attempts.at(-1)?.model ?? "none",
       attempts: outcome.attempts.length,
-      success: outcome.success,
+      success: outcomeCategory === "FALSE_SUCCESS" ? false : outcome.success,
       evaluationScore,
       qualityEvaluated,
       objectiveStatus,

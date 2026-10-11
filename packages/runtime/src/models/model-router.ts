@@ -11,6 +11,7 @@ import type { StateStore } from "../memory/state-store.js";
 import { OperationalHealthStore } from "./operational-health.js";
 import { AutopilotQuotaSource } from './quota.js';
 import { discoverOllama } from './ollama-discovery.js';
+import { PAID_EXECUTION_ENABLED } from '../economy/compute-economy-config.js';
 
 export interface ModelRouterOptions extends AdaptiveSelectorOptions {
   credentials?: CredentialBroker;
@@ -225,6 +226,9 @@ export class ModelRouter {
     const provider = getProvider(candidate.provider);
     if (!provider?.openAiCompatibleEndpoint) throw new Error(`Provider ${candidate.provider} has no compatible completion endpoint.`);
     if (isPaidCandidate) {
+      if (!PAID_EXECUTION_ENABLED) {
+        throw new InferenceError("Live paid execution is disabled under current development policy (PAID_EXECUTION_ENABLED=false).", "ECONOMIC_POLICY_BLOCKED");
+      }
       if (this.economicStops.has(candidate.provider)) throw new InferenceError("Economic stop active for provider", "ECONOMIC_POLICY_BLOCKED");
       if (await this.options.state?.get<boolean>(`economic-stop:${candidate.provider}`, false)) throw new InferenceError("Economic stop active for provider", "ECONOMIC_POLICY_BLOCKED");
     }

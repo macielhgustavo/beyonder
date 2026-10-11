@@ -1,10 +1,15 @@
 # ADR-008: Live Paid Canary Execution & Two-Phase Spend-Commit
 
 ## Status
-**Accepted**
+**PAID_EXECUTION_PATH_READY** (`LIVE_PAID_VALIDATED=false`, `REAL_PAID_REQUEST_EXECUTED=false`, `ACTUAL_PAID_SPEND_USD=0.00`)
+
+> [!IMPORTANT]
+> Under current development policy, live external financial charges remain disabled (`PAID_EXECUTION_ENABLED=false`).
+> All canary qualification runs via unit tests, property tests, fault injection, in-memory SQLite, and mock providers.
+> Zero real money has been or will be spent without explicit live production authorization.
 
 ## Context
-Following Phase 1 (Economic Foundation) and Phase 2 (Shadow Paid Routing & Pricing Discovery), Beyonder v0.6 activates Phase 3: Live Paid Canary Execution. The autonomous agent must transition from evaluating paid models purely in shadow mode to executing live financial inference transactions under strict, deterministic safety guarantees.
+Following Phase 1 (Economic Foundation) and Phase 2 (Shadow Paid Routing & Pricing Discovery), Beyonder v0.6 activates Phase 3: Paid Execution Path Architecture. The autonomous agent prepares the execution path from evaluating paid models purely in shadow mode to executing financial inference transactions under strict, deterministic safety guarantees.
 
 Live paid compute introduces real financial liability. The runtime must enforce:
 1. **Invariant I-1:** Actual spend MUST NEVER exceed an authorized hard budget at any level of the hierarchy.

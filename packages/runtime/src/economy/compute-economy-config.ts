@@ -10,6 +10,13 @@ import { usdToMicros, type Microdollars } from "./money.js";
 /** Compute spending modes. */
 export type ComputeMode = "zero_cost" | "bounded" | "manual_approval";
 
+/**
+ * Current Development Policy Flag:
+ * Under current development policy, live real monetary spend is forbidden.
+ * Product currently runs in zero-cost or mock/offline validation modes.
+ */
+export const PAID_EXECUTION_ENABLED = false;
+
 /** Operator-facing configuration (USD floats). */
 export interface ComputeEconomyConfig {
   /** Spending mode. Default: 'zero_cost' (v0.5 behavior). */

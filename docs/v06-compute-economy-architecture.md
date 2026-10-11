@@ -1,7 +1,10 @@
 # Beyonder v0.6 — Autonomous Compute Economy Architecture
 
 ## Status
-**DRAFT** — Phase 1: Economic Foundation
+**PHASE 2 COMPLETE** — Shadow Paid Routing & Economic Pricing Discovery (`V06_SHADOW_ROUTING_READY=true`)
+- Phase 1: Economic Foundation Ready (`V06_ECONOMIC_FOUNDATION_READY=true`)
+- Phase 2: Shadow Paid Routing & Pricing Discovery Ready (`V06_SHADOW_ROUTING_READY=true`)
+- Phase 3: Live Paid Canary Execution (Ready for operator enablement)
 
 ## Base Commit
 `6ddea2a` on `origin/main` (stable v0.5 HEAD).
@@ -570,11 +573,14 @@ interface SpendDecisionRecord {
 3. `BudgetAccountant` initialized but dormant when `mode = 'zero_cost'`
 4. All existing `monetaryCostUsd: 0` paths unchanged
 
-### Phase 2: Shadow routing
-1. `PricingRegistry` populated with static metadata
-2. `CostEstimator` computes shadow costs
-3. Router evaluates paid candidates in shadow mode (logged, not selected)
-4. Zero actual spend
+### Phase 2: Shadow routing (COMPLETED)
+1. `PricingRegistry` populated with SQLite persistence and seed catalogue pricing (`catalog-pricing.ts`)
+2. `PriceFetcher` parses dynamic provider rates (e.g. OpenRouter `/api/v1/models`) into microdollars
+3. `CostEstimator` computes worst-case and expected costs prior to selection
+4. Router evaluates paid candidates in shadow mode (`RouteDecision.shadowDecision`, actual spend strictly $0.00)
+5. Invariants I-3 (budget ceiling) and I-4 (unknown price blocks billable route) strictly enforced
+6. `SpendDecisionRecord` and `ShadowReportGenerator` produce structured explainability and multi-task reports
+7. Full 15-scenario acceptance test suite verified (`V06_SHADOW_ROUTING_READY=true`)
 
 ### Phase 3: Live canary
 1. Operator sets `mode: 'bounded'`, tiny hard cap

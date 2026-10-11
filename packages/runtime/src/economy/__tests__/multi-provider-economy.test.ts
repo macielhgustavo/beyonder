@@ -274,7 +274,7 @@ describe("Phase 4: Full Multi-Provider Economy (V06_FULL_ECONOMY_READY)", () => 
     const result = await runCandidates({
       taskId: "task-multi-1",
       stepId: "step-1",
-      phase: "PRODUCER",
+      phase: "DIRECT_RESPONSE",
       taskType: "coding",
       messages,
       candidates: [candidateOR, candidateGemini, candidateGroq],
@@ -448,7 +448,7 @@ describe("Phase 4: Full Multi-Provider Economy (V06_FULL_ECONOMY_READY)", () => 
     const complete = vi.fn(async (_msgs, candidate: ModelCandidate): Promise<ModelResponse> => {
       attemptsCount++;
       if (candidate.provider === "openrouter") {
-        throw new InferenceError("OpenRouter 503 Service Unavailable", "SERVICE_UNAVAILABLE", 503);
+        throw new InferenceError("OpenRouter 503 Service Unavailable", "PROVIDER_UNAVAILABLE", 503);
       }
       return {
         content: "Gemini recovered successfully",
@@ -465,7 +465,7 @@ describe("Phase 4: Full Multi-Provider Economy (V06_FULL_ECONOMY_READY)", () => 
     const result = await runCandidates({
       taskId: "task-failover-1",
       stepId: "step-1",
-      phase: "PRODUCER",
+      phase: "DIRECT_RESPONSE",
       taskType: "coding",
       messages: [{ role: "user", content: "test" }],
       candidates: [candidateOR, candidateGemini],
@@ -603,7 +603,7 @@ describe("Phase 4: Full Multi-Provider Economy (V06_FULL_ECONOMY_READY)", () => 
     const result = await runCandidates({
       taskId: "task-filter-1",
       stepId: "step-1",
-      phase: "PRODUCER",
+      phase: "DIRECT_RESPONSE",
       taskType: "coding",
       messages: [{ role: "user", content: "test" }],
       candidates: [candidateOR, candidateGemini],
@@ -784,7 +784,7 @@ describe("Phase 4: Full Multi-Provider Economy (V06_FULL_ECONOMY_READY)", () => 
     const result = await runCandidates({
       taskId: "task-zero-cost-multi",
       stepId: "step-1",
-      phase: "PRODUCER",
+      phase: "DIRECT_RESPONSE",
       taskType: "coding",
       messages: [{ role: "user", content: "test" }],
       candidates: [candidateOR, candidateGemini, candidateFree],

@@ -17,7 +17,7 @@ import { calculateEffectiveResourceCost, calculateUtility, resolveMonetaryRefere
 import { discoverOllama } from "./ollama-discovery.js";
 import type { PricingRegistry, PricingSnapshot } from "../economy/pricing-registry.js";
 import { type CostEstimator, DefaultCostEstimator } from "../economy/cost-estimator.js";
-import type { BudgetAccountant } from "../economy/budget-accountant.js";
+import type { BudgetAccountant, BudgetScope } from "../economy/budget-accountant.js";
 import { microsToUsd } from "../economy/money.js";
 import type { ComputeMode } from "../economy/compute-economy-config.js";
 
@@ -215,12 +215,8 @@ export class AdaptiveModelSelector {
           worstCaseCostUsd = microsToUsd(costEstimate.worstCaseCostMicros);
 
           let affordable = true;
-          const phase = task.inferencePhase === "OBJECTIVE_VERIFICATION"
-            ? "verifier"
-            : task.inferencePhase === "REPLANNING"
-            ? "recovery"
-            : "producer";
-          const budgetScope = { objectiveId: task.id, phase };
+          const phase: BudgetScope["phase"] = task.inferencePhase === "OBJECTIVE_VERIFICATION" ? "verifier" : "producer";
+          const budgetScope: BudgetScope = { objectiveId: task.id, phase };
           if (this.budgetAccountant) {
             if (isShadowMode) {
               affordable = this.budgetAccountant.canAffordHypothetical(budgetScope, costEstimate.worstCaseCostMicros);

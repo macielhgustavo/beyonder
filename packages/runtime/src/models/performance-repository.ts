@@ -2,22 +2,50 @@ import type { IntelligenceTaskType, TaskOutcome } from "../intelligence/contract
 import type { MemoryStore } from "../memory/memory-store.js";
 import type { HistoricalPerformance } from "./adaptive-types.js";
 
+export type PerformanceRole = "producer" | "verifier";
+
 export interface PerformanceRepository {
-  get(provider: string, model: string, taskType: IntelligenceTaskType): Promise<HistoricalPerformance>;
+  get(provider: string, model: string, taskType: IntelligenceTaskType, role?: PerformanceRole): Promise<HistoricalPerformance>;
   outcomeRecorded?(outcome: TaskOutcome): Promise<void>;
 }
 
 export class MemoryPerformanceRepository implements PerformanceRepository {
-  constructor(private readonly memoryStore: MemoryStore) {}
+  constructor(private readonly memoryStore: MemoryStore, private readonly objectiveStatusFor?: (taskId: string) => Promise<string | undefined>) {}
 
-  async get(provider: string, model: string, taskType: IntelligenceTaskType): Promise<HistoricalPerformance> {
-    const records = (await this.memoryStore.all(2000)).filter((record) => {
+  async get(provider: string, model: string, taskType: IntelligenceTaskType, role: PerformanceRole = "producer"): Promise<HistoricalPerformance> {
+    const matching = (await this.memoryStore.all(2000)).filter((record) => {
       if (record.kind !== "economic") return false;
-      return record.metadata.provider === provider && record.metadata.model === model && record.metadata.taskType === taskType;
+
+      // Role segregation: Producer and verifier performance MUST NOT be merged blindly
+      const recordRole = (record.metadata.role as PerformanceRole | undefined) ?? (record.metadata.phase === "OBJECTIVE_VERIFICATION" ? "verifier" : "producer");
+      if (recordRole !== role) return false;
+
+      // Provider and physical model match
+      const recordModel = (record.metadata.physicalModel as string | undefined) ?? record.metadata.model;
+      if (record.metadata.provider !== provider || recordModel !== model || record.metadata.taskType !== taskType) return false;
+
+      // System failures do not penalize cognitive quality
+      if (record.metadata.outcomeCategory === "SYSTEM_FAILURE") return false;
+
+      // The mission remains blocked and its costs remain in Economic Memory.
+      // Unavailable verification is not an evaluated producer-quality failure.
+      if (record.metadata.qualityEvaluated === false) return false;
+      if (record.metadata.failureClass && !["INVALID_OUTPUT", "INVALID_ACTION"].includes(String(record.metadata.failureClass))) return false;
+
+      return true;
     });
+    const records = [] as typeof matching;
+    for (const record of matching) {
+      // Old economic rows did not preserve objective status. Consult their
+      // persisted checkpoint when available, without deleting audit history.
+      const status = record.metadata.objectiveStatus ?? (record.metadata.qualityEvaluated === undefined && record.taskId ? await this.objectiveStatusFor?.(record.taskId) : undefined);
+      if (["NEEDS_CAPABILITY", "NEEDS_INPUT", "CANCELLED", "RECONCILIATION_REQUIRED"].includes(String(status ?? ""))) continue;
+      records.push(record);
+    }
 
     const samples = records.length;
     let successes = 0;
+    let failures = 0;
     let evaluationTotal = 0;
     let evaluationSamples = 0;
     let latencyTotal = 0;
@@ -26,7 +54,20 @@ export class MemoryPerformanceRepository implements PerformanceRepository {
     let attemptsTotal = 0;
 
     for (const record of records) {
-      if (record.metadata.success === true) successes += 1;
+      // False-success poisoning blocked: known false-success must NEVER reinforce capability predictor
+      const isFalseSuccess = record.metadata.outcomeCategory === "FALSE_SUCCESS" || record.metadata.falseSuccess === true;
+      if (isFalseSuccess) {
+        failures += 1;
+      } else if (record.metadata.outcomeCategory === "VERIFIED_SUCCESS") {
+        successes += 1;
+      } else if (record.metadata.outcomeCategory === "UNVERIFIED_SUCCESS") {
+        successes += 1;
+      } else if (record.metadata.success === true) {
+        successes += 1;
+      } else {
+        failures += 1;
+      }
+
       const evaluationScore = asNumber(record.metadata.evaluationScore);
       if (evaluationScore != null) {
         evaluationTotal += evaluationScore;
@@ -38,7 +79,6 @@ export class MemoryPerformanceRepository implements PerformanceRepository {
       attemptsTotal += asNumber(record.metadata.attempts) ?? 0;
     }
 
-    const failures = samples - successes;
     const successRate = samples === 0 ? 0.5 : successes / samples;
     return {
       provider,
@@ -63,7 +103,7 @@ export class MemoryPerformanceRepository implements PerformanceRepository {
 }
 
 export class EmptyPerformanceRepository implements PerformanceRepository {
-  async get(provider: string, model: string, taskType: IntelligenceTaskType): Promise<HistoricalPerformance> {
+  async get(provider: string, model: string, taskType: IntelligenceTaskType, _role: PerformanceRole = "producer"): Promise<HistoricalPerformance> {
     return {
       provider,
       model,

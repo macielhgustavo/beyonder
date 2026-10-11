@@ -6,10 +6,22 @@ import type { BenchmarkModelClient, BenchmarkModelMessage, BenchmarkModelRespons
 const target: ModelTarget = { provider: "test", providerName: "Test", model: "free-model" };
 
 describe("benchmark runner", () => {
-  it("runs smoke mode with two cases per category", async () => {
+  it.each([0.01, 0.25, 1.2])("preserves unexpected cost %s without a semantic grade or further requests", async cost => {
+    let calls = 0;
+    const results = await runBenchmark({ mode: "smoke", targets: [target, { ...target, model: 'second-model' }, { ...target, provider: 'another-provider' }], client: { async complete() { calls++; return { provider: target.provider, model: target.model, content: "115", estimatedCostUsd: cost }; } } });
+    expect(calls).toBe(1);
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({ status: "BILLING_REQUIRED", quality: null, success: null, monetaryCost: cost });
+  });
+  it('stops on unknown reported usage without materializing a zero-cost BIB row', async () => {
+    let calls = 0;
+    await expect(runBenchmark({ mode: 'smoke', targets: [target, { ...target, model: 'second-model' }], client: { async complete() { calls++; throw new BenchmarkRequestError('Invalid monetary usage.', { errorCode: 'INVALID_COST' }); } } })).rejects.toMatchObject({ errorCode: 'INVALID_COST' });
+    expect(calls).toBe(1);
+  });
+  it("runs smoke mode with two cases per category and adversarial code/verification", async () => {
     const results = await runBenchmark({ mode: "smoke", targets: [target], client: new EchoClient() });
-    expect(results).toHaveLength(16);
-    expect(new Set(results.map((result) => result.category)).size).toBe(8);
+    expect(results).toHaveLength(36);
+    expect(new Set(results.map((result) => result.category)).size).toBe(12);
   });
 
   it("runs standard mode with the larger case set", async () => {
@@ -28,9 +40,10 @@ describe("benchmark runner", () => {
 
   it("records PASS when a response is evaluated successfully", async () => {
     const results = await runBenchmark({ mode: "smoke", targets: [target], client: new FixedClient("115") });
-    expect(results[0].status).toBe("PASS");
-    expect(results[0].quality).toBe(1);
-    expect(results[0].success).toBe(true);
+    const reasoning = results.find(result => result.caseId === "reasoning-001")!;
+    expect(reasoning.status).toBe("PASS");
+    expect(reasoning.quality).toBe(1);
+    expect(reasoning.success).toBe(true);
   });
 
   it("records FAIL when a response is evaluated and wrong", async () => {
@@ -46,6 +59,19 @@ describe("benchmark runner", () => {
     expect(results[0].status).toBe("RATE_LIMITED");
     expect(results[0].httpStatus).toBe(429);
     expect(results[0].quality).toBeNull();
+  });
+
+  it("does not confuse a response output limit with a model-wide outage", async () => {
+    let calls = 0;
+    const results = await runBenchmark({ mode: "smoke", targets: [target], client: {
+      async complete(target) {
+        if (++calls === 1) throw new BenchmarkRequestError("Budget exhausted", { errorCode: "OUTPUT_LIMIT" });
+        return { provider: target.provider, model: target.model, content: "READY", estimatedCostUsd: 0 };
+      }
+    } });
+    expect(results).toHaveLength(36);
+    expect(results[0]).toMatchObject({ status: "OUTPUT_LIMIT", quality: null, success: null });
+    expect(results.at(-1)?.status).toBe("PASS");
   });
 
   it("maps HTTP 404 model failures to MODEL_UNAVAILABLE", async () => {

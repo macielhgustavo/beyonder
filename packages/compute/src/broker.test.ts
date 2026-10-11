@@ -26,7 +26,8 @@ test("account-id-and-token providers require all credential parts", () => {
   assert.ok(cloudflare);
   const status = getProviderStatus(cloudflare, broker);
   assert.equal(status.credentialStatus, "missing");
-  assert.deepEqual(status.missingEnvVars, ["CLOUDFLARE_API_TOKEN"]);
+  // An incomplete credential is never split across sources or usable for execution.
+  assert.deepEqual(status.missingEnvVars, ["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"]);
 });
 
 test("broker recognizes NVIDIA_NIM_API_KEY without exposing the secret", () => {

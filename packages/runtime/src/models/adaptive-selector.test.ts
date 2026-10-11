@@ -1,13 +1,14 @@
-import { mkdtemp } from "node:fs/promises";
+import { fixtureZeroCost } from './testing/zero-cost-fixture.js';
+import { mkdtemp, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AutopilotStateStore } from "@beyonder/compute";
 import type { IntelligenceTask } from "../intelligence/contracts.js";
 import { AdaptiveModelSelector } from "./adaptive-selector.js";
 import type { ModelCapabilityEvidence, ModelCapabilityRequest, ModelCapabilitySource } from "./capability-source.js";
 import type { PerformanceRepository } from "./performance-repository.js";
-import type { QuotaSource } from "./quota.js";
+import { AutopilotQuotaSource, type QuotaSource } from "./quota.js";
 import type { HistoricalPerformance, QuotaSnapshot, RouterTelemetry } from "./adaptive-types.js";
 import type { RandomSource } from "./random.js";
 
@@ -118,9 +119,28 @@ async function providerStatePath() {
 }
 
 describe("AdaptiveModelSelector", () => {
+  it("uses observed historical latency when operational health has no samples", async () => {
+    const path = await providerStatePathFor({ groq: ["llama-3.3-70b-versatile"], gemini: ["gemini-2.5-flash"] });
+    const selector = new AdaptiveModelSelector(path, { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model),
+      quotaSource: new FixedQuotaSource(),
+      operationalHealth: async () => ({ samples: 0, failures: 0, latencyMs: 0 }),
+      canAttempt: async (candidate) => ["groq", "gemini"].includes(candidate.provider),
+      performanceRepository: new FixedPerformanceRepository({
+        "groq/llama-3.3-70b-versatile/chat": { ...performance("groq", "llama-3.3-70b-versatile", "chat", 25, 0.99, 1), avgLatencyMs: 10000 },
+        "gemini/gemini-2.5-flash/chat": { ...performance("gemini", "gemini-2.5-flash", "chat", 25, 0.86, 1), avgLatencyMs: 1 }
+      })
+    });
+    const route = await selector.route(task({ type: "chat", complexity: 0.1, requirements: { directResponse: true } }), "normal");
+    const slow = route.candidates.find(candidate => candidate.provider === "groq")!;
+    const fast = route.candidates.find(candidate => candidate.provider === "gemini")!;
+    expect(slow.latencyPenalty).toBeGreaterThan(fast.latencyPenalty);
+    expect(slow.latencyPenalty).toBeGreaterThan(0);
+    expect(route.selected).toBe(route.candidates[0]);
+    expect(route.selected!.utility).toBe(Math.max(...route.candidates.map(candidate => candidate.utility)));
+  });
   it("generates and ranks multiple compatible zero-money candidates", async () => {
     const path = await providerStatePath();
-    const selector = new AdaptiveModelSelector(path, { quotaSource: new FixedQuotaSource(), random: new SequenceRandom([0.99]) });
+    const selector = new AdaptiveModelSelector(path, { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model), quotaSource: new FixedQuotaSource(), random: new SequenceRandom([0.99]) });
     const route = await selector.route(task(), "normal");
     expect(route.candidates.length).toBeGreaterThanOrEqual(3);
     expect(route.selected).toBe(route.candidates[0]);
@@ -128,9 +148,50 @@ describe("AdaptiveModelSelector", () => {
     expect(route.candidates[0]?.utility).toBeGreaterThanOrEqual(route.candidates.at(-1)?.utility ?? -1);
   });
 
+  it("reads stable account state once per provider during a multi-model ranking", async () => {
+    const path = await providerStatePathFor({ groq: ["llama-3.3-70b-versatile", "openai/gpt-oss-20b"] });
+    const reads = { credential: [] as string[], plan: [] as string[], billing: [] as string[] };
+    const selector = new AdaptiveModelSelector(path, {
+      economicEvidence: async (provider, model) => fixtureZeroCost(provider, model),
+      quotaSource: new FixedQuotaSource(),
+      credentialAccess: async provider => { reads.credential.push(provider); return undefined; },
+      providerAccountPlan: async provider => { reads.plan.push(provider); return undefined; },
+      billingCapability: async provider => { reads.billing.push(provider); return undefined; }
+    });
+    const route = await selector.route(task({ type: "chat", requirements: { directResponse: true } }), "normal");
+    expect(route.candidates.filter(candidate => candidate.provider === "groq").length).toBeGreaterThanOrEqual(2);
+    for (const values of Object.values(reads)) {
+      expect(values).toContain("groq");
+      expect(values.length).toBe(new Set(values).size);
+    }
+  });
+
+  it("does not reread persistent quota state for each scored candidate", async () => {
+    const path = await providerStatePathFor({ groq: ["llama-3.3-70b-versatile", "openai/gpt-oss-20b"] });
+    const quotaSource = new AutopilotQuotaSource(path);
+    const read = vi.spyOn(quotaSource, "get");
+    const route = await new AdaptiveModelSelector(path, {
+      economicEvidence: async (provider, model) => fixtureZeroCost(provider, model),
+      quotaSource
+    }).route(task({ type: "chat", requirements: { directResponse: true } }), "normal");
+    expect(route.candidates.filter(candidate => candidate.provider === "groq").length).toBeGreaterThanOrEqual(2);
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it("summarizes cost rejections while retaining each rejected candidate in the route", async () => {
+    const path = await providerStatePathFor({ ovh: ["Meta-Llama-3_3-70B-Instruct", "Qwen3.5-9B"], groq: ["llama-3.3-70b-versatile"] });
+    const telemetry = new CapturingTelemetry();
+    const route = await new AdaptiveModelSelector(path, { quotaSource: new FixedQuotaSource(), telemetry }).route(task({ type: "chat", requirements: { directResponse: true } }), "normal");
+    const rejected = route.rejectedCandidates?.filter(candidate => candidate.provider === "ovh") ?? [];
+    expect(rejected.length).toBeGreaterThanOrEqual(2);
+    const summary = telemetry.events.find(event => event.event === "router.cost_filter_summary");
+    expect(Object.entries(summary?.details?.counts as Record<string, number>).filter(([key]) => key.startsWith("ovh:")).reduce((total, [, count]) => total + count, 0)).toBeGreaterThanOrEqual(2);
+    expect(telemetry.events.some(event => event.event === "router.candidate_rejected_cost")).toBe(false);
+  });
+
   it("filters incompatible vision tasks and blocks halted inference", async () => {
     const path = await providerStatePath();
-    const selector = new AdaptiveModelSelector(path, { quotaSource: new FixedQuotaSource() });
+    const selector = new AdaptiveModelSelector(path, { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model), quotaSource: new FixedQuotaSource() });
     const vision = await selector.route(task({ requirements: { vision: true } }), "normal");
     expect(vision.candidates).toHaveLength(0);
     const halted = await selector.route(task(), "halted");
@@ -140,8 +201,9 @@ describe("AdaptiveModelSelector", () => {
 
   it("supports deterministic controlled exploration without bypassing candidate constraints", async () => {
     const path = await providerStatePath();
-    const selector = new AdaptiveModelSelector(path, {
+    const selector = new AdaptiveModelSelector(path, { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model),
       quotaSource: new FixedQuotaSource(),
+      allowExploration: true,
       random: new SequenceRandom([0, 0])
     });
     const route = await selector.route(task(), "normal");
@@ -151,9 +213,17 @@ describe("AdaptiveModelSelector", () => {
     expect(route.selected?.monetaryCostUsd).toBe(0);
   });
 
+  it("uses the best qualified candidate in normal product routing even when randomness would explore", async () => {
+    const selector = new AdaptiveModelSelector(await providerStatePath(), { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model), quotaSource: new FixedQuotaSource(), random: new SequenceRandom([0, 0]) });
+    const route = await selector.route(task(), "normal");
+    expect(route.candidates.length).toBeGreaterThan(1);
+    expect(route.explored).toBe(false);
+    expect(route.selected).toBe(route.candidates[0]);
+  });
+
   it("uses BIB prior when no real outcomes exist", async () => {
     const path = await providerStatePath();
-    const selector = new AdaptiveModelSelector(path, {
+    const selector = new AdaptiveModelSelector(path, { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model),
       quotaSource: new FixedQuotaSource(),
       random: new SequenceRandom([0.99]),
       capabilitySource: new FixedCapabilitySource({
@@ -167,7 +237,7 @@ describe("AdaptiveModelSelector", () => {
 
   it("uses real outcomes when BIB is absent", async () => {
     const path = await providerStatePath();
-    const selector = new AdaptiveModelSelector(path, {
+    const selector = new AdaptiveModelSelector(path, { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model),
       quotaSource: new FixedQuotaSource(),
       performanceRepository: new FixedPerformanceRepository({
         "groq/llama-3.3-70b-versatile/coding": performance("groq", "llama-3.3-70b-versatile", "coding", 10, 0.8, 0.8)
@@ -179,10 +249,10 @@ describe("AdaptiveModelSelector", () => {
     expect(groq?.predictedQuality).toBeGreaterThan(0.78);
   });
 
-  it("combines BIB prior with real outcomes and exposes evidence", async () => {
+  it("combines BIB prior with real outcomes and exposes evidence even when the quality floor rejects execution", async () => {
     const path = await providerStatePath();
     const telemetry = new CapturingTelemetry();
-    const selector = new AdaptiveModelSelector(path, {
+    const selector = new AdaptiveModelSelector(path, { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model),
       quotaSource: new FixedQuotaSource(),
       telemetry,
       capabilitySource: new FixedCapabilitySource({
@@ -193,7 +263,7 @@ describe("AdaptiveModelSelector", () => {
       })
     });
     const route = await selector.route(task(), "normal");
-    const groq = route.candidates.find((candidate) => candidate.provider === "groq");
+    const groq = route.consideredCandidates?.find((candidate) => candidate.provider === "groq");
     expect(groq?.capabilityEvidence).toMatchObject({ bibScore: 0.9, bibSamples: 6, realScore: 0.6, realSamples: 20, source: "BIB + outcomes" });
     expect(groq?.predictedQuality).toBeGreaterThan(0.6);
     expect(telemetry.events.some((entry) => entry.event === "capability.resolved" && entry.details?.bibScore === 0.9)).toBe(true);
@@ -201,7 +271,7 @@ describe("AdaptiveModelSelector", () => {
 
   it("lets BIB prior change routing when economic constraints are equal", async () => {
     const path = await providerStatePath();
-    const selector = new AdaptiveModelSelector(path, {
+    const selector = new AdaptiveModelSelector(path, { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model),
       quotaSource: new FixedQuotaSource(),
       random: new SequenceRandom([0.99]),
       capabilitySource: new FixedCapabilitySource({
@@ -218,27 +288,28 @@ describe("AdaptiveModelSelector", () => {
     expect(route.selected?.capabilityEvidence.bibScore).toBe(0.98);
   });
 
-  it("includes NVIDIA, Cloudflare, and Groq when healthy and chat-compatible", async () => {
+  it("includes free providers but excludes NVIDIA Developer from product routing", async () => {
     const path = await providerStatePathFor({
       groq: ["llama-3.3-70b-versatile"],
       "nvidia-nim": ["qwen/qwen2.5-coder-32b-instruct"],
       "cloudflare-workers-ai": ["@cf/meta/llama-3.3-70b-instruct-fp8-fast"]
     });
-    const selector = new AdaptiveModelSelector(path, { quotaSource: new FixedQuotaSource(), random: new SequenceRandom([0.99]) });
+    const selector = new AdaptiveModelSelector(path, { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model), quotaSource: new FixedQuotaSource(), random: new SequenceRandom([0.99]) });
     const route = await selector.route(task({ type: "coding" }), "normal");
     expect(route.candidates.map((candidate) => candidate.provider)).toEqual(expect.arrayContaining([
       "groq",
-      "nvidia-nim",
       "cloudflare-workers-ai"
     ]));
+    expect(route.candidates.some(candidate => candidate.provider === 'nvidia-nim')).toBe(false);
+    expect(route.rejectedCandidates?.find(candidate => candidate.provider === 'nvidia-nim')?.economics?.classification).toBe('DEV_EVAL_ONLY');
   });
 
-  it("penalizes rate-limited NVIDIA without treating capability as zero", async () => {
+  it("rejects exhausted NVIDIA quota while preserving BIB capability", async () => {
     const path = await providerStatePathFor({
       "nvidia-nim": ["qwen/qwen2.5-coder-32b-instruct"],
       groq: ["llama-3.3-70b-versatile"]
     });
-    const selector = new AdaptiveModelSelector(path, {
+    const selector = new AdaptiveModelSelector(path, { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model),
       quotaSource: new FixedQuotaSource({
         "nvidia-nim": { health: "unhealthy", requestQuotaRemaining: 0, resetAt: new Date(Date.now() + 60_000).toISOString() }
       }),
@@ -247,17 +318,16 @@ describe("AdaptiveModelSelector", () => {
       })
     });
     const route = await selector.route(task({ type: "coding" }), "normal");
-    const nvidia = route.candidates.find((candidate) => candidate.provider === "nvidia-nim");
-    expect(nvidia?.capabilityEvidence.bibScore).toBe(0.9);
-    expect(nvidia?.predictedQuality).toBeGreaterThan(0);
-    expect(nvidia?.shadowCostUsd).toBeGreaterThan(0);
+    expect(route.candidates.some(candidate => candidate.provider === "nvidia-nim")).toBe(false);
+    expect(route.rejectedCandidates?.find(candidate => candidate.provider === "nvidia-nim")?.economics?.classification).toBe("DEV_EVAL_ONLY");
+    expect((await new AutopilotStateStore(path).read()).providers["nvidia-nim"].validation?.models).toContain("qwen/qwen2.5-coder-32b-instruct");
   });
 
   it("excludes incompatible Cloudflare models from candidates", async () => {
     const path = await providerStatePathFor({
       "cloudflare-workers-ai": ["@cf/baai/bge-base-en-v1.5", "@cf/openai/whisper"]
     });
-    const selector = new AdaptiveModelSelector(path, { quotaSource: new FixedQuotaSource() });
+    const selector = new AdaptiveModelSelector(path, { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model), quotaSource: new FixedQuotaSource() });
     const route = await selector.route(task({ type: "chat" }), "normal");
     expect(route.candidates.some((candidate) => candidate.provider === "cloudflare-workers-ai")).toBe(false);
   });
@@ -267,7 +337,7 @@ describe("AdaptiveModelSelector", () => {
       groq: ["llama-3.3-70b-versatile"],
       reka: ["reka-flash-3"]
     });
-    const selector = new AdaptiveModelSelector(path, { quotaSource: new FixedQuotaSource() });
+    const selector = new AdaptiveModelSelector(path, { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model), quotaSource: new FixedQuotaSource() });
     const normal = await selector.route(task({ type: "chat" }), "normal");
     expect(normal.candidates.map((candidate) => candidate.provider)).toContain("groq");
     expect(normal.candidates.map((candidate) => candidate.provider)).not.toContain("reka");
@@ -317,3 +387,13 @@ function performance(
     avgAttempts: samples === 0 ? 0 : 1
   };
 }
+
+
+it("keeps capability history while excluding currently inaccessible credentials",async()=>{
+ const path=await providerStatePathFor({groq:["llama-3.3-70b-versatile"]});
+ const before=await readFile(path,'utf8');
+ const selector=new AdaptiveModelSelector(path,{ economicEvidence: async (provider, model) => fixtureZeroCost(provider, model),quotaSource:new FixedQuotaSource(),credentialAccess:async()=>({identity:'credential://provider/groq',provider:'groq',expected:true,configured:true,present:true,accessible:false,valid:'UNKNOWN',source:'BEYONDER_VAULT',scope:['inference'],status:'VAULT_LOCKED',lastValidated:null})});
+ const route=await selector.route(task({type:'chat',complexity:0.1,requirements:{directResponse:true}}),'normal');
+ expect(route.selected).toBeUndefined();expect(route.capacityStatus).toBe('NEEDS_CAPABILITY');expect(route.rejectedCandidates?.some(c=>c.reasons.some(r=>r.includes('VAULT_LOCKED')&&r.includes('history retained')))).toBe(true);
+ expect(await readFile(path,'utf8')).toBe(before);
+});

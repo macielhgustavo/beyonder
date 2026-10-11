@@ -1,15 +1,18 @@
 import type { ModelCapability, ModelCatalogEntry, ProviderCatalogEntry } from "./types.js";
 
-export type ModelWorkload = "general_chat" | "coding" | "embedding" | "benchmark_text";
+export type ModelWorkload = "general_chat" | "coding" | "embedding" | "benchmark_text" | "planning" | "tool-use" | "reasoning" | "research" | "browser" | "extraction" | "classification" | "compression";
 
 const INCOMPATIBLE_CHAT_CAPABILITIES = new Set<ModelCapability>(["EMBEDDING", "RERANK", "VISION", "AUDIO"]);
 
 export function modelMetadata(provider: ProviderCatalogEntry, modelId: string): ModelCatalogEntry {
   const explicit = provider.modelCatalog?.find((model) => model.id === modelId);
-  if (explicit) return explicit;
+  if (explicit) return { ...explicit, role: explicit.role ?? inferRole(modelId), structuredOutput: explicit.structuredOutput ?? "unknown", costClass: explicit.costClass ?? costClass(provider, modelId) };
   return {
     id: modelId,
     capabilities: inferCapabilities(modelId),
+    role: inferRole(modelId),
+    structuredOutput: "unknown",
+    costClass: costClass(provider, modelId),
     status: "UNKNOWN"
   };
 }
@@ -23,9 +26,23 @@ export function isModelEligibleForWorkload(
   modelId: string,
   workload: ModelWorkload
 ): boolean {
-  const metadata = modelMetadata(provider, modelId);
+  return isModelMetadataEligibleForWorkload(modelMetadata(provider, modelId), workload);
+}
+
+export function isModelMetadataEligibleForWorkload(metadata: ModelCatalogEntry, workload: ModelWorkload): boolean {
+  // Generic dynamic aliases stay excluded because they can silently cross cost
+  // or capability boundaries. OpenRouter's dedicated free router is different:
+  // it is explicitly zero-cost and filters for request capabilities upstream.
+  if (/^(?:auto|free|kilo-auto(?:\/free)?|openrouter\/auto)$/i.test(metadata.id)) return false;
   if (metadata.billingRisk || metadata.status === "PAID_ONLY" || metadata.status === "BILLING_REQUIRED") return false;
   if (metadata.status === "MODEL_UNAVAILABLE" || metadata.status === "UNSUPPORTED") return false;
+  if (metadata.role === "classification-only") return workload === "classification";
+  if (metadata.role === "embedding") return workload === "embedding";
+  if (["guard", "reranker", "vision-only", "speech-only"].includes(metadata.role ?? "")) return false;
+
+  // The free router is a text-capable meta-route even though its slug does not
+  // encode a concrete model family.
+  if (metadata.id === 'openrouter/free') return workload !== 'embedding';
 
   switch (workload) {
     case "embedding":
@@ -34,8 +51,26 @@ export function isModelEligibleForWorkload(
       return hasTextChatCapability(metadata) && !hasIncompatibleChatOnlyCapability(metadata);
     case "general_chat":
     case "benchmark_text":
+    default:
       return hasTextChatCapability(metadata) && !hasIncompatibleChatOnlyCapability(metadata);
   }
+}
+
+export function inferRole(id: string): ModelCatalogEntry["role"] {
+  if (/guard|safety|safeguard|moderation/i.test(id)) return "guard";
+  if (/embed|\/bge|\be5-|\bgte-/i.test(id)) return "embedding";
+  if (/rerank/i.test(id)) return "reranker";
+  if (/classification-only|classifier/i.test(id)) return "classification-only";
+  if (/whisper|speech|tts|transcribe/i.test(id)) return "speech-only";
+  if (/stable-diffusion|sdxl|flux|dall-e/i.test(id)) return "vision-only";
+  return "unknown";
+}
+
+function costClass(provider: ProviderCatalogEntry, id: string): ModelCatalogEntry["costClass"] {
+  if (provider.billingRisk || provider.classification === "PAID_ONLY") return "PAID";
+  // Catalog discovery is not price evidence. Only explicitly listed free models qualify.
+  if (provider.knownFreeModels.includes(id) || (provider.id === "openrouter" && id.endsWith(":free"))) return "FREE_TIER_ELIGIBLE";
+  return "UNKNOWN_COST";
 }
 
 export function eligibleModelsForWorkload(

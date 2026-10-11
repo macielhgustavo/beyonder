@@ -4,6 +4,8 @@ export type OpportunityType = "JOB" | "BOUNTY" | "SERVICE_REQUEST" | "RESEARCH" 
 export type OpportunityStatus = "DISCOVERED" | "NORMALIZED" | "EVALUATED" | "QUEUED" | "IGNORED" | "REQUIRES_APPROVAL" | "EXPIRED" | "UNAVAILABLE" | "EXECUTING" | "COMPLETED" | "FAILED";
 export type OpportunityRewardType = "FIXED" | "RANGE" | "UNKNOWN";
 
+export type OpportunitySourceClassification = "REAL" | "DEGRADED" | "UNAVAILABLE" | "FIXTURE";
+
 export interface OpportunityReward {
   amount?: number;
   minAmount?: number;
@@ -80,13 +82,13 @@ export interface PreparedApplication {
   preparedAt: string;
 }
 
-export type WorkRunState = "DISCOVERED" | "EVALUATED" | "SELECTED" | "APPLICATION_PREPARED" | "AWAITING_APPLICATION_APPROVAL" | "APPLICATION_APPROVED" | "APPLICATION_SENT" | "APPLICATION_REJECTED" | "WORK_AVAILABLE" | "EXECUTING" | "WORK_READY" | "AWAITING_SUBMISSION_APPROVAL" | "SUBMISSION_APPROVED" | "SUBMITTED" | "AWAITING_SETTLEMENT" | "SETTLED" | "COMPLETED" | "FAILED" | "CANCELLED" | "EXPIRED" | "BLOCKED";
+export type WorkRunState = "MANUAL_APPLICATION_REQUIRED" | "MANUAL_SUBMISSION_REQUIRED" | "DISCOVERED" | "EVALUATED" | "SELECTED" | "APPLICATION_PREPARED" | "AWAITING_APPLICATION_APPROVAL" | "APPLICATION_APPROVED" | "APPLICATION_SENT" | "APPLICATION_REJECTED" | "WORK_AVAILABLE" | "EXECUTING" | "WORK_READY" | "AWAITING_SUBMISSION_APPROVAL" | "SUBMISSION_APPROVED" | "SUBMITTED" | "AWAITING_SETTLEMENT" | "SETTLED" | "COMPLETED" | "FAILED" | "CANCELLED" | "EXPIRED" | "BLOCKED";
 export type ExternalActor = "BEYONDER" | "HUMAN" | "EXTERNAL_SYSTEM";
 export type VerificationStatus = "PASS" | "FAIL" | "UNKNOWN";
 export type DeliverableType = "TEXT" | "CODE" | "FILE" | "STRUCTURED_DATA" | "RESEARCH_REPORT" | "OTHER";
 
 export interface ExternalActionEvidence { executedBy: ExternalActor; timestamp: string; source: string; externalReference?: string; notes?: string; }
-export interface ApplicationState extends PreparedApplication { approvalId?: string; idempotencyKey?: string; status: "PREPARED" | "PENDING_APPROVAL" | "APPROVED" | "SENT" | "REJECTED"; sentAt?: string; externalEvidence?: ExternalActionEvidence; }
+export interface ApplicationState extends PreparedApplication { approvalId?: string; idempotencyKey?: string; mode?: "AUTOMATED_REAL" | "MANUAL_REQUIRED" | "FIXTURE"; status: "MANUAL_ACTION_REQUIRED" | "PREPARED" | "PENDING_APPROVAL" | "APPROVED" | "SENT" | "REJECTED"; sentAt?: string; externalEvidence?: ExternalActionEvidence; }
 export interface ExecutionState { taskId: string; status: string; plan?: unknown; completedSteps?: string[]; retries?: number; replans?: number; monetaryCostUsd: number; shadowCostUsd: number; durationMs?: number; completionEvidence?: string; startedAt?: string; completedAt?: string; }
 export interface DeliverableState { id: string; workRunId: string; type: DeliverableType; summary: string; artifacts?: string[]; text?: string; metadata?: Record<string, unknown>; verificationStatus: VerificationStatus; verificationEvidence?: string; createdAt: string; }
 export type SettlementEvidenceType = "MANUAL_CONFIRMED" | "MARKETPLACE_CONFIRMED" | "EXTERNAL_REFERENCE";
@@ -100,6 +102,8 @@ export interface WorkRun {
 }
 
 export interface OpportunityDiscoveryResult {
+  /** Observed availability for this discovery, separate from opportunity viability. */
+  classification?: OpportunitySourceClassification;
   sourceId: string;
   discoveredAt: string;
   items: RawOpportunity[];
@@ -109,6 +113,7 @@ export interface OpportunityDiscoveryResult {
 
 export interface OpportunitySource {
   id: string;
+  classification: OpportunitySourceClassification;
   discover(context?: OpportunitySourceContext): Promise<OpportunityDiscoveryResult>;
 }
 

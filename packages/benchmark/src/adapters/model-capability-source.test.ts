@@ -6,6 +6,46 @@ import { BenchmarkStore } from "../persistence/store.js";
 import { BibModelCapabilitySource } from "./model-capability-source.js";
 
 describe("BibModelCapabilitySource", () => {
+  it.each(["verification", "evidence-grounding"] as const)("retains an adjudicated false approval despite many easy %s passes", async category => {
+    const store = new BenchmarkStore(":memory:");
+    store.saveResults([
+      ...Array.from({ length: 25 }, (_, i) => ({ ...result(1, true), category, caseId: `easy-${i}` })),
+      { ...result(0, false), category, caseId: "unsafe-verdict", errorCode: "VERIFIER_FALSE_APPROVAL", inferenceProfile: "reasoning-low:max-output-2400" }
+    ]);
+    const source = new BibModelCapabilitySource(store);
+    expect(await source.getVerificationSafetyEvidence("different-provider/physical-model")).toMatchObject({ falseApprovals: 1 });
+    expect(await source.getVerificationSafetyEvidence("unrelated-model")).toBeNull();
+  });
+
+  it("does not label ordinary failed checks, false rejections or network failures as false approvals", async () => {
+    const store = new BenchmarkStore(":memory:");
+    store.saveResults([
+      { ...result(0, false), category: "verification", errorCode: "VERIFIER_FALSE_REJECTION" },
+      { ...result(0, false), category: "verification" },
+      { ...result(0, false), category: "verification", status: "TIMEOUT", quality: null, success: null, errorCode: "VERIFIER_FALSE_APPROVAL" },
+      { ...result(0, false), category: "coding", errorCode: "VERIFIER_FALSE_APPROVAL" }
+    ]);
+    expect(await new BibModelCapabilitySource(store).getVerificationSafetyEvidence("vendor/physical-model:free")).toBeNull();
+  });
+  it.each(["structured-output", "verification", "coding"] as const)("preserves the observed prompted mode when routing %s", async category => {
+    const store = new BenchmarkStore(":memory:");
+    for (const current of new Set([category, "structured-output"] as const)) {
+      store.saveResults([0, 1].map(index => ({ ...result(1, true), caseId: `${current}-${index}`, category: current, structuredOutputMode: "prompted" as const })));
+    }
+    const source = new BibModelCapabilitySource(store);
+    const taskType = category === "coding" ? "coding" : "classification";
+    expect(await source.getCapability({ provider: "kilo-gateway", model: "vendor/physical-model:free", taskType })).toMatchObject({ structuredOutputMode: "prompted", dimensions: { structuredOutput: { samples: 2 } } });
+  });
+
+  it("does not invent an observed request mode for legacy or mixed evidence", async () => {
+    for (const modes of [[undefined, undefined], ["native", "prompted"]] as const) {
+      const store = new BenchmarkStore(":memory:");
+      store.saveResults(modes.map((mode, index) => ({ ...result(1, true), category: "structured-output" as const, caseId: `structured-${index}`, structuredOutputMode: mode })));
+      const source = new BibModelCapabilitySource(store);
+      expect((await source.getCapability({ provider: "kilo-gateway", model: "vendor/physical-model:free", taskType: "classification" }))?.structuredOutputMode).toBeUndefined();
+    }
+  });
+
   it("returns BIB evidence for evaluated PASS/FAIL samples", async () => {
     const store = new BenchmarkStore(":memory:");
     store.saveResults([
@@ -13,7 +53,7 @@ describe("BibModelCapabilitySource", () => {
       result(0, false)
     ]);
     const source = new BibModelCapabilitySource(store);
-    await expect(source.getCapability({ provider: "kilo-gateway", model: "openrouter/free", taskType: "coding" })).resolves.toMatchObject({
+    await expect(source.getCapability({ provider: "kilo-gateway", model: "vendor/physical-model:free", taskType: "coding" })).resolves.toMatchObject({
       score: 0.5,
       samples: 2,
       source: "BIB"
@@ -40,6 +80,8 @@ describe("BibModelCapabilitySource", () => {
     ]);
     const source = new BibModelCapabilitySource(store);
     await expect(source.getCapabilityScore({ provider: "ovh", model: "gpt-oss-120b", taskType: "coding" })).resolves.toBeNull();
+    await expect(source.getOperationalEvidence({ provider: "ovh", model: "gpt-oss-120b" })).resolves.toMatchObject({ samples: 1, failures: 1 });
+    await expect(source.getCapabilityScore({ provider: "ovh", model: "gpt-oss-120b", taskType: "research" })).resolves.toBeNull();
     store.close();
   });
 
@@ -50,13 +92,56 @@ describe("BibModelCapabilitySource", () => {
     await expect(source.getCapability({ provider: "none", model: "none", taskType: "coding" })).resolves.toBeNull();
     store.close();
   });
+
+  it.each(["chat", "research", "browser"] as const)("uses observed %s capability and keeps independent verification failures", async taskType => {
+    const store = new BenchmarkStore(":memory:");
+    for (const category of ["synthesis", "research", "verification"] as const) {
+      store.saveResults([0, 1].map(index => ({ ...result(category === "verification" ? 0 : 1, category !== "verification"), caseId: `${category}-${index}`, category })));
+    }
+    const source = new BibModelCapabilitySource(store);
+    expect(await source.getCapability({ provider: "kilo-gateway", model: "vendor/physical-model:free", taskType, dimensions: ["verification"] })).toMatchObject({
+      score: 0, dimensions: { verification: { score: 0, samples: 2 } }
+    });
+    expect((await source.getCapability({ provider: "kilo-gateway", model: "vendor/physical-model:free", taskType }))?.dimensions?.coding).toBeUndefined();
+  });
+
+  it("keeps a failed inference profile visible without using it to certify a different profile", async () => {
+    const store = new BenchmarkStore(":memory:");
+    store.saveResults([
+      { ...result(0, false), inferenceProfile: "reasoning-disabled:max-output-1200" },
+      { ...result(1, true), inferenceProfile: "reasoning-low:max-output-2400" }
+    ]);
+    const source = new BibModelCapabilitySource(store);
+    expect(await source.getCapabilityScore({ provider: "kilo-gateway", model: "vendor/physical-model:free", taskType: "coding", inferenceProfile: "reasoning-low:max-output-2400" })).toBe(1);
+    expect(await source.getCapabilityScore({ provider: "kilo-gateway", model: "vendor/physical-model:free", taskType: "coding", inferenceProfile: "reasoning-disabled:max-output-1200" })).toBe(0);
+    expect(await source.getCapabilityScore({ provider: "kilo-gateway", model: "vendor/physical-model:free", taskType: "coding", inferenceProfile: "unmeasured" })).toBeNull();
+  });
+
+  it("does not promote a dimension by repeatedly passing the same easy case", async () => {
+    const store = new BenchmarkStore(":memory:");
+    store.saveResults([result(1, true), result(1, true), result(1, true)]);
+    const source = new BibModelCapabilitySource(store);
+    expect((await source.getCapability({ provider: "kilo-gateway", model: "vendor/physical-model:free", taskType: "coding" }))?.dimensions?.coding).toBeUndefined();
+  });
+
+  it("offers only profiles with distinct real evaluated cases, retaining negative grades", async () => {
+    const store = new BenchmarkStore(":memory:");
+    store.saveResults([
+      ...["coding-a", "coding-b"].map(caseId => ({ ...result(0, false), caseId, inferenceProfile: "reasoning-disabled:max-output-2400" })),
+      ...[1, 2].map(() => ({ ...result(1, true), inferenceProfile: "repeated-only" })),
+      { ...result(0, false), status: "TIMEOUT" as const, quality: null, success: null, inferenceProfile: "unavailable" }
+    ]);
+    const source = new BibModelCapabilitySource(store);
+    expect(await source.listInferenceProfiles({ provider: "kilo-gateway", model: "vendor/physical-model:free" })).toEqual(["reasoning-disabled:max-output-2400"]);
+    expect(await source.getCapabilityScore({ provider: "kilo-gateway", model: "vendor/physical-model:free", taskType: "coding", inferenceProfile: "reasoning-disabled:max-output-2400" })).toBe(0);
+  });
 });
 
 function result(quality: number, success: boolean) {
   return {
     caseId: "coding-001",
     provider: "kilo-gateway",
-    model: "openrouter/free",
+    model: "vendor/physical-model:free",
     category: "coding" as const,
     status: success ? "PASS" as const : "FAIL" as const,
     quality,
@@ -67,3 +152,9 @@ function result(quality: number, success: boolean) {
     timestamp: new Date()
   };
 }
+
+
+it('free hyphen route cannot bypass an adjudicated unsafe physical verifier',async()=>{
+ const store=new BenchmarkStore(':memory:');
+ try {store.saveResults([{...result(0,false),model:'vendor/step-3.7-flash:free',category:'verification',errorCode:'VERIFIER_FALSE_APPROVAL'}]);const source=new BibModelCapabilitySource(store);expect(await source.getVerificationSafetyEvidence('other/step-3.7-flash-free')).toMatchObject({falseApprovals:1});expect(await source.getVerificationSafetyEvidence('other/step-5-preview-free')).toBeNull();const newStore=new BenchmarkStore(':memory:');newStore.saveResults([{...result(0,false),model:'vendor/step-5-preview-free',category:'verification',errorCode:'VERIFIER_FALSE_APPROVAL'}]);expect(await new BibModelCapabilitySource(newStore).getVerificationSafetyEvidence('other/step-5-preview')).toMatchObject({falseApprovals:1});} finally {store.close();}
+});

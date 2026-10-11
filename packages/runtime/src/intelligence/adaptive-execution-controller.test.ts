@@ -1,3 +1,4 @@
+import { fixtureZeroCost } from '../models/testing/zero-cost-fixture.js';
 import { describe, expect, it } from "vitest";
 import type { IntelligenceTask } from "./contracts.js";
 import { AdaptiveExecutionController } from "./adaptive-execution-controller.js";
@@ -17,6 +18,7 @@ const task: IntelligenceTask = {
 
 function candidate(provider: string, model: string, predictedQuality: number, utility: number): ModelCandidate {
   return {
+    economics: fixtureZeroCost(provider, model),
     provider,
     model,
     capabilities: ["text"],
@@ -85,11 +87,11 @@ function route(candidates: ModelCandidate[], state: RouteDecision["economicState
 }
 
 describe("AdaptiveExecutionController", () => {
-  it("retries a transient execution failure within the bounded attempt limit", async () => {
+  it("cascades a transient execution failure without blindly retrying the same candidate", async () => {
     const first = candidate("p1", "m1", 0.8, 0.8);
     let calls = 0;
     const router = {
-      route: async () => route([first]),
+      route: async () => route([first, candidate("p2", "m2", 0.8, 0.7)]),
       completeForCandidate: async () => {
         calls += 1;
         if (calls === 1) throw new Error("temporary failure");

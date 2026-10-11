@@ -1,7 +1,7 @@
 import { getBenchmarkCases } from "../cases/index.js";
 import { evaluateCase } from "../evaluators/index.js";
 import { BenchmarkRequestError } from "../models/openai-compatible-client.js";
-import type { BenchmarkExecutionStatus, BenchmarkMode, BenchmarkModelClient, BenchmarkResult, ModelTarget, TelemetrySink } from "../types.js";
+import type { BenchmarkCategory, BenchmarkExecutionStatus, BenchmarkMode, BenchmarkModelClient, BenchmarkResult, ModelTarget, TelemetrySink } from "../types.js";
 
 export interface BenchmarkRunOptions {
   mode: BenchmarkMode;
@@ -9,11 +9,12 @@ export interface BenchmarkRunOptions {
   client: BenchmarkModelClient;
   telemetry?: TelemetrySink;
   attempts?: number;
+  categories?: BenchmarkCategory[];
 }
 
 export async function runBenchmark(options: BenchmarkRunOptions): Promise<BenchmarkResult[]> {
   const attempts = options.attempts ?? 1;
-  const cases = getBenchmarkCases(options.mode);
+  const cases = getBenchmarkCases(options.mode).filter(testCase => !options.categories || options.categories.includes(testCase.category));
   const results: BenchmarkResult[] = [];
   await options.telemetry?.emit("benchmark.started", { mode: options.mode, models: options.targets.length, cases: cases.length });
 
@@ -27,10 +28,12 @@ export async function runBenchmark(options: BenchmarkRunOptions): Promise<Benchm
         const response = await options.client.complete(target, [
           {
             role: "system",
-            content: "You are running inside a deterministic benchmark. Follow the user's requested output format exactly."
+            content: "You are running inside a deterministic benchmark. Follow the user's requested output format exactly. Keep the complete answer concise, under 200 words unless the user explicitly requires more."
           },
           { role: "user", content: testCase.prompt }
         ]);
+        if (!Number.isFinite(response.estimatedCostUsd) || response.estimatedCostUsd < 0) throw new BenchmarkRequestError("Invalid monetary usage.", { errorCode: "INVALID_COST" });
+        if (response.estimatedCostUsd > 0) throw new BenchmarkRequestError("Zero-money qualification received a charge.", { errorCode: "BILLING_REQUIRED", monetaryCostUsd: response.estimatedCostUsd });
         const evaluation = evaluateCase(testCase, response.content);
         result = {
           caseId: testCase.id,
@@ -42,11 +45,16 @@ export async function runBenchmark(options: BenchmarkRunOptions): Promise<Benchm
           success: evaluation.success,
           latencyMs: Date.now() - started,
           monetaryCost: response.estimatedCostUsd,
+          structuredOutputMode: response.structuredOutputMode,
           tokens: response.tokens,
           attempts,
+          inferenceProfile: `reasoning-${target.reasoning?.effort ?? (target.reasoning?.enabled === false ? "disabled" : "default")}:max-output-2400`,
           timestamp: new Date()
         };
       } catch (error) {
+        // A local economic rejection is not an observed physical model failure.
+        // Stop without inserting invented capability/performance evidence.
+        if (error instanceof BenchmarkRequestError && ['ECONOMIC_POLICY_BLOCKED', 'INVALID_COST'].includes(error.errorCode ?? '')) throw error;
         const failure = classifyFailure(error);
         stopModel = shouldStopModel(failure.status);
         result = {
@@ -58,8 +66,9 @@ export async function runBenchmark(options: BenchmarkRunOptions): Promise<Benchm
           quality: null,
           success: null,
           latencyMs: Date.now() - started,
-          monetaryCost: 0,
+          monetaryCost: error instanceof BenchmarkRequestError ? error.monetaryCostUsd ?? 0 : 0,
           attempts,
+          inferenceProfile: `reasoning-${target.reasoning?.effort ?? (target.reasoning?.enabled === false ? "disabled" : "default")}:max-output-2400`,
           httpStatus: failure.httpStatus,
           errorCode: failure.errorCode,
           failureReason: failure.failureReason,
@@ -68,6 +77,9 @@ export async function runBenchmark(options: BenchmarkRunOptions): Promise<Benchm
       }
       results.push(result);
       await options.telemetry?.emit("benchmark.case.completed", { ...result, timestamp: result.timestamp.toISOString() });
+      // A contradictory charge stops the entire qualification, including other
+      // targets/providers. Keep the reported amount and never grade capability.
+      if (result.status === 'BILLING_REQUIRED') return results;
       if (stopModel) break;
       if (target.rateLimitDelayMs) await sleep(target.rateLimitDelayMs);
     }
@@ -83,7 +95,9 @@ function sleep(ms: number): Promise<void> {
 }
 
 function shouldStopModel(status: BenchmarkExecutionStatus): boolean {
-  return !["PASS", "FAIL"].includes(status);
+  // A single response exhausting its budget is not a provider outage. Preserve
+  // the operational observation, then still measure unrelated capabilities.
+  return !["PASS", "FAIL", "OUTPUT_LIMIT"].includes(status);
 }
 
 function classifyFailure(error: unknown): {
@@ -95,6 +109,8 @@ function classifyFailure(error: unknown): {
   const message = error instanceof Error ? error.message : String(error);
   const httpStatus = error instanceof BenchmarkRequestError ? error.httpStatus : extractHttpStatus(message);
   const errorCode = error instanceof BenchmarkRequestError ? error.errorCode : undefined;
+  if (errorCode === "OUTPUT_LIMIT") return { status: "OUTPUT_LIMIT", errorCode, failureReason: message };
+  if (errorCode === "BILLING_REQUIRED") return { status: "BILLING_REQUIRED", errorCode, failureReason: message };
 
   if (httpStatus === 429) return { status: "RATE_LIMITED", httpStatus, errorCode, failureReason: message };
   if (httpStatus === 401 || httpStatus === 403) return { status: "AUTH_ERROR", httpStatus, errorCode, failureReason: message };

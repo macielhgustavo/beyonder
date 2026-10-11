@@ -1,8 +1,10 @@
-import type { ToolCall, ToolDescriptor, ToolExecutionResult } from "@beyonder/tools";
+import type { ToolCall, ToolDescriptor, ToolExecutionResult, ToolSideEffect } from "@beyonder/tools";
 import type { IntelligenceTask } from "../intelligence/contracts.js";
 import type { EconomicState } from "../types.js";
 import type { ModelCandidate, RouteDecision } from "../models/adaptive-types.js";
 import type { RetrievedMemory } from "../memory/memory-engine.js";
+import type { ObjectiveOutcomeStatus } from "../intelligence/contracts.js";
+import type { CompletionEvaluation } from "./completion.js";
 
 export type TaskExecutionState =
   | "CREATED"
@@ -12,6 +14,7 @@ export type TaskExecutionState =
   | "WAITING"
   | "RECOVERING"
   | "REPLANNING"
+  | "EXECUTION_FINISHED"
   | "COMPLETED"
   | "FAILED"
   | "BLOCKED"
@@ -26,6 +29,8 @@ export type CompletionStatus = Extract<
 export type PlanStepStatus = "PENDING" | "RUNNING" | "COMPLETED" | "FAILED" | "BLOCKED" | "SKIPPED";
 
 export interface PlanStep {
+  evidenceRole?: "DISCOVERY" | "SOURCE";
+  kind?: "TOOL" | "DIRECT_RESPONSE";
   id: string;
   description: string;
   status: PlanStepStatus;
@@ -33,6 +38,10 @@ export interface PlanStep {
   allowedToolCapabilities?: string[];
   dependencies?: string[];
   action?: ToolCall;
+  actionStrategy?: "DISCOVERED_BROWSER_LINK";
+  alternativeUrls?: string[];
+  sourceDomain?: string;
+  sourceTopic?: string;
 }
 
 export interface Plan {
@@ -58,6 +67,9 @@ export interface TaskBudget {
 }
 
 export interface StepContext {
+  economicState?: EconomicState;
+  task?: IntelligenceTask;
+  candidates?: ModelCandidate[];
   objective: string;
   planSummary: string;
   currentStep: PlanStep;
@@ -82,6 +94,9 @@ export interface TaskBudgetUsage {
 }
 
 export interface StepExecution {
+  evidenceRole?: "DISCOVERY" | "SOURCE";
+  toolCapabilities?: string[];
+  toolSideEffects?: ToolSideEffect[];
   id: string;
   stepId: string;
   attempt: number;
@@ -113,6 +128,15 @@ export interface ExecutionCheckpoint {
 }
 
 export interface TaskExecution {
+  economicState?: EconomicState;
+  executionPhase?: "EXECUTING" | "EXECUTION_FINISHED" | "OBJECTIVE_VERIFIED";
+  executionFinishedAt?: string;
+  objectiveStatus?: ObjectiveOutcomeStatus;
+  objectiveVerification?: CompletionEvaluation;
+  activeDurationBeforeResumeMs?: number;
+  resumedAt?: string;
+  attempts?: import("../models/inference.js").InferenceAttempt[];
+  failure?: { failureClass: string; phase?: string; provider?: string; model?: string; httpStatus?: number };
   id: string;
   task: IntelligenceTask;
   plan: Plan;
@@ -125,18 +149,23 @@ export interface TaskExecution {
   completedAt?: string;
   result?: string;
   error?: string;
+  reconciliationRequired?: { stepId: string; tool: string; reason: "OUTCOME_UNKNOWN" };
 }
 
 export interface AutonomousTaskOutcome {
   execution: TaskExecution;
   status: CompletionStatus;
   success: boolean;
+  verificationStatus?: "VERIFIED" | "UNVERIFIED" | "REJECTED";
+  objectiveStatus?: ObjectiveOutcomeStatus;
   result?: string;
   failureReason?: string;
 }
 
 export interface StepActionDecision {
   call: ToolCall;
+  monetaryCostUsd?: number;
+  shadowCostUsd?: number;
 }
 
 export interface StepActionPlanner {
@@ -158,4 +187,3 @@ export const DEFAULT_TASK_BUDGET: TaskBudget = {
   maxConsecutiveFailures: 3,
   maxNoProgressSteps: 3
 };
-

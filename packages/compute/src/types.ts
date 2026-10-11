@@ -54,7 +54,10 @@ export type CredentialStatus =
   | "keyless"
   | "present-env"
   | "present-vault"
-  | "missing";
+  | "missing"
+  | "configured-unavailable"
+  | "vault-locked"
+  | "invalid-credential";
 
 export type ValidationStatus =
   | "not-run"
@@ -87,6 +90,13 @@ export type ModelOperationalStatus =
   | "UNKNOWN";
 
 export interface ModelCatalogEntry {
+  contextWindow?: number;
+  toolCalling?: "yes" | "no" | "unknown";
+  reasoningControl?: boolean;
+  costEvidence?: { source: "live-catalog"; observedAt: string; zeroPrice?: boolean; explicitFreeRoute?: boolean };
+  role?: "instruct" | "guard" | "embedding" | "reranker" | "classification-only" | "vision-only" | "speech-only" | "unknown";
+  structuredOutput?: "native" | "prompted" | "unsupported" | "unknown";
+  costClass?: "FREE_CONFIRMED" | "FREE_TIER_ELIGIBLE" | "UNKNOWN_COST" | "PAID";
   id: string;
   capabilities: ModelCapability[];
   status?: ModelOperationalStatus;
@@ -151,6 +161,7 @@ export interface SecretRecord {
 }
 
 export interface ProviderStatus {
+  credential?: import("@beyonder/credentials").CredentialDescriptor;
   provider: ProviderCatalogEntry;
   credentialStatus: CredentialStatus;
   validationStatus: ValidationStatus;
@@ -160,6 +171,7 @@ export interface ProviderStatus {
 }
 
 export interface AutopilotProviderProgress {
+  credential?: import("@beyonder/credentials").CredentialDescriptor;
   providerId: string;
   state: ProviderState;
   classification: ProviderClassification;
@@ -178,6 +190,7 @@ export interface AutopilotProviderProgress {
     latencyMs?: number;
     modelCount?: number;
     models?: string[];
+    modelMetadata?: ModelCatalogEntry[];
     rateLimitHeaders?: Record<string, string>;
   };
   freeLlmApi?: {
@@ -193,6 +206,10 @@ export interface AutopilotStateFile {
 }
 
 export interface ComputeInventoryEntry {
+  bootstrapReady?: boolean;
+  modelCatalogReady?: boolean;
+  inferenceQualified?: boolean;
+  verifierQualified?: boolean;
   providerId: string;
   providerName: string;
   status: "healthy" | "keyless" | "missing-credential" | "human-action-required" | "manual-required" | "skipped" | "failed";

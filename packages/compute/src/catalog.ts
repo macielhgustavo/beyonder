@@ -44,6 +44,11 @@ const baseProviders: ProviderCatalogEntry[] = [
     humanRequirements: ["account login", "possible CAPTCHA or 2FA"],
     openAiCompatibleEndpoint: "https://api.groq.com/openai/v1",
     knownFreeModels: ["llama-3.3-70b-versatile", "openai/gpt-oss-120b", "moonshotai/kimi-k2-instruct"],
+    modelCatalog: [
+      { id: "meta-llama/llama-prompt-guard-2-86m", capabilities: ["OTHER"], role: "guard", structuredOutput: "unsupported" },
+      { id: "meta-llama/llama-prompt-guard-2-22m", capabilities: ["OTHER"], role: "guard", structuredOutput: "unsupported" },
+      { id: "openai/gpt-oss-safeguard-20b", capabilities: ["OTHER"], role: "guard", structuredOutput: "unsupported" }
+    ],
     freeTier: "free developer tier; rate limits vary by model, verify-current",
     notes: ["Good first keyed provider for low-latency text inference."],
     automationStatus: "human-step",

@@ -145,6 +145,7 @@ export async function runCandidates<T>(input: {
   computeMode?: ComputeMode;
   canaryMaxSingleInferenceUsd?: number;
   canaryProvider?: string;
+  allowedPaidProviders?: string[];
   canaryDiscrepancyMultiplier?: number;
 }): Promise<{ value: T; response: ModelResponse; candidate: ModelCandidate; attempts: InferenceAttempt[]; monetaryCostUsd: number; shadowCostUsd: number }> {
   const start = Date.now();
@@ -173,7 +174,7 @@ export async function runCandidates<T>(input: {
     const isPaidCandidate = candidate.costClass === "PAID" || candidate.monetaryCostUsd > 0;
     let reservation: SpendReservation | null = null;
     let worstCaseMicros = ZERO_MICROS;
-    const canaryLimitUsd = input.canaryMaxSingleInferenceUsd ?? 0.01;
+    const canaryLimitUsd = input.canaryMaxSingleInferenceUsd ?? (input.maxMonetaryCostUsd || 0.10);
 
     if (!isPaidCandidate) {
       try { requireZeroCostDecision(candidate.economics, candidate.provider, candidate.model); }
@@ -211,11 +212,16 @@ export async function runCandidates<T>(input: {
         last = new InferenceError(`Provider '${candidate.provider}' is not the authorized canary provider ('${input.canaryProvider}').`, "ECONOMIC_POLICY_BLOCKED");
         continue;
       }
+      // Multi-Provider Economy: Allowed paid providers check
+      if (input.allowedPaidProviders && !input.allowedPaidProviders.includes(candidate.provider)) {
+        last = new InferenceError(`Provider '${candidate.provider}' is not in the authorized paid providers list.`, "ECONOMIC_POLICY_BLOCKED");
+        continue;
+      }
       const worstCaseUsd = candidate.costEstimate
         ? microsToUsd(candidate.costEstimate.worstCaseCostMicros)
         : (candidate.worstCaseCostUsd ?? candidate.monetaryCostUsd);
       if (worstCaseUsd > canaryLimitUsd || worstCaseUsd > input.maxMonetaryCostUsd) {
-        last = new InferenceError("Candidate cost exceeds authorized budget or canary limit.", "BUDGET_EXHAUSTED");
+        last = new InferenceError("Candidate cost exceeds authorized budget or single inference limit.", "BUDGET_EXHAUSTED");
         continue;
       }
       worstCaseMicros = candidate.costEstimate?.worstCaseCostMicros ?? usdToMicros(worstCaseUsd);

@@ -166,9 +166,11 @@ export function assessCapability(candidate: ModelCandidate, task: IntelligenceTa
   return { overall, dimensions, passes: gaps.length === 0, gaps, evidence };
 }
 
-export function computeTier(candidate: ModelCandidate, fit: CandidateCapabilityFit, floor: QualityFloor): ComputeTier {
+export function computeTier(candidate: ModelCandidate, fit: CandidateCapabilityFit, floor: QualityFloor, allowPaid = false): ComputeTier {
   if (candidate.local || candidate.provider === "ollama") return "LOCAL_EMERGENCY";
-  if (candidate.costClass === "PAID" || candidate.monetaryCostUsd > 0) return "PAID_DISABLED";
+  if (candidate.costClass === "PAID" || candidate.monetaryCostUsd > 0) {
+    return allowPaid ? "PAID_CLOUD" : "PAID_DISABLED";
+  }
   const headroom = fit.overall - floor.minimumOverall;
   return headroom >= CLOUD_FIRST_POLICY.strongCloudHeadroom && candidate.reliability >= CLOUD_FIRST_POLICY.strongCloudReliability
     ? "STRONG_FREE_CLOUD"
@@ -200,7 +202,7 @@ export function routingScore(candidate: ModelCandidate, fit: CandidateCapability
 }
 
 export function executionTierRank(tier: ComputeTier | undefined): number {
-  return tier === "STRONG_FREE_CLOUD" ? 0 : tier === "OTHER_FREE_CLOUD" ? 1 : tier === "PAID_DISABLED" ? 2 : 3;
+  return tier === "STRONG_FREE_CLOUD" ? 0 : tier === "OTHER_FREE_CLOUD" ? 1 : tier === "PAID_CLOUD" ? 2 : tier === "PAID_DISABLED" ? 3 : 4;
 }
 
 export function paidCandidateAllowed(): boolean {

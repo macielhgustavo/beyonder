@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { z } from "zod";
+import { resolveComputeEconomy } from "../economy/compute-economy-config.js";
 
 const booleanFromEnv = z.preprocess(
   (value) => {
@@ -37,7 +38,13 @@ const envSchema = z.object({
   BEYONDER_BENCHMARK_DB_PATH: z.string().default("./data/beyonder-benchmark.sqlite"),
   OLLAMA_BASE_URL: z.string().url().default("http://localhost:11434"),
   OPENAI_COMPAT_BASE_URL: z.string().optional().default(""),
-  OPENAI_COMPAT_API_KEY: z.string().optional().default("")
+  OPENAI_COMPAT_API_KEY: z.string().optional().default(""),
+  BEYONDER_COMPUTE_MODE: z.enum(["zero_cost", "bounded", "manual_approval"]).default("zero_cost"),
+  BEYONDER_COMPUTE_MONTHLY_HARD_CAP_USD: numberFromEnv(0),
+  BEYONDER_COMPUTE_DAILY_HARD_CAP_USD: numberFromEnv(0),
+  BEYONDER_COMPUTE_OBJECTIVE_HARD_CAP_USD: numberFromEnv(0.25),
+  BEYONDER_COMPUTE_OBJECTIVE_SOFT_TARGET_USD: numberFromEnv(0.03),
+  BEYONDER_COMPUTE_MAX_INFERENCE_USD: numberFromEnv(0.10)
 });
 
 export type AppConfig = ReturnType<typeof loadConfig>;
@@ -71,7 +78,15 @@ export function loadConfig(overrides: Partial<Record<string, string>> = {}) {
       ollamaBaseUrl: parsed.OLLAMA_BASE_URL,
       openAiCompatBaseUrl: parsed.OPENAI_COMPAT_BASE_URL,
       openAiCompatApiKey: parsed.OPENAI_COMPAT_API_KEY
-    }
+    },
+    compute: resolveComputeEconomy({
+      mode: parsed.BEYONDER_COMPUTE_MODE,
+      monthlyHardCapUsd: parsed.BEYONDER_COMPUTE_MONTHLY_HARD_CAP_USD,
+      dailyHardCapUsd: parsed.BEYONDER_COMPUTE_DAILY_HARD_CAP_USD,
+      defaultObjectiveHardCapUsd: parsed.BEYONDER_COMPUTE_OBJECTIVE_HARD_CAP_USD,
+      defaultObjectiveSoftTargetUsd: parsed.BEYONDER_COMPUTE_OBJECTIVE_SOFT_TARGET_USD,
+      maxSingleInferenceUsd: parsed.BEYONDER_COMPUTE_MAX_INFERENCE_USD
+    })
   };
   Object.defineProperty(config.model, "openAiCompatApiKey", { value: parsed.OPENAI_COMPAT_API_KEY, enumerable: false });
   return config;

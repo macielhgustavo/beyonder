@@ -1,6 +1,6 @@
 export { createRuntime } from "./runtime.js";
 export { loadConfig } from "./config/env.js";
-export { classifyEconomicState } from "./economy/economic-state.js";
+export * from "./economy/index.js";
 export { IntelligenceLayer, TaskClassifier, ComplexityEstimator, EvaluationLayer, AdaptiveExecutionController } from "./intelligence/index.js";
 export { DEFAULT_RETRIEVAL_WEIGHTS } from "./memory/memory-engine.js";
 export { MemoryEngine } from "./memory/memory-engine.js";
@@ -29,6 +29,7 @@ export { DefaultRecoveryPolicy } from "./tasks/recovery.js";
 export { DeterministicCompletionEvaluator, outcomeWithCompletion } from "./tasks/completion.js";
 export { ObjectiveVerifier } from "./tasks/completion.js";
 export { ModelObjectiveVerifier } from "./tasks/model-objective-verifier.js";
+export * from "./missions/index.js";
 export { productMissionMetrics, type ProductMissionMetrics } from "./product/metrics.js";
 export type { AppConfig } from "./config/env.js";
 export type {

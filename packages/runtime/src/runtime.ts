@@ -4,6 +4,7 @@ import type { AppConfig } from "./config/env.js";
 import type Database from "better-sqlite3";
 import { openDatabase, type Db } from "./db/client.js";
 import { EconomicLedger } from "./economy/ledger.js";
+import { BudgetAccountant } from "./economy/budget-accountant.js";
 import { IntelligenceLayer } from "./intelligence/intelligence-layer.js";
 import { AdaptiveExecutionController } from "./intelligence/adaptive-execution-controller.js";
 import { EvaluationLayer } from "./intelligence/evaluation-layer.js";
@@ -36,6 +37,7 @@ export interface BeyonderRuntime {
   sqlite: Database.Database;
   db: Db;
   ledger: EconomicLedger;
+  budgetAccountant: BudgetAccountant;
   state: StateStore;
   memory: MemoryEngine;
   memoryStore: MemoryStore;
@@ -75,6 +77,7 @@ export interface RuntimeOptions {
 export function createRuntime(config: AppConfig, options: RuntimeOptions = {}): BeyonderRuntime {
   const { db, sqlite } = openDatabase(config.dbPath);
   const ledger = new EconomicLedger(db);
+  const budgetAccountant = new BudgetAccountant(sqlite, config.compute, ledger);
   const state = new StateStore(db);
   const memoryStore = new MemoryStore(db);
   const memory = new MemoryEngine(memoryStore);
@@ -144,6 +147,7 @@ export function createRuntime(config: AppConfig, options: RuntimeOptions = {}): 
     sqlite,
     db,
     ledger,
+    budgetAccountant,
     state,
     memory,
     memoryStore,

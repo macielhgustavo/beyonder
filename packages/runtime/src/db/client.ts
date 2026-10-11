@@ -51,6 +51,58 @@ export function openDatabase(path: string): { sqlite: Database.Database; db: Db 
       details TEXT NOT NULL DEFAULT '{}',
       created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS budget_accounts (
+      id TEXT PRIMARY KEY,
+      kind TEXT NOT NULL,
+      parent_id TEXT,
+      hard_cap_micros INTEGER NOT NULL,
+      soft_target_micros INTEGER NOT NULL DEFAULT 0,
+      spent_micros INTEGER NOT NULL DEFAULT 0,
+      reserved_micros INTEGER NOT NULL DEFAULT 0,
+      currency TEXT NOT NULL DEFAULT 'USD',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS spend_reservations (
+      id TEXT PRIMARY KEY,
+      budget_account_id TEXT NOT NULL,
+      scope_hierarchy TEXT NOT NULL,
+      task_id TEXT,
+      phase TEXT,
+      provider TEXT NOT NULL,
+      model TEXT NOT NULL,
+      estimated_input_tokens INTEGER NOT NULL DEFAULT 0,
+      max_output_tokens INTEGER NOT NULL DEFAULT 0,
+      worst_case_micros INTEGER NOT NULL,
+      actual_cost_micros INTEGER,
+      pricing_snapshot_id TEXT,
+      state TEXT NOT NULL DEFAULT 'RESERVED',
+      idempotency_key TEXT NOT NULL UNIQUE,
+      provider_request_id TEXT,
+      created_at TEXT NOT NULL,
+      sent_at TEXT,
+      settled_at TEXT,
+      error TEXT
+    );
+    CREATE TABLE IF NOT EXISTS pricing_snapshots (
+      id TEXT PRIMARY KEY,
+      provider TEXT NOT NULL,
+      model TEXT NOT NULL,
+      currency TEXT NOT NULL DEFAULT 'USD',
+      input_per_million INTEGER NOT NULL,
+      output_per_million INTEGER NOT NULL,
+      cache_read_per_million INTEGER NOT NULL DEFAULT 0,
+      cache_write_per_million INTEGER NOT NULL DEFAULT 0,
+      request_fee INTEGER NOT NULL DEFAULT 0,
+      source TEXT NOT NULL,
+      confidence TEXT NOT NULL DEFAULT 'medium',
+      effective_at TEXT NOT NULL,
+      fetched_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_budget_accounts_parent ON budget_accounts(parent_id);
+    CREATE INDEX IF NOT EXISTS idx_spend_reservations_state ON spend_reservations(state);
+    CREATE INDEX IF NOT EXISTS idx_spend_reservations_task ON spend_reservations(task_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_pricing_snapshots_lookup ON pricing_snapshots(provider, model, effective_at);
   `);
 
   ensureColumn(sqlite, "memories", "confidence", "REAL NOT NULL DEFAULT 1");

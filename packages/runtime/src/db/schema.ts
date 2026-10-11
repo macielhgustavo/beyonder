@@ -38,3 +38,55 @@ export const auditEvents = sqliteTable("audit_events", {
   details: text("details").notNull().default("{}"),
   createdAt: text("created_at").notNull()
 });
+
+export const budgetAccounts = sqliteTable("budget_accounts", {
+  id: text("id").primaryKey(),
+  kind: text("kind").notNull(),
+  parentId: text("parent_id"),
+  hardCapMicros: integer("hard_cap_micros").notNull(),
+  softTargetMicros: integer("soft_target_micros").notNull().default(0),
+  spentMicros: integer("spent_micros").notNull().default(0),
+  reservedMicros: integer("reserved_micros").notNull().default(0),
+  currency: text("currency").notNull().default("USD"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull()
+});
+
+export const spendReservations = sqliteTable("spend_reservations", {
+  id: text("id").primaryKey(),
+  budgetAccountId: text("budget_account_id").notNull(),
+  scopeHierarchy: text("scope_hierarchy").notNull(),
+  taskId: text("task_id"),
+  phase: text("phase"),
+  provider: text("provider").notNull(),
+  model: text("model").notNull(),
+  estimatedInputTokens: integer("estimated_input_tokens").notNull().default(0),
+  maxOutputTokens: integer("max_output_tokens").notNull().default(0),
+  worstCaseMicros: integer("worst_case_micros").notNull(),
+  actualCostMicros: integer("actual_cost_micros"),
+  pricingSnapshotId: text("pricing_snapshot_id"),
+  state: text("state").notNull().default("RESERVED"),
+  idempotencyKey: text("idempotency_key").notNull().unique(),
+  providerRequestId: text("provider_request_id"),
+  createdAt: text("created_at").notNull(),
+  sentAt: text("sent_at"),
+  settledAt: text("settled_at"),
+  error: text("error")
+});
+
+export const pricingSnapshots = sqliteTable("pricing_snapshots", {
+  id: text("id").primaryKey(),
+  provider: text("provider").notNull(),
+  model: text("model").notNull(),
+  currency: text("currency").notNull().default("USD"),
+  inputPerMillion: integer("input_per_million").notNull(),
+  outputPerMillion: integer("output_per_million").notNull(),
+  cacheReadPerMillion: integer("cache_read_per_million").notNull().default(0),
+  cacheWritePerMillion: integer("cache_write_per_million").notNull().default(0),
+  requestFee: integer("request_fee").notNull().default(0),
+  source: text("source").notNull(),
+  confidence: text("confidence").notNull().default("medium"),
+  effectiveAt: text("effective_at").notNull(),
+  fetchedAt: text("fetched_at").notNull()
+});
+

@@ -156,6 +156,11 @@ export class ModelObjectiveVerifier implements CompletionEvaluator {
       const primary = await review(false);
       const claimReview = primary.value.satisfied && criticalReviewRequired ? await review(true) : undefined;
       const verdict = claimReview?.value ?? primary.value;
+      // A failed plan dependency review describes a correctable artifact. A
+      // model's NONE recommendation must not skip the existing one-shot rewrite;
+      // the revised artifact still requires a fresh independent verification.
+      const recoveryRecommendation = planReview && claimReview && !verdict.satisfied && verdict.recoveryRecommendation === "NONE"
+        ? "RETRY_SYNTHESIS" : verdict.recoveryRecommendation;
       const dimensions: ObjectiveVerificationDimension[] = [
         ...deterministic.dimensions,
         { name: "relevance", passed: verdict.relevance, reason: verdict.relevance ? "Independent verifier found the result relevant." : "Result does not directly answer the objective." },
@@ -165,14 +170,14 @@ export class ModelObjectiveVerifier implements CompletionEvaluator {
       ];
       return {
         status: verdict.satisfied ? "PASS" : "FAIL",
-        objectiveStatus: verdict.satisfied ? "SUCCEEDED" : verdict.recoveryRecommendation === "REQUEST_INPUT" ? "NEEDS_INPUT" : verdict.recoveryRecommendation === "ENABLE_CAPABILITY" ? "NEEDS_CAPABILITY" : "FAILED",
+        objectiveStatus: verdict.satisfied ? "SUCCEEDED" : recoveryRecommendation === "REQUEST_INPUT" ? "NEEDS_INPUT" : recoveryRecommendation === "ENABLE_CAPABILITY" ? "NEEDS_CAPABILITY" : "FAILED",
         taskCompleted: verdict.satisfied,
         method: "independent-semantic-objective-verifier",
         confidence: verdict.confidence,
         reason: verdict.reason,
         dimensions,
         missingRequirements: verdict.missingRequirements,
-        recoveryRecommendation: verdict.satisfied ? "NONE" : verdict.recoveryRecommendation
+        recoveryRecommendation: verdict.satisfied ? "NONE" : recoveryRecommendation
       };
     } catch (error) {
       const failure = classifyFailure(error);

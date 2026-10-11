@@ -2,6 +2,7 @@ import { currentVersionLookup, observedCurrentVersion } from "./current-version.
 import { objectivePhaseTask } from "../models/compute-policy.js";
 import { nanoid } from "nanoid";
 import { parseCalculatorExpression } from "../intelligence/calculator-expression.js";
+import { analyzeGoalContract } from "../intelligence/goal-contract.js";
 import type { ToolCall, ToolExecutor } from "@beyonder/tools";
 import type { IntelligenceTask, TaskOutcome } from "../intelligence/contracts.js";
 import type { MemoryEngine, RetrievedMemory } from "../memory/memory-engine.js";
@@ -230,6 +231,7 @@ export class AutonomousTaskExecutor {
       // Recovery may have changed the result producer. Refresh persisted attempts
       // before choosing an independent verifier so the new producer cannot judge itself.
         await this.syncInferenceUsage(execution);
+        execution.usage.durationMs = elapsedDuration(execution, this.now());
         evaluation = await this.completionEvaluator.evaluate(execution, request.completionCriteria);
         execution.usage.durationMs = elapsedDuration(execution, this.now());
       }
@@ -548,6 +550,12 @@ export class AutonomousTaskExecutor {
   private async recoverUnsatisfiedObjective(execution: TaskExecution, request: ExecuteTaskRequest, evaluation: CompletionEvaluation): Promise<boolean> {
     if (!["RETRY_SYNTHESIS", "ALTERNATE_MODEL"].includes(evaluation.recoveryRecommendation)) return false;
     if (execution.usage.retries >= execution.budget.maxRetries || execution.usage.durationMs >= execution.budget.maxDurationMs) return false;
+    const contract = execution.task.goalContract ?? analyzeGoalContract(execution.task.input, execution.task.type);
+    const secondReview = contract.evidenceRequirement === "REQUIRED" || ["PLAN", "EXPLANATION", "COMPARISON"].includes(contract.expectedResultKind);
+    // A rewrite is useful only if the remaining deadline can also serve its
+    // independent review. Preserve the original verified rejection otherwise.
+    const recoveryWindowMs = secondReview ? 60_000 : 40_000;
+    if (execution.budget.maxDurationMs - elapsedDuration(execution, this.now()) < recoveryWindowMs) return false;
     const producer = [...(execution.attempts ?? [])].reverse().find((attempt) => attempt.phase === "DIRECT_RESPONSE" && attempt.status === "SUCCEEDED");
     const recoveryStep: PlanStep = {
       id: `objective-recovery-${execution.usage.retries + 1}`,

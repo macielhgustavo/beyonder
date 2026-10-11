@@ -135,6 +135,16 @@ describe("objective verification truth", () => {
     expect(ex.usage.shadowCostUsd).toBeCloseTo(.003);
   });
 
+  it("offers one bounded rewrite when a plan review finds a fixable gap but says NONE", async () => {
+    const input = "Plan a file cleanup with a backup before removing old documents.";
+    const task = { ...comparisonTask("plan-cleanup"), input, type: "planning" as const, goalContract: analyzeGoalContract(input, "planning") };
+    const ex = execution(task, "First remove the documents; then make a backup.");
+    const { router } = fakeRouter(["verifier"], system => system.includes("PLAN DEPENDENCY AND RECOVERY REVIEW")
+      ? JSON.stringify({ satisfied: false, confidence: .9, relevance: true, completeness: false, consistentWithEvidence: true, reason: "Deletion precedes the backup.", missingRequirements: ["backup-before-deletion"], recoveryRecommendation: "NONE" })
+      : supportedVerdict);
+    expect(await new ModelObjectiveVerifier(router).evaluate(ex)).toMatchObject({ taskCompleted: false, objectiveStatus: "FAILED", recoveryRecommendation: "RETRY_SYNTHESIS" });
+  });
+
   it("keeps a supported rebuild plan verified only after the critical review finishes", async () => {
     const input = "Plan an import into a new disposable database, including validation and recovery.";
     const task = { ...comparisonTask("plan-rebuild"), input, type: "planning" as const, goalContract: analyzeGoalContract(input, "planning") };
@@ -368,5 +378,21 @@ describe("objective verification truth", () => {
       expect(JSON.parse(recoveryRequest[0][1]!.content).recoveryReason).toContain("omits append-only logs");
       expect(outcome.execution.objectiveStatus).toBe("SUCCEEDED");
     } else expect(outcome.execution.objectiveStatus).not.toBe("SUCCEEDED");
+  });
+  it("preserves a verified rejection when the deadline cannot also serve a revised answer's review", async () => {
+    const task = comparisonTask("deadline-preserves-rejection");
+    let now = Date.now();
+    const { router, complete } = fakeRouter(["producer"], () => "Incomplete comparison.");
+    const evaluator = { evaluate: vi.fn(async () => {
+      now += 75_000;
+      return { status: "FAIL" as const, objectiveStatus: "FAILED" as const, taskCompleted: false, method: "independent-verifier", confidence: .9, reason: "The answer omits the other option.", dimensions: [], missingRequirements: ["other-option"], recoveryRecommendation: "RETRY_SYNTHESIS" as const };
+    }) };
+    const executor = new AutonomousTaskExecutor({ toolExecutor: new ToolExecutor(new ToolRegistry()), getAvailableTools: async () => [], modelRouter: router, completionEvaluator: evaluator, now: () => now });
+    const plan: Plan = { id: "deadline-plan", taskId: task.id, objective: task.input, revision: 1, createdAt: new Date(now).toISOString(), steps: [{ id: "answer", description: "Compare", kind: "DIRECT_RESPONSE", status: "PENDING" }] };
+    const outcome = await executor.execute({ task, plan, economicState: "normal", budget: { maxRetries: 1, maxDurationMs: 120_000, maxShadowCostUsd: 1 } });
+    expect(outcome).toMatchObject({ success: false, objectiveStatus: "FAILED" });
+    expect(outcome.execution.usage.retries).toBe(0);
+    expect(evaluator.evaluate).toHaveBeenCalledTimes(1);
+    expect(complete).toHaveBeenCalledTimes(1);
   });
 });

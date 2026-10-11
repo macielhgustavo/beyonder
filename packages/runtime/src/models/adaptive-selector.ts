@@ -13,7 +13,7 @@ import type { RandomSource } from "./random.js";
 import { MathRandomSource } from "./random.js";
 import { ROUTER_CONFIG, getEconomicRoutingPolicy } from "./router-config.js";
 import { ShadowCostCalculator } from "./shadow-cost.js";
-import { calculateEffectiveResourceCost, calculateUtility } from "./utility.js";
+import { calculateEffectiveResourceCost, calculateUtility, resolveMonetaryReference } from "./utility.js";
 import { discoverOllama } from "./ollama-discovery.js";
 import type { PricingRegistry, PricingSnapshot } from "../economy/pricing-registry.js";
 import { type CostEstimator, DefaultCostEstimator } from "../economy/cost-estimator.js";
@@ -45,6 +45,8 @@ export interface AdaptiveSelectorOptions {
   shadowMode?: boolean;
   computeMode?: ComputeMode;
   maxSingleInferenceUsd?: number;
+  allowedPaidProviders?: string[];
+  monetaryReferenceUsd?: number;
 }
 
 type InventoryEntry = ReturnType<typeof buildComputeInventory>[number];
@@ -173,6 +175,20 @@ export class AdaptiveModelSelector {
 
       if (!costAllowed || modelMetadata.costClass === 'PAID' && !['PROVIDER_FREE_PLAN', 'PROVIDER_BILLING_API', 'INSTALLATION_ZERO_BILLING_POSTURE'].includes(economics.source) || pair.entry.cost === 'billing-risk') {
         if (isEconomyActive && this.pricingRegistry) {
+          if (this.options.allowedPaidProviders && !this.options.allowedPaidProviders.includes(pair.entry.providerId)) {
+            const rejected: RejectedCandidate = {
+              provider: pair.entry.providerId,
+              model: pair.model,
+              inferenceProfile: pair.inferenceProfile,
+              computeTier: 'PAID_DISABLED',
+              economics,
+              reasons: [`economic: provider '${pair.entry.providerId}' is not in the allowed paid providers list`]
+            };
+            rejectedCandidates.push(rejected);
+            await this.telemetry('debug', 'router.candidate_rejected', { taskId: task.id, ...rejected });
+            continue;
+          }
+
           pricingSnapshot = this.pricingRegistry.getPrice(pair.entry.providerId, pair.model);
           if (!pricingSnapshot || !this.pricingRegistry.isFresh(pricingSnapshot)) {
             const rejected: RejectedCandidate = {
@@ -199,11 +215,17 @@ export class AdaptiveModelSelector {
           worstCaseCostUsd = microsToUsd(costEstimate.worstCaseCostMicros);
 
           let affordable = true;
+          const phase = task.inferencePhase === "OBJECTIVE_VERIFICATION"
+            ? "verifier"
+            : task.inferencePhase === "REPLANNING"
+            ? "recovery"
+            : "producer";
+          const budgetScope = { objectiveId: task.id, phase };
           if (this.budgetAccountant) {
             if (isShadowMode) {
-              affordable = this.budgetAccountant.canAffordHypothetical({ objectiveId: task.id }, costEstimate.worstCaseCostMicros);
+              affordable = this.budgetAccountant.canAffordHypothetical(budgetScope, costEstimate.worstCaseCostMicros);
             } else {
-              affordable = this.budgetAccountant.canAfford({ objectiveId: task.id }, costEstimate.worstCaseCostMicros);
+              affordable = this.budgetAccountant.canAfford(budgetScope, costEstimate.worstCaseCostMicros);
             }
           }
           if (!affordable) {
@@ -213,7 +235,7 @@ export class AdaptiveModelSelector {
               inferenceProfile: pair.inferenceProfile,
               computeTier: 'PAID_DISABLED',
               economics,
-              reasons: ['NEEDS_BUDGET: worst-case cost exceeds remaining applicable budget']
+              reasons: [`NEEDS_BUDGET: worst-case cost exceeds remaining applicable budget for phase '${phase}'`]
             };
             rejectedCandidates.push(rejected);
             await this.telemetry('debug', 'router.candidate_rejected', { taskId: task.id, ...rejected });
@@ -350,6 +372,7 @@ export class AdaptiveModelSelector {
         structuredOutput: "unknown" as const
       };
       const structuredPenalty = task.requirements.structuredOutput && metadata?.structuredOutput !== "native" ? metadata?.structuredOutput === "prompted" ? 0.02 : 0.08 : 0;
+      const monetaryReferenceUsd = this.options.monetaryReferenceUsd ?? resolveMonetaryReference(task);
       const utility = calculateUtility({
         predictedQuality,
         historicalSuccess: performance.successRate,
@@ -358,7 +381,7 @@ export class AdaptiveModelSelector {
         shadowCostUsd: shadow.shadowCostUsd,
         latencyPenalty,
         failureRisk
-      }, economicState) - structuredPenalty;
+      }, economicState, { monetaryReferenceUsd }) - structuredPenalty;
 
       const candidate: ModelCandidate = {
         economics,
@@ -412,6 +435,8 @@ export class AdaptiveModelSelector {
             `economic-state=${economicState}`,
             `inference-profile=${inferenceProfile}`,
             `effective-resource-cost=${effectiveResourceCost}`,
+            `monetary-reference=$${monetaryReferenceUsd.toFixed(4)}`,
+            `phase-allocation=${task.inferencePhase ?? "producer"}`,
             shadow.reason
           ]
         }

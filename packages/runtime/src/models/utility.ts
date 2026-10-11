@@ -1,5 +1,31 @@
 import type { EconomicState } from "../types.js";
+import type { IntelligenceTask } from "../intelligence/contracts.js";
 import { ROUTER_CONFIG, getEconomicRoutingPolicy } from "./router-config.js";
+
+/**
+ * Resolves the task value-aware reference cost parameter for utility normalization.
+ *
+ * Routine chat / simple extraction: $0.05
+ * Standard tasks: $0.10
+ * High complexity coding / reasoning: $0.25
+ * Objective verification: $0.50
+ *
+ * @see docs/adr/007-value-aware-cost-normalization.md
+ */
+export function resolveMonetaryReference(task?: Partial<IntelligenceTask>): number {
+  if (!task) return ROUTER_CONFIG.costNormalization.monetaryReferenceUsd;
+  if (task.inferencePhase === "OBJECTIVE_VERIFICATION") {
+    return 0.50;
+  }
+  const complexity = task.complexity ?? 0.5;
+  if (complexity >= 0.8 || task.type === "coding" || task.requirements?.reasoning) {
+    return 0.25;
+  }
+  if (complexity <= 0.4 || task.type === "chat") {
+    return 0.05;
+  }
+  return 0.10;
+}
 
 export interface UtilityInputs {
   predictedQuality: number;

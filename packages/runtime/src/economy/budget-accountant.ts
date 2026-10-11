@@ -119,7 +119,8 @@ export class BudgetAccountant {
   ): boolean {
     if (worstCaseMicros === 0) return true;
     const targetCap = hypotheticalObjectiveCapMicros ?? this.config.defaultObjectiveHardCapMicros;
-    if (worstCaseMicros > targetCap) return false;
+    const effectiveCap = scope.phase ? derivePhaseCap(scope.phase, targetCap) : targetCap;
+    if (worstCaseMicros > effectiveCap) return false;
     if (this.config.maxSingleInferenceMicros && worstCaseMicros > this.config.maxSingleInferenceMicros) {
       return false;
     }
@@ -720,7 +721,7 @@ export class BudgetAccountant {
   }
 }
 
-function derivePhaseCap(phase: BudgetScope["phase"], objectiveCap: Microdollars): Microdollars {
+export function derivePhaseCap(phase: BudgetScope["phase"], objectiveCap: Microdollars): Microdollars {
   if (!phase) return objectiveCap;
   switch (phase) {
     case "producer":

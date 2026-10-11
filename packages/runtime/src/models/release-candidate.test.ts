@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { AutopilotStateStore } from "@beyonder/compute";
 import { createRuntime } from "../runtime.js";
 import { loadConfig } from "../config/env.js";
-import { httpFailure, parseRetryAfter, parseRateLimitReset, runCandidates, type InferenceAttempt } from "./inference.js";
+import { httpFailure, InferenceError, parseRetryAfter, parseRateLimitReset, runCandidates, type InferenceAttempt } from "./inference.js";
 import { ModelRouter } from "./model-router.js";
 import { OperationalHealthStore, operationalCooldown } from "./operational-health.js";
 import { AutopilotQuotaSource, parseReset } from "./quota.js";
@@ -223,6 +223,31 @@ describe("H1 persistent scoped operational health", () => {
     });
     const result = await runCandidates({ taskId: "t", phase: "DIRECT_RESPONSE", candidates: [candidate("a"), candidate("b"), candidate("c"), local], messages: [], maxCandidates: 3, maxMonetaryCostUsd: 0, maxShadowCostUsd: 0.01, maxDurationMs: 1000, complete, validate: (r) => r.content, canAttempt: async () => true });
     expect(result.attempts.map((a) => a.provider)).toEqual(["a", "b", "ollama"]);
+  });
+  it("tries another free provider after two unavailable sibling models consume cloud slots", async () => {
+    const complete = vi.fn(async (_messages, current: ModelCandidate) => {
+      if (current.provider === "first") throw httpFailure(404, "model unavailable");
+      return { provider: current.provider, model: current.model, estimatedCostUsd: 0, content: "OK" };
+    });
+    const result = await runCandidates({
+      taskId: "cross-provider-verifier", phase: "OBJECTIVE_VERIFICATION",
+      candidates: [candidate("first", "old-a"), candidate("first", "old-b"), candidate("first", "other"), candidate("second", "healthy")],
+      messages: [], maxCandidates: 3, remoteAttemptBudget: 3, localFallbackBudget: 0,
+      maxMonetaryCostUsd: 0, maxShadowCostUsd: 0.01, maxDurationMs: 1000,
+      complete, validate: response => response.content
+    });
+    expect(result.attempts.map(attempt => `${attempt.provider}/${attempt.model}`)).toEqual(["first/old-a", "first/old-b", "second/healthy"]);
+    expect(result.monetaryCostUsd).toBe(0);
+  });
+  it("continues to a healthy free cloud after a selected local model disappears", async () => {
+    const local = { ...candidate("ollama", "vanished"), local: true, externalQuotaConsumption: false, costClass: "FREE_CONFIRMED" as const };
+    const complete = vi.fn(async (_messages, current: ModelCandidate) => {
+      if (current.local) throw new InferenceError("Local model disappeared after discovery.", "MODEL_UNAVAILABLE");
+      return { provider: current.provider, model: current.model, estimatedCostUsd: 0, content: "OK" };
+    });
+    const result = await runCandidates({ taskId: "local-vanished", phase: "DIRECT_RESPONSE", candidates: [local, candidate("cloud", "healthy")], messages: [], remoteAttemptBudget: 1, localFallbackBudget: 1, maxCandidates: 2, maxMonetaryCostUsd: 0, maxShadowCostUsd: 1, maxDurationMs: 1000, complete, validate: response => response.content });
+    expect(result.attempts.map(attempt => [attempt.provider, attempt.failureClass])).toEqual([["ollama", "MODEL_UNAVAILABLE"], ["cloud", undefined]]);
+    expect(result.monetaryCostUsd).toBe(0);
   });
   it("accounts every physical request inside one logical inference operation", async () => {
     const local = { ...candidate("ollama", "local"), local: true, externalQuotaConsumption: false, costClass: "FREE_CONFIRMED" as const, shadowCostUsd: 0 };

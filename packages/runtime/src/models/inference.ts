@@ -156,7 +156,9 @@ export async function runCandidates<T>(input: {
   let remoteAttempts = 0;
   let localAttempts = 0;
 
-  for (const candidate of candidates) {
+  const unavailableModels = new Map<string, Set<string>>();
+  for (let index = 0; index < candidates.length; index++) {
+    const candidate = candidates[index]!;
     try { requireZeroCostDecision(candidate.economics, candidate.provider, candidate.model); }
     catch {
       // A route can outlive its short price/account evidence while another
@@ -199,6 +201,23 @@ export async function runCandidates<T>(input: {
       return { value, response, candidate, attempts, monetaryCostUsd, shadowCostUsd };
     } catch (error) {
       last = classifyFailure(error);
+      if (last.failureClass === "MODEL_UNAVAILABLE" && !candidate.local) {
+        const models = unavailableModels.get(candidate.provider) ?? new Set<string>();
+        models.add(candidate.model);
+        unavailableModels.set(candidate.provider, models);
+        if (models.size === 2) {
+          // Two distinct unavailable models are concrete evidence to try another
+          // provider within this route before spending its last cloud slot here.
+          // Keep the remaining score order within each group; this is not a
+          // persistent provider cooldown.
+          const pending = candidates.slice(index + 1);
+          if (pending.some(next => !next.local && next.provider !== candidate.provider)) {
+            candidates.splice(index + 1, pending.length,
+              ...pending.filter(next => next.provider !== candidate.provider),
+              ...pending.filter(next => next.provider === candidate.provider));
+          }
+        }
+      }
       if (!response && last.reportedMonetaryCostUsd !== undefined) { attempt.monetaryCostUsd = last.reportedMonetaryCostUsd; monetaryCostUsd += last.reportedMonetaryCostUsd; }
       if (last.failureClass === "INVALID_OUTPUT" && response?.content) last = new InferenceError(last.message, last.failureClass, last.httpStatus, safeDiagnosticBody(response.content).slice(0, 1_500), last.retryAfterAt);
       Object.assign(attempt, { status: "FAILED", failureClass: last.failureClass, failureScope: last.failureScope, httpStatus: last.httpStatus, upstreamHttpStatus: last.upstreamHttpStatus, error: last.message, responseBody: last.responseBody, retryAfterAt: last.retryAfterAt });

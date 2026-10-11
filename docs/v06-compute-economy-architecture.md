@@ -1,11 +1,11 @@
 # Beyonder v0.6 — Autonomous Compute Economy Architecture
 
 ## Status
-**PHASE 3 COMPLETE** — Live Paid Canary Execution (`V06_LIVE_CANARY_READY=true`)
+**PHASE 4 COMPLETE** — Full Multi-Provider Economy (`V06_FULL_ECONOMY_READY=true`)
 - Phase 1: Economic Foundation Ready (`V06_ECONOMIC_FOUNDATION_READY=true`)
 - Phase 2: Shadow Paid Routing & Pricing Discovery Ready (`V06_SHADOW_ROUTING_READY=true`)
 - Phase 3: Live Paid Canary Execution Ready (`V06_LIVE_CANARY_READY=true`)
-- Phase 4: Full Multi-Provider Economy (Ready for next rollout)
+- Phase 4: Full Multi-Provider Economy Ready (`V06_FULL_ECONOMY_READY=true`)
 
 ## Base Commit
 `6ddea2a` on `origin/main` (stable v0.5 HEAD).
@@ -592,11 +592,14 @@ interface SpendDecisionRecord {
 6. Full acceptance test suite verified (`live-canary.test.ts`, 12 scenarios passing)
 7. ADR-008 recorded (`V06_LIVE_CANARY_READY=true`)
 
-### Phase 4: Full economy
-1. Multiple providers with pricing
-2. Value-aware routing
-3. Phase budget allocation
-4. Cost/quality learning
+### Phase 4: Full economy (COMPLETED)
+1. Multiple providers with pricing and autonomous competition (OpenRouter, Gemini, Groq, Cerebras, Pollinations)
+2. Value-aware routing with dynamic reference scaling per task complexity and verification criticality
+3. Hierarchical phase budget partitioning: producer (60%), verifier (25%), recovery (15%), adjudication (10%)
+4. Closed-loop cost/quality learning updating empirical performance priors from memory outcomes
+5. Operator-configured paid provider whitelisting (`allowedPaidProviders`)
+6. Full 12-scenario acceptance test suite verified (`multi-provider-economy.test.ts`, 12/12 passing)
+7. ADR-009 recorded (`V06_FULL_ECONOMY_READY=true`)
 
 ---
 

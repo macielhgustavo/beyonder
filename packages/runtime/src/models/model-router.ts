@@ -31,6 +31,12 @@ export function structuredOutputTokenBudget(messages: ModelMessage[]): number {
   return Math.min(4800, Math.max(3600, Math.ceil(promptChars / 5)));
 }
 
+/** Independent verdicts have a short JSON payload but some models spend tokens reasoning first. */
+export function verifierOutputTokenBudget(messages: ModelMessage[]): number {
+  const promptChars = messages.reduce((sum, message) => sum + message.content.length, 0);
+  return Math.min(6400, Math.max(4800, Math.ceil(promptChars / 4)));
+}
+
 export class ModelRouter {
   private readonly economicStops = new Set<string>();
   private readonly credentials: CredentialBroker;
@@ -132,7 +138,7 @@ export class ModelRouter {
 
   async completeForStructuredCandidate(messages: ModelMessage[], candidate: ModelCandidate, signal?: AbortSignal, schema?: Record<string, unknown>): Promise<ModelResponse> {
     if (candidate.provider === "ollama") { await this.assertZeroCost(candidate); return this.completeWithOllama(messages, candidate.model, signal, schema ?? "json"); }
-    if (this.config.provider === "auto" || this.config.provider === "ollama") return this.completeAutoCandidate(messages, candidate, signal, true, candidate.inferenceProfile === "reasoning-disabled:max-output-2400" ? 2400 : structuredOutputTokenBudget(messages));
+    if (this.config.provider === "auto" || this.config.provider === "ollama") return this.completeAutoCandidate(messages, candidate, signal, true, candidate.inferenceProfile === "reasoning-disabled:max-output-2400" ? 2400 : schema ? verifierOutputTokenBudget(messages) : structuredOutputTokenBudget(messages));
     return this.completeForPlanningCandidate(messages, candidate, signal);
   }
 
@@ -183,7 +189,7 @@ export class ModelRouter {
 
   private async completeWithOllama(messages: ModelMessage[], model = this.config.name, signal?: AbortSignal, format?: "json" | Record<string, unknown>): Promise<ModelResponse> {
     if (!isLocalZeroCostEndpoint(this.config.ollamaBaseUrl) || /(?:[:/-]cloud)$/i.test(model)) throw new InferenceError('Remote/local-cloud inference has no zero-cost guarantee.', 'ECONOMIC_POLICY_BLOCKED');
-    if (!(await discoverOllama(this.config.ollamaBaseUrl)).some(entry => entry.models.includes(model))) throw new InferenceError('Local model execution not proven; remote proxy metadata or unavailable local model.', 'ECONOMIC_POLICY_BLOCKED');
+    if (!(await discoverOllama(this.config.ollamaBaseUrl)).some(entry => entry.models.includes(model))) throw new InferenceError('Local model is no longer discoverable as an eligible local model.', 'MODEL_UNAVAILABLE');
     const deadline = signal ?? AbortSignal.timeout(30_000);
     const response = await fetch(`${this.config.ollamaBaseUrl}/api/chat`, { method: "POST", headers: { "content-type": "application/json" }, signal: deadline, redirect: 'error', body: JSON.stringify({ model, messages, stream: false, think: false, ...(format ? { format } : {}), options: { temperature: 0, num_predict: localOutputTokenBudget(messages, Boolean(format)) } }) });
     if (!response.ok) throw httpFailure(response.status, await response.text(), response.headers);

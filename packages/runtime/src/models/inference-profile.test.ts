@@ -91,4 +91,23 @@ describe("observed inference profiles", () => {
     expect(body.max_tokens).toBeGreaterThan(2400);
     expect(body.max_tokens).toBeLessThanOrEqual(4800);
   });
+  it("reserves a bounded role-specific output budget for an independent JSON verdict", async () => {
+    const fetch = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({ model: "profile-model", choices: [{ finish_reason: "stop", message: { content: "{}" } }], usage: { cost: 0 } })));
+    vi.stubGlobal("fetch", fetch);
+    const router = new ModelRouter(loadConfig({ BEYONDER_MODEL_PROVIDER: "auto" }).model, { economicEvidence: async (provider, model) => fixtureZeroCost(provider, model) });
+    const candidate = { provider: "kilo-gateway", model: "profile-model", inferenceProfile: "reasoning-low:max-output-2400", capabilities: ["reasoning-control"] } as ModelCandidate;
+    await router.completeForStructuredCandidate([{ role: "user", content: "Review this three-step plan." }], candidate, undefined, { type: "object" });
+    const body = JSON.parse(fetch.mock.calls[0]![1]!.body as string);
+    expect(body.max_tokens).toBe(4800);
+  });
+  it("classifies a vanished local model as unavailable without authorizing a proxy request", async () => {
+    const fetch = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) => new Response(JSON.stringify({ models: [] })));
+    vi.stubGlobal("fetch", fetch);
+    const router = new ModelRouter(loadConfig({ BEYONDER_MODEL_PROVIDER: "auto" }).model);
+    vi.spyOn(router, "economicDecision").mockResolvedValue(fixtureZeroCost("ollama", "vanished:4b"));
+    vi.spyOn(router, "canAttempt").mockResolvedValue(true);
+    await expect(router.completeForPlanningCandidate([], { provider: "ollama", model: "vanished:4b", local: true } as ModelCandidate))
+      .rejects.toMatchObject({ failureClass: "MODEL_UNAVAILABLE" });
+    expect(fetch.mock.calls.every(([input]) => String(input).endsWith("/api/tags"))).toBe(true);
+  });
 });

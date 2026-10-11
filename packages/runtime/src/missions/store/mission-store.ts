@@ -6,7 +6,7 @@ import type { EvidenceRecord, ClaimEvidenceRelation, EvidenceStore } from "../ev
 import { EVIDENCE_SCHEMA_VERSION } from "../evidence/evidence.js";
 import type { ActionIntent, ActionReceipt, ActionStore } from "../actions/action-protocol.js";
 import { ACTION_INTENT_SCHEMA_VERSION } from "../actions/action-protocol.js";
-import { eq, desc, sql } from "drizzle-orm";
+import { eq, desc, sql, and, gt } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import { missions, missionNodes, missionEvents, missionEdges, evidence, claimEvidenceRelations, actionIntents, actionReceipts, capabilities } from "../../db/schema.js";
 
@@ -119,14 +119,14 @@ export class SqliteMissionEventStore implements MissionEventStore {
   }
 
   async list(missionId: string, afterSeq?: number, limit = 1000): Promise<MissionEvent[]> {
-    const conditions = [eq(missionEvents.missionId, missionId)];
-    if (afterSeq !== undefined) {
-      conditions.push(sql`${missionEvents.seq} > ${afterSeq}`);
-    }
     const rows = await this.db
       .select()
       .from(missionEvents)
-      .where(sql`${conditions.map((c) => c).join(" AND ")}`)
+      .where(
+        afterSeq === undefined
+          ? eq(missionEvents.missionId, missionId)
+          : and(eq(missionEvents.missionId, missionId), gt(missionEvents.seq, afterSeq))
+      )
       .orderBy(missionEvents.seq)
       .limit(limit);
     return rows.map((row) => ({
@@ -239,6 +239,8 @@ export class SqliteActionStore implements ActionStore {
   constructor(private readonly db: Db) {}
 
   async saveIntent(intent: ActionIntent): Promise<void> {
+    // Plain insert: duplicate idempotencyKey (invariant 6) must be rejected
+    // by SQLite's UNIQUE constraint, not silently ignored.
     await this.db.insert(actionIntents).values({
       id: intent.id,
       missionId: intent.missionId,
@@ -254,7 +256,7 @@ export class SqliteActionStore implements ActionStore {
       approvalActionType: intent.approvalActionType,
       expiresAt: intent.expiresAt,
       createdAt: intent.createdAt
-    }).onConflictDoNothing();
+    });
   }
 
   async getIntent(intentId: string): Promise<ActionIntent | undefined> {

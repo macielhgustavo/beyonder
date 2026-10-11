@@ -1,5 +1,7 @@
 import type { MissionState } from "../contracts/mission.js";
 
+export type { MissionState } from "../contracts/mission.js";
+
 export class InvalidMissionStateTransitionError extends Error {
   constructor(readonly from: MissionState, readonly to: MissionState) {
     super(`Invalid mission state transition: ${from} -> ${to}`);

@@ -24,6 +24,8 @@ export class MissionScheduler {
   /** Returns up to maxConcurrency nodes that are READY to run. */
   pickReadyNodes(snapshot: MissionSnapshot): ReadyNode[] {
     if (isTerminalMissionState(snapshot.state)) return [];
+    // Waiting and paused missions run nothing until resumed.
+    if (snapshot.state.startsWith("WAITING") || snapshot.state === "PAUSED") return [];
 
     const completed = new Set(
       snapshot.nodes.filter((n) => n.state === "COMPLETED").map((n) => n.id)
@@ -63,7 +65,7 @@ export class MissionScheduler {
     const node = snapshot.nodes.find((n) => n.id === nodeId);
     if (!node) return;
     node.state = "FAILED";
-    node.outcome = { status: "FAILED", observationSummary: error, completedAt: new Date().toISOString() };
+    node.outcome = { status: "FAILED", observationSummary: error, error, completedAt: new Date().toISOString() };
   }
 
   markNodeSkipped(snapshot: MissionSnapshot, nodeId: string): void {

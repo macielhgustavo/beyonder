@@ -29,6 +29,7 @@ export { DefaultRecoveryPolicy } from "./tasks/recovery.js";
 export { DeterministicCompletionEvaluator, outcomeWithCompletion } from "./tasks/completion.js";
 export { ObjectiveVerifier } from "./tasks/completion.js";
 export { ModelObjectiveVerifier } from "./tasks/model-objective-verifier.js";
+export * from "./missions/index.js";
 export { productMissionMetrics, type ProductMissionMetrics } from "./product/metrics.js";
 export type { AppConfig } from "./config/env.js";
 export type {

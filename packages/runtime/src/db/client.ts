@@ -103,6 +103,96 @@ export function openDatabase(path: string): { sqlite: Database.Database; db: Db 
     CREATE INDEX IF NOT EXISTS idx_spend_reservations_state ON spend_reservations(state);
     CREATE INDEX IF NOT EXISTS idx_spend_reservations_task ON spend_reservations(task_id);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_pricing_snapshots_lookup ON pricing_snapshots(provider, model, effective_at);
+    CREATE TABLE IF NOT EXISTS missions (
+      id TEXT PRIMARY KEY,
+      contract TEXT NOT NULL,
+      snapshot TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS mission_nodes (
+      id TEXT PRIMARY KEY,
+      mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+      spec TEXT NOT NULL,
+      state TEXT NOT NULL,
+      attempt INTEGER NOT NULL DEFAULT 0,
+      outcome TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS mission_events (
+      id TEXT PRIMARY KEY,
+      mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+      seq INTEGER NOT NULL,
+      type TEXT NOT NULL,
+      payload TEXT NOT NULL DEFAULT '{}',
+      recorded_at TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_mission_events_mission_seq ON mission_events(mission_id, seq);
+    CREATE TABLE IF NOT EXISTS mission_edges (
+      id TEXT PRIMARY KEY,
+      mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+      from_node_id TEXT NOT NULL,
+      to_node_id TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS evidence (
+      id TEXT PRIMARY KEY,
+      mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+      node_id TEXT,
+      evidence_kind TEXT NOT NULL,
+      description TEXT NOT NULL,
+      provenance TEXT NOT NULL,
+      content_hash TEXT NOT NULL,
+      trust TEXT NOT NULL,
+      confidence REAL NOT NULL,
+      artifact_ref TEXT,
+      recorded_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS claim_evidence_relations (
+      id TEXT PRIMARY KEY,
+      mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+      claim_id TEXT NOT NULL,
+      claim TEXT NOT NULL,
+      evidence_id TEXT NOT NULL REFERENCES evidence(id) ON DELETE CASCADE,
+      relation TEXT NOT NULL,
+      assessed_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS action_intents (
+      id TEXT PRIMARY KEY,
+      mission_id TEXT NOT NULL REFERENCES missions(id) ON DELETE CASCADE,
+      node_id TEXT NOT NULL,
+      what TEXT NOT NULL,
+      why TEXT NOT NULL,
+      target TEXT NOT NULL,
+      parameters TEXT NOT NULL DEFAULT '{}',
+      idempotency_key TEXT NOT NULL UNIQUE,
+      risk TEXT NOT NULL,
+      side_effect_level TEXT NOT NULL,
+      requires_approval INTEGER NOT NULL,
+      approval_action_type TEXT,
+      expires_at TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS action_receipts (
+      id TEXT PRIMARY KEY,
+      action_intent_id TEXT NOT NULL REFERENCES action_intents(id) ON DELETE CASCADE,
+      provider TEXT NOT NULL,
+      external_id TEXT,
+      result TEXT,
+      observed_effect TEXT,
+      state TEXT NOT NULL,
+      committed_at TEXT NOT NULL,
+      reconciled_at TEXT,
+      error TEXT
+    );
+    CREATE TABLE IF NOT EXISTS capabilities (
+      id TEXT PRIMARY KEY,
+      contract TEXT NOT NULL,
+      availability TEXT NOT NULL DEFAULT 'AVAILABLE',
+      implementations TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
   `);
 
   ensureColumn(sqlite, "memories", "confidence", "REAL NOT NULL DEFAULT 1");

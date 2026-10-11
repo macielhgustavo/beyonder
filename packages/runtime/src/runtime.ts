@@ -5,6 +5,9 @@ import type Database from "better-sqlite3";
 import { openDatabase, type Db } from "./db/client.js";
 import { EconomicLedger } from "./economy/ledger.js";
 import { BudgetAccountant } from "./economy/budget-accountant.js";
+import { SqlitePricingRegistry, type PricingRegistry } from "./economy/pricing-registry.js";
+import { seedCatalogPricing } from "./economy/catalog-pricing.js";
+import { DefaultCostEstimator } from "./economy/cost-estimator.js";
 import { IntelligenceLayer } from "./intelligence/intelligence-layer.js";
 import { AdaptiveExecutionController } from "./intelligence/adaptive-execution-controller.js";
 import { EvaluationLayer } from "./intelligence/evaluation-layer.js";
@@ -38,6 +41,8 @@ export interface BeyonderRuntime {
   db: Db;
   ledger: EconomicLedger;
   budgetAccountant: BudgetAccountant;
+  pricingRegistry: PricingRegistry;
+  costEstimator: DefaultCostEstimator;
   state: StateStore;
   memory: MemoryEngine;
   memoryStore: MemoryStore;
@@ -78,6 +83,9 @@ export function createRuntime(config: AppConfig, options: RuntimeOptions = {}): 
   const { db, sqlite } = openDatabase(config.dbPath);
   const ledger = new EconomicLedger(db);
   const budgetAccountant = new BudgetAccountant(sqlite, config.compute, ledger);
+  const pricingRegistry = new SqlitePricingRegistry(sqlite);
+  seedCatalogPricing(pricingRegistry);
+  const costEstimator = new DefaultCostEstimator();
   const state = new StateStore(db);
   const memoryStore = new MemoryStore(db);
   const memory = new MemoryEngine(memoryStore);
@@ -90,7 +98,18 @@ export function createRuntime(config: AppConfig, options: RuntimeOptions = {}): 
     } catch { return undefined; }
   });
   const audit = new AuditLog(db);
-  const modelRouter = new ModelRouter(config.model, { state, performanceRepository: performance, capabilitySource: options.capabilitySource, economicEvidence: options.economicEvidence, telemetry: audit });
+  const modelRouter = new ModelRouter(config.model, {
+    state,
+    performanceRepository: performance,
+    capabilitySource: options.capabilitySource,
+    economicEvidence: options.economicEvidence,
+    telemetry: audit,
+    budgetAccountant,
+    pricingRegistry,
+    costEstimator,
+    computeMode: config.compute.mode,
+    shadowMode: config.compute.mode === "zero_cost"
+  });
   const adaptiveExecution = new AdaptiveExecutionController(modelRouter, evaluation, audit);
   const browser = new BrowserAgent({ sessionFactory: new PlaywrightBrowserSessionFactory(), telemetry: { emit: async (event) => { await audit.record("info", event.name, event.details); } } });
   const tools = createRuntimeToolRegistry(config.tools, options.fixture === true);
@@ -117,6 +136,7 @@ export function createRuntime(config: AppConfig, options: RuntimeOptions = {}): 
   const taskExecutorWithPlanner = new AutonomousTaskExecutor({
     memory,
     modelRouter,
+    budgetAccountant,
     toolExecutor,
     getAvailableTools,
     telemetry: audit,
@@ -148,6 +168,8 @@ export function createRuntime(config: AppConfig, options: RuntimeOptions = {}): 
     db,
     ledger,
     budgetAccountant,
+    pricingRegistry,
+    costEstimator,
     state,
     memory,
     memoryStore,

@@ -5,6 +5,11 @@ import { parseReset } from "./quota.js";
 import type { ModelCandidate } from "./adaptive-types.js";
 import type { ModelMessage, ModelResponse } from "../types.js";
 import type { IntelligenceTaskType } from "../intelligence/contracts.js";
+import type { BudgetAccountant } from "../economy/budget-accountant.js";
+import type { CostEstimator } from "../economy/cost-estimator.js";
+import type { ComputeMode } from "../economy/compute-economy-config.js";
+import type { SpendReservation } from "../economy/spend-reservation.js";
+import { usdToMicros, microsToUsd, ZERO_MICROS } from "../economy/money.js";
 
 export type InferencePhase = "PLANNING" | "ACTION_PLANNING" | "DIRECT_RESPONSE" | "TOOL_EXECUTION" | "REPLANNING" | "OBJECTIVE_VERIFICATION";
 export type FailureClass = "ECONOMIC_POLICY_BLOCKED" | "BAD_REQUEST" | "AUTH_REQUIRED" | "FORBIDDEN" | "MODEL_UNAVAILABLE" | "RATE_LIMITED" | "PROVIDER_UNAVAILABLE" | "TIMEOUT" | "NETWORK_ERROR" | "INVALID_OUTPUT" | "INVALID_ACTION" | "NO_CANDIDATES" | "NEEDS_CAPABILITY" | "BUDGET_EXHAUSTED" | "TOOL_ERROR" | "TOOL_UNAVAILABLE";
@@ -135,6 +140,12 @@ export async function runCandidates<T>(input: {
   record?: (attempt: InferenceAttempt) => Promise<void>;
   canAttempt?: (candidate: ModelCandidate) => Promise<boolean>;
   refreshEconomics?: (candidate: ModelCandidate) => Promise<ZeroCostDecision>;
+  budgetAccountant?: BudgetAccountant;
+  costEstimator?: CostEstimator;
+  computeMode?: ComputeMode;
+  canaryMaxSingleInferenceUsd?: number;
+  canaryProvider?: string;
+  canaryDiscrepancyMultiplier?: number;
 }): Promise<{ value: T; response: ModelResponse; candidate: ModelCandidate; attempts: InferenceAttempt[]; monetaryCostUsd: number; shadowCostUsd: number }> {
   const start = Date.now();
   const attempts: InferenceAttempt[] = [];
@@ -159,25 +170,105 @@ export async function runCandidates<T>(input: {
   const unavailableModels = new Map<string, Set<string>>();
   for (let index = 0; index < candidates.length; index++) {
     const candidate = candidates[index]!;
-    try { requireZeroCostDecision(candidate.economics, candidate.provider, candidate.model); }
-    catch {
-      // A route can outlive its short price/account evidence while another
-      // candidate runs. Recheck current evidence before rejecting this one.
-      try {
-        if (input.refreshEconomics) candidate.economics = await input.refreshEconomics(candidate);
-        requireZeroCostDecision(candidate.economics, candidate.provider, candidate.model);
+    const isPaidCandidate = candidate.costClass === "PAID" || candidate.monetaryCostUsd > 0;
+    let reservation: SpendReservation | null = null;
+    let worstCaseMicros = ZERO_MICROS;
+    const canaryLimitUsd = input.canaryMaxSingleInferenceUsd ?? 0.01;
+
+    if (!isPaidCandidate) {
+      try { requireZeroCostDecision(candidate.economics, candidate.provider, candidate.model); }
+      catch {
+        // A route can outlive its short price/account evidence while another
+        // candidate runs. Recheck current evidence before rejecting this one.
+        try {
+          if (input.refreshEconomics) candidate.economics = await input.refreshEconomics(candidate);
+          requireZeroCostDecision(candidate.economics, candidate.provider, candidate.model);
+        }
+        catch { last = new InferenceError('Zero-cost execution is not guaranteed; no inference attempt authorized.', 'ECONOMIC_POLICY_BLOCKED'); continue; }
       }
-      catch { last = new InferenceError('Zero-cost execution is not guaranteed; no inference attempt authorized.', 'ECONOMIC_POLICY_BLOCKED'); continue; }
+      if (candidate.monetaryCostUsd !== 0 || candidate.eligible === false) {
+        last = new InferenceError('Paid or ineligible inference is disabled.', 'ECONOMIC_POLICY_BLOCKED');
+        continue;
+      }
+    } else {
+      // Billable candidate
+      const computeMode = input.computeMode ?? (input.budgetAccountant ? "bounded" : "zero_cost");
+      if (computeMode === "zero_cost" || !input.budgetAccountant) {
+        last = new InferenceError("Paid or ineligible inference is disabled.", "ECONOMIC_POLICY_BLOCKED");
+        continue;
+      }
+      if (candidate.eligible === false) {
+        last = new InferenceError("Paid or ineligible inference is disabled.", "ECONOMIC_POLICY_BLOCKED");
+        continue;
+      }
+      // Invariant I-4: Unknown price on billable route MUST NOT silently execute
+      if (!candidate.pricingSnapshot && candidate.worstCaseCostUsd === undefined && !candidate.costEstimate) {
+        last = new InferenceError("Unknown price on billable route; execution blocked.", "ECONOMIC_POLICY_BLOCKED");
+        continue;
+      }
+      // Canary Guardrails: Authorized canary provider check
+      if (input.canaryProvider && candidate.provider !== input.canaryProvider) {
+        last = new InferenceError(`Provider '${candidate.provider}' is not the authorized canary provider ('${input.canaryProvider}').`, "ECONOMIC_POLICY_BLOCKED");
+        continue;
+      }
+      const worstCaseUsd = candidate.costEstimate
+        ? microsToUsd(candidate.costEstimate.worstCaseCostMicros)
+        : (candidate.worstCaseCostUsd ?? candidate.monetaryCostUsd);
+      if (worstCaseUsd > canaryLimitUsd || worstCaseUsd > input.maxMonetaryCostUsd) {
+        last = new InferenceError("Candidate cost exceeds authorized budget or canary limit.", "BUDGET_EXHAUSTED");
+        continue;
+      }
+      worstCaseMicros = candidate.costEstimate?.worstCaseCostMicros ?? usdToMicros(worstCaseUsd);
+
+      // Reserve budget atomically
+      const budgetPhase = input.phase === "OBJECTIVE_VERIFICATION"
+        ? "verifier"
+        : input.phase === "REPLANNING"
+        ? "recovery"
+        : "producer";
+      const idempotencyKey = `${input.taskId}:${input.stepId ?? "step"}:${input.phase}:${candidate.provider}:${candidate.model}:attempt_${attempts.length + 1}`;
+
+      try {
+        reservation = input.budgetAccountant.reserve({
+          objectiveId: input.taskId,
+          taskId: input.taskId,
+          phase: budgetPhase,
+          provider: candidate.provider,
+          model: candidate.model,
+          estimatedInputTokens: candidate.costEstimate?.estimatedInputTokens ?? 0,
+          maxOutputTokens: candidate.costEstimate?.maxOutputTokens ?? 2400,
+          worstCaseMicros,
+          pricingSnapshotId: candidate.pricingSnapshot?.id,
+          idempotencyKey
+        });
+      } catch (err) {
+        last = classifyFailure(err);
+        continue;
+      }
+
+      if (!reservation) {
+        last = new InferenceError("Inference budget exhausted.", "BUDGET_EXHAUSTED");
+        continue;
+      }
     }
-    if (candidate.costClass === 'PAID' || candidate.monetaryCostUsd !== 0 || candidate.eligible === false) { last = new InferenceError('Paid or ineligible inference is disabled.', 'ECONOMIC_POLICY_BLOCKED'); continue; }
+
     if (candidate.local) {
-      if (localAttempts >= localFallbackBudget) continue;
+      if (localAttempts >= localFallbackBudget) {
+        if (reservation) input.budgetAccountant?.release(reservation.id, "Local fallback budget reached");
+        continue;
+      }
     } else if (remoteAttempts >= remoteAttemptBudget) {
+      if (reservation) input.budgetAccountant?.release(reservation.id, "Remote attempt budget reached");
       continue;
     }
-    if (input.canAttempt && !await input.canAttempt(candidate)) continue;
+    if (input.canAttempt && !await input.canAttempt(candidate)) {
+      if (reservation) input.budgetAccountant?.release(reservation.id, "canAttempt rejected");
+      continue;
+    }
     if (Date.now() - start >= input.maxDurationMs || monetaryCostUsd + candidate.monetaryCostUsd > input.maxMonetaryCostUsd) {
-      last = new InferenceError("Inference budget exhausted.", "BUDGET_EXHAUSTED"); break;
+      if (reservation) input.budgetAccountant?.release(reservation.id, "Deadline or monetary budget exceeded");
+      last = new InferenceError("Inference budget exhausted.", "BUDGET_EXHAUSTED");
+      break;
     }
 
     if (candidate.local) localAttempts++;
@@ -189,18 +280,89 @@ export async function runCandidates<T>(input: {
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     let response: ModelResponse | undefined;
+
+    // Immediately before HTTP dispatch, mark in-flight
+    if (reservation) {
+      input.budgetAccountant?.markSent(reservation.id);
+    }
+
     try {
       response = await Promise.race([input.complete(input.messages, candidate, controller.signal), new Promise<never>((_, reject) => { timer = setTimeout(() => { controller.abort(); reject(new InferenceError("Inference deadline exceeded.", "TIMEOUT")); }, Math.max(1, input.maxDurationMs - (Date.now() - start))); })]);
       attempt.monetaryCostUsd = response.estimatedCostUsd;
       attempt.attribution = response.attribution;
       monetaryCostUsd += response.estimatedCostUsd;
-      if (!Number.isFinite(response.estimatedCostUsd) || response.estimatedCostUsd !== 0) throw new InferenceError('Response violates zero monetary spend; no fallback authorized.', 'ECONOMIC_POLICY_BLOCKED');
-      if (!Number.isFinite(response.estimatedCostUsd) || response.estimatedCostUsd < 0 || monetaryCostUsd > input.maxMonetaryCostUsd) throw new InferenceError("Provider reported a cost outside the authorized monetary budget.", "BUDGET_EXHAUSTED");
+
+      if (!isPaidCandidate) {
+        if (!Number.isFinite(response.estimatedCostUsd) || response.estimatedCostUsd !== 0) throw new InferenceError('Response violates zero monetary spend; no fallback authorized.', 'ECONOMIC_POLICY_BLOCKED');
+        if (!Number.isFinite(response.estimatedCostUsd) || response.estimatedCostUsd < 0 || monetaryCostUsd > input.maxMonetaryCostUsd) throw new InferenceError("Provider reported a cost outside the authorized monetary budget.", "BUDGET_EXHAUSTED");
+      } else {
+        if (!Number.isFinite(response.estimatedCostUsd) || response.estimatedCostUsd < 0) throw new InferenceError("Provider reported an invalid monetary cost.", "ECONOMIC_POLICY_BLOCKED");
+        const actualCostUsd = response.estimatedCostUsd;
+        const actualMicros = usdToMicros(actualCostUsd);
+        const maxDiscrepancyMultiplier = input.canaryDiscrepancyMultiplier ?? 1.5;
+
+        // Canary Guardrail: Economic circuit breaker on anomalous reported cost
+        if (actualMicros > worstCaseMicros * maxDiscrepancyMultiplier || actualCostUsd > canaryLimitUsd) {
+          if (reservation) {
+            input.budgetAccountant?.settle({
+              reservationId: reservation.id,
+              actualCostMicros: actualMicros,
+              providerReportedCostUsd: actualCostUsd,
+              providerRequestId: response.attribution?.reportedModel
+            });
+            reservation = null;
+          }
+          throw new InferenceError(`Economic circuit breaker tripped: reported cost ($${actualCostUsd.toFixed(4)}) exceeded safe threshold ($${(microsToUsd(worstCaseMicros) * maxDiscrepancyMultiplier).toFixed(4)}).`, "ECONOMIC_POLICY_BLOCKED");
+        }
+
+        if (monetaryCostUsd > input.maxMonetaryCostUsd) {
+          if (reservation) {
+            input.budgetAccountant?.settle({
+              reservationId: reservation.id,
+              actualCostMicros: actualMicros,
+              providerReportedCostUsd: actualCostUsd,
+              providerRequestId: response.attribution?.reportedModel
+            });
+            reservation = null;
+          }
+          throw new InferenceError("Provider reported a cost outside the authorized monetary budget.", "BUDGET_EXHAUSTED");
+        }
+
+        // Settle reservation with actual cost
+        if (reservation) {
+          input.budgetAccountant?.settle({
+            reservationId: reservation.id,
+            actualCostMicros: actualMicros,
+            actualInputTokens: (response.raw as any)?.usage?.prompt_tokens,
+            actualOutputTokens: (response.raw as any)?.usage?.completion_tokens,
+            providerReportedCostUsd: actualCostUsd,
+            providerRequestId: response.attribution?.reportedModel
+          });
+          reservation = null;
+        }
+      }
+
       const value = input.validate(response);
       attempt.status = "SUCCEEDED";
       return { value, response, candidate, attempts, monetaryCostUsd, shadowCostUsd };
     } catch (error) {
       last = classifyFailure(error);
+      if (reservation) {
+        if (last.reportedMonetaryCostUsd !== undefined && last.reportedMonetaryCostUsd > 0) {
+          try {
+            input.budgetAccountant?.settle({
+              reservationId: reservation.id,
+              actualCostMicros: usdToMicros(last.reportedMonetaryCostUsd),
+              providerReportedCostUsd: last.reportedMonetaryCostUsd
+            });
+          } catch { /* already settled */ }
+        } else {
+          try {
+            input.budgetAccountant?.release(reservation.id, last.message);
+          } catch { /* already settled or released */ }
+        }
+        reservation = null;
+      }
       if (last.failureClass === "MODEL_UNAVAILABLE" && !candidate.local) {
         const models = unavailableModels.get(candidate.provider) ?? new Set<string>();
         models.add(candidate.model);

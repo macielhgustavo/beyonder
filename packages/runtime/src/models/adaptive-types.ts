@@ -4,6 +4,53 @@ import type { ModelCapabilityEvidence } from "./capability-source.js";
 
 export type ProviderHealth = "healthy" | "keyless" | "unhealthy" | "unknown";
 export type QuotaValue = number | "unknown";
+export type ComputeTier =
+  | "STRONG_FREE_CLOUD"
+  | "OTHER_FREE_CLOUD"
+  | "PAID_CLOUD"
+  | "PAID_DISABLED"
+  | "LOCAL_EMERGENCY";
+export type CapacityStatus = "NORMAL" | "CAPACITY_REDUCED" | "NEEDS_CAPABILITY";
+export type CapabilityDimension =
+  | "reasoning"
+  | "planning"
+  | "coding"
+  | "research"
+  | "synthesis"
+  | "toolUse"
+  | "structuredOutput"
+  | "verification"
+  | "freshnessEvidence";
+
+export interface QualityFloor {
+  level: "MINIMAL" | "STANDARD" | "HIGH";
+  minimumOverall: number;
+  dimensions: Partial<Record<CapabilityDimension, number>>;
+  reasons: string[];
+}
+
+export interface CandidateCapabilityFit {
+  overall: number;
+  dimensions: Partial<Record<CapabilityDimension, number>>;
+  passes: boolean;
+  gaps: string[];
+  evidence: string[];
+}
+
+export interface RejectedCandidate {
+  economics?: import('@beyonder/compute').ZeroCostDecision;
+  inferenceProfile?: string;
+  provider: string;
+  model: string;
+  computeTier: ComputeTier;
+  reasons: string[];
+  capabilityFit?: CandidateCapabilityFit;
+  predictedQuality?: number;
+  reliability?: number;
+  latencyPenalty?: number;
+  monetaryCostUsd?: number;
+  shadowCostUsd?: number;
+}
 
 export interface QuotaSnapshot {
   provider: string;
@@ -52,7 +99,30 @@ export interface CandidateExplanation {
   constraints: string[];
 }
 
+export interface ShadowDecision {
+  shadowMode: boolean;
+  shadowCandidate?: ModelCandidate;
+  selectedCandidate?: ModelCandidate;
+  estimatedPaidCostUsd: number;
+  worstCasePaidCostUsd: number;
+  utilityDifference: number;
+  whyPaidCandidateWon: string;
+  whyNotSelectedForLive: string;
+}
+
 export interface ModelCandidate {
+  economics?: import('@beyonder/compute').ZeroCostDecision;
+  inferenceProfile?: string;
+  metadataQuality?: number;
+  local?: boolean;
+  externalQuotaConsumption?: boolean;
+  costClass?: "FREE_CONFIRMED" | "FREE_TIER_ELIGIBLE" | "UNKNOWN_COST" | "PAID";
+  structuredOutput?: "native" | "prompted" | "unsupported" | "unknown";
+  computeTier?: ComputeTier;
+  capabilityFit?: CandidateCapabilityFit;
+  routingScore?: number;
+  eligible?: boolean;
+  rejectionReasons?: string[];
   provider: string;
   model: string;
   capabilities: string[];
@@ -62,6 +132,9 @@ export interface ModelCandidate {
   historicalSuccess: number;
   reliability: number;
   monetaryCostUsd: number;
+  worstCaseCostUsd?: number;
+  pricingSnapshot?: import("../economy/pricing-registry.js").PricingSnapshot;
+  costEstimate?: import("../economy/cost-estimator.js").CostEstimate;
   shadowCostUsd: number;
   latencyPenalty: number;
   failureRisk: number;
@@ -81,6 +154,12 @@ export interface RouteDecision {
   selected?: ModelCandidate;
   explored: boolean;
   reason: string;
+  capacityStatus?: CapacityStatus;
+  qualityFloor?: QualityFloor;
+  consideredCandidates?: ModelCandidate[];
+  rejectedCandidates?: RejectedCandidate[];
+  paidEscalationEnabled?: boolean;
+  shadowDecision?: ShadowDecision;
 }
 
 export interface RouterTelemetry {

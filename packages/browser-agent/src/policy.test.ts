@@ -80,6 +80,9 @@ describe("BrowserPolicyEngine", () => {
 });
 
 describe("network helpers", () => {
+  it.each(["192.0.0.1", "192.0.2.1", "198.18.0.1", "198.51.100.1", "203.0.113.1", "ff02::1", "2001:db8::1", "64:ff9b::7f00:1", "2002:7f00:1::"])("blocks reserved or transition address %s", address => {
+    expect(isPrivateAddress(address)).toBe(true);
+  });
   it("matches domains and identifies private addresses", () => {
     expect(matchesDomain("docs.example.com", "example.com")).toBe(true);
     expect(matchesDomain("example.com", "*.example.com")).toBe(false);
@@ -87,5 +90,11 @@ describe("network helpers", () => {
     expect(isPrivateAddress("10.1.2.3")).toBe(true);
     expect(isPrivateAddress("93.184.216.34")).toBe(false);
     expect(isPrivateAddress("::1")).toBe(true);
+    expect(isPrivateAddress("::ffff:127.0.0.1")).toBe(true);
+    expect(isPrivateAddress("169.254.169.254")).toBe(true);
+    expect(isPrivateAddress("172.16.0.1")).toBe(true);
+    expect(isPrivateAddress("192.168.1.1")).toBe(true);
+    expect(isPrivateAddress("fe80::1")).toBe(true);
+    expect(isPrivateAddress("fd00::1")).toBe(true);
   });
 });

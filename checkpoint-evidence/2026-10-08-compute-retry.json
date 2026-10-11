@@ -1,0 +1,118 @@
+{
+  "checkpointOnly": true,
+  "notQualified": true,
+  "automaticProductionImport": false,
+  "startHead": "4d25c69d787867438e7d9afa39947f26a71507c5",
+  "retry": {
+    "startHead": "4d25c69d787867438e7d9afa39947f26a71507c5",
+    "observedAt": "2026-10-08T23:24:27.242Z",
+    "provider": "kilo-gateway",
+    "model": "thinkingmachines/inkling-small:free",
+    "catalogValidated": true,
+    "modelCostClass": "FREE_TIER_ELIGIBLE",
+    "attempts": 1,
+    "httpStatus": 429,
+    "failureClass": "RATE_LIMITED",
+    "failureScope": "model",
+    "limitSource": "openrouter_shared_capacity",
+    "dailyLimit": 1000,
+    "remaining": 0,
+    "nextReset": "2026-10-09T00:00:00+00:00",
+    "latencyMs": 964,
+    "completionReceived": false,
+    "monetaryCostUsd": 0,
+    "monetaryCostEvidence": "HTTP429 refusal, no completion or usage charge; route explicitly free in current catalogue",
+    "contraproofsExecuted": 1,
+    "goldensExecuted": 0,
+    "full38Executed": false,
+    "codeChanged": true,
+    "addedFreeModels": [
+      "stealth/glyph-cluster",
+      "stepfun/step-5-preview-free"
+    ],
+    "removedFreeModels": [
+      "inclusionai/ling-3.0-flash-sante:free",
+      "stepfun/step-3.7-flash:free"
+    ],
+    "newStep5Candidate": {
+      "model": "stepfun/step-5-preview-free",
+      "catalogFree": true,
+      "attempts": 2,
+      "httpStatus": 429,
+      "latencyMs": 887,
+      "failureClass": "RATE_LIMITED",
+      "cause": "UPSTREAM_CONCURRENCY_LIMIT",
+      "provider": "StepFun",
+      "currentConcurrency": 141,
+      "concurrencyLimit": 140,
+      "limitSource": "upstream_provider_account",
+      "inferenceSucceeded": true,
+      "monetaryCostUsd": 0,
+      "secondHttpStatus": 200,
+      "reportedModel": "stepfun/step-5-preview",
+      "observedContent": "OK",
+      "qualifiedProducer": false,
+      "qualifiedVerifier": false,
+      "qualification": "FAILED_MODEL_LEVEL_FALSE_APPROVAL",
+      "verificationProbeCount": 1,
+      "verificationProbeStatus": "FAIL",
+      "qualificationStoppedAfterFirstFailure": true
+    },
+    "retryPolicy": "One bounded follow-up for transient StepFun concurrency, no retry of exhausted Inkling daily quota before Oct9 provider reset.",
+    "productionMissionsExecuted": 0,
+    "shadowCost": "UNKNOWN: no cost value reported by upstream; no fabricated model pricing",
+    "bibCountsAfter": {
+      "qualified": 542,
+      "installation": 542
+    },
+    "codeChange": "Shared conservative physical identity strips :free or -free route suffix; request still uses explicit free route; versions/remapped models remain distinct. Unsafe physical aliases remain excluded.",
+    "focusedTestsPassed": 45,
+    "fullCIExecuted": false,
+    "visualQAExecuted": false,
+    "nextStep": "Single Inkling eligibility probe only after observed2026-10-09T00:00:00Z reset; semantic contraproofs before positive goldens and no38 until adequate independent producer/verifier pool actually proved."
+  },
+  "controlledArtifact": {
+    "name": "static-guarantee-original",
+    "objective": "Explique o tradeoff entre cache com TTL curto e longo quando precisão importa mais que latência.",
+    "answer": "Quando a precisão é mais importante que a latência, o tradeoff entre TTL curto e longo se concentra no equilíbrio entre frescor dos dados e custo de atualização.\n\n**TTL curto:**  \n- **Vantagem:** Dados atualizados com frequência, menor probabilidade de servir valores desatualizados.  \n- **Desvantagem:** Maior número de cache misses, gerando mais chamadas à fonte de dados (ex: banco, API externa), o que aumenta a latência e o consumo de recursos.\n\n**TTL longo:**  \n- **Vantagem:** Menos accessos à fonte, reduzindo latência e carga no backend.  \n- **Desvantagem:** Risco de servir dados obsoletos, prejudicando a precisão da resposta.\n\n**Conclusão:** Em contextos onde a precisão é crítica (ex: financeiro, saúde), TTLs curtos são preferíveis, mesmo que aumentem a latência, pois garantem que o sistema reflita o estado atual dos dados. TTLs longos só são adequados quando pequenas inconsistências são toleráveis."
+  },
+  "actualJudge": {
+    "provider": "kilo-gateway",
+    "requestedModel": "stepfun/step-5-preview-free",
+    "reportedModel": "stepfun/step-5-preview",
+    "verdict": "```json\n{\n  \"satisfied\": true,\n  \"confidence\": 0.95,\n  \"relevance\": true,\n  \"completeness\": true,\n  \"consistentWithEvidence\": true,\n  \"reason\": \"A resposta explica corretamente o tradeoff entre TTL curto e longo, destacando que TTLs curtos priorizam frescor dos dados (precisão) ao custo de mais cache misses e maior latência, enquanto TTLs longos reduzem carga e latência ao custo de servir dados obsoletos. A conclusão está alinhada com a premissa de que a precisão é mais importante que a latência, recomendando TTLs curtos em contextos críticos. Não há erros conceituais ou omissões relevantes.\",\n  \"missingRequirements\": [],\n  \"recoveryRecommendation\": \"\"\n}\n```",
+    "latencyMs": 5904,
+    "scope": "Single real model-level verifier inference; no product mission or final two-stage ObjectiveVerifier protocol was run."
+  },
+  "adjudication": {
+    "counterexample": "Cache a value with any positive short TTL; the origin changes before expiration. Until expiration the cached value is stale. Therefore short TTL does not guarantee current origin state.",
+    "classification": "VERIFIER_FALSE_APPROVAL",
+    "performanceEvidence": "Only the actual cloud judge; no synthetic producer performance or fake browser evidence."
+  },
+  "negativeObservation": {
+    "caseId": "adjudicated-direct-verifier:2026-10-08:step-5-preview:static-guarantee-original",
+    "provider": "kilo-gateway",
+    "model": "stepfun/step-5-preview-free",
+    "category": "verification",
+    "status": "FAIL",
+    "quality": 0,
+    "success": false,
+    "latencyMs": 5904,
+    "monetaryCost": 0,
+    "tokens": 1067,
+    "attempts": 1,
+    "inferenceProfile": "reasoning-low:max-output-2400",
+    "structuredOutputMode": "prompted",
+    "timestamp": "2026-10-08T23:28:53.607Z",
+    "errorCode": "VERIFIER_FALSE_APPROVAL",
+    "failureReason": "Actual Step 5 cloud judge approved a controlled bad TTL explanation with confidence0.95. Counterexample: a source changes after caching and before the short TTL expires; the served value is stale. This is a single model-level verification probe, not a SUCCEEDED product mission or synthetic producer performance. Full original answer/verdict retained in retry-2026-10-08/step5-responses.json."
+  },
+  "status": {
+    "PORTABLE_CREDENTIAL_RESOLUTION_READY": true,
+    "PRODUCT_CORE_READY": false,
+    "LIVE_COMPUTE_READY": false,
+    "BROWSER_RESEARCH_READY": false,
+    "HUMAN_ACCEPTANCE_CANDIDATE": false,
+    "V0_5_CANDIDATE_READY_FOR_GUSTAVO": false
+  }
+}

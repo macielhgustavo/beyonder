@@ -43,10 +43,10 @@ export const safeObjectiveTool: ToolDefinition<SafeObjectiveInput, string> = {
   }
 };
 
-export function createRuntimeToolRegistry(_config: AppConfig["tools"]): ToolRegistry {
-  return new ToolRegistry()
-    .registerMany(SAFE_BUILTIN_TOOLS)
-    .register(safeObjectiveTool);
+export function createRuntimeToolRegistry(_config: AppConfig["tools"], fixture = false): ToolRegistry {
+  const registry = new ToolRegistry().registerMany(SAFE_BUILTIN_TOOLS);
+  if (fixture) registry.register(safeObjectiveTool);
+  return registry;
 }
 
 export function createRuntimeToolExecutor(registry: ToolRegistry, audit: AuditLog): ToolExecutor {

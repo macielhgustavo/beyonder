@@ -23,3 +23,6 @@ sessions/
 # local reports/artifacts
 coverage/
 outputs/
+
+# Next.js generated output
+.next/

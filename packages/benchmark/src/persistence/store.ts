@@ -37,6 +37,8 @@ export class BenchmarkStore {
           ON benchmark_results(provider, model, category, timestamp);
       `);
       this.migrateLegacySchema();
+      this.ensureColumn("inference_profile", "TEXT");
+      this.ensureColumn("structured_output_mode", "TEXT");
     } catch (error) {
       this.close();
       throw error;
@@ -48,10 +50,10 @@ export class BenchmarkStore {
     const insert = this.sqlite.prepare(`
       INSERT INTO benchmark_results (
         id, case_id, provider, model, category, status, quality, success, latency_ms,
-        monetary_cost, tokens, attempts, http_status, error_code, failure_reason, timestamp
+        monetary_cost, tokens, attempts, http_status, error_code, failure_reason, timestamp, inference_profile, structured_output_mode
       ) VALUES (
         @id, @caseId, @provider, @model, @category, @status, @quality, @success,
-        @latencyMs, @monetaryCost, @tokens, @attempts, @httpStatus, @errorCode, @failureReason, @timestamp
+        @latencyMs, @monetaryCost, @tokens, @attempts, @httpStatus, @errorCode, @failureReason, @timestamp, @inferenceProfile, @structuredOutputMode
       )
     `);
     const transaction = this.sqlite.transaction((items: BenchmarkResult[]) => {
@@ -66,7 +68,9 @@ export class BenchmarkStore {
           tokens: item.tokens ?? null,
           httpStatus: item.httpStatus ?? null,
           errorCode: item.errorCode ?? null,
-          failureReason: item.failureReason ?? null
+          failureReason: item.failureReason ?? null,
+          inferenceProfile: item.inferenceProfile ?? null,
+          structuredOutputMode: item.structuredOutputMode ?? null
         });
       }
     });
@@ -189,6 +193,8 @@ export class BenchmarkStore {
 }
 
 interface StoredBenchmarkResult {
+  structured_output_mode: "prompted" | "native" | null;
+  inference_profile: string | null;
   id: string;
   case_id: string;
   provider: string;
@@ -224,6 +230,8 @@ function fromRow(row: StoredBenchmarkResult): BenchmarkResult {
     httpStatus: row.http_status ?? undefined,
     errorCode: row.error_code ?? undefined,
     failureReason: row.failure_reason ?? undefined,
+    inferenceProfile: row.inference_profile ?? undefined,
+    structuredOutputMode: row.structured_output_mode ?? undefined,
     timestamp: new Date(row.timestamp)
   };
 }

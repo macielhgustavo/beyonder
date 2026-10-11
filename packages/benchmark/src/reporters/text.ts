@@ -5,23 +5,24 @@ import { notEvaluatedSummaries, rankSummaries, summarizeResults } from "../scori
 export function formatBenchmarkReport(resultsOrSummaries: BenchmarkResult[] | BenchmarkSummary[]): string {
   const summaries = isResults(resultsOrSummaries) ? summarizeResults(resultsOrSummaries) : resultsOrSummaries;
   if (!summaries.length) return "MODEL PERFORMANCE\n\nNo benchmark results available.";
-  const modelKeys = unique(summaries.map((summary) => `${summary.model} / ${summary.provider}`));
+  const modelKeys = unique(summaries.map((summary) => `${summary.model}\u0000${summary.provider}\u0000${summary.inferenceProfile ?? ""}`));
   const lines = ["MODEL PERFORMANCE", ""];
   for (const key of modelKeys) {
-    lines.push(key, "");
-    const [model, provider] = key.split(" / ");
+    const [model, provider, profile] = key.split("\u0000");
+    lines.push(`${model} / ${provider}`, ...(profile ? [`profile: ${profile}`] : []), "");
+    const matches = (entry: BenchmarkSummary) => entry.model === model && entry.provider === provider && (entry.inferenceProfile ?? "") === profile;
     for (const category of BENCHMARK_CATEGORIES) {
-      const summary = summaries.find((entry) => entry.model === model && entry.provider === provider && entry.category === category);
+      const summary = summaries.find((entry) => matches(entry) && entry.category === category);
       lines.push(`${category.padEnd(22)} ${summary?.avgQuality == null ? "N/A" : formatScore(summary.avgQuality)}`);
       if (summary?.evaluatedSamples === 0 && summary.operationalFailures > 0) {
         lines.push(`${"status".padEnd(22)} ${summary.latestOperationalStatus}${summary.latestHttpStatus ? ` (HTTP ${summary.latestHttpStatus})` : ""}`);
       }
     }
     const evaluated = summaries
-      .filter((summary) => summary.model === model && summary.provider === provider)
+      .filter(matches)
       .reduce((sum, summary) => sum + summary.evaluatedSamples, 0);
     const operationalFailures = summaries
-      .filter((summary) => summary.model === model && summary.provider === provider)
+      .filter(matches)
       .reduce((sum, summary) => sum + summary.operationalFailures, 0);
     lines.push("");
     lines.push(`evaluated: ${evaluated} cases`);
@@ -43,6 +44,7 @@ export function formatRanking(category: BenchmarkCategory, summaries: BenchmarkS
   }
   ranked.forEach((summary, index) => {
     lines.push(`${index + 1}. ${summary.model} / ${summary.provider}`);
+    if (summary.inferenceProfile) lines.push(`   profile: ${summary.inferenceProfile}`);
     lines.push(`   quality: ${formatScore(summary.avgQuality ?? 0)}`);
     lines.push(`   success: ${Math.round((summary.successes / summary.evaluatedSamples) * 100)}%`);
     lines.push(`   evaluated: ${summary.evaluatedSamples} cases`);

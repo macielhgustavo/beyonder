@@ -51,7 +51,7 @@ export class ApprovalGate {
       throw new ApprovalDeniedError(`Approval ${id} is not valid for ${action} on ${opportunityId}.`);
     }
     const consumed = { ...request, status: "CONSUMED" as const };
-    await this.state.set(itemKey(id), consumed);
+    if (!this.state.compareAndSet(itemKey(id), request, consumed)) throw new ApprovalDeniedError("Approval was already consumed or changed.");
     await this.emit("approval.consumed", consumed);
     return consumed;
   }

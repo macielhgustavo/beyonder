@@ -54,7 +54,7 @@ export class ProviderAutopilotOrchestrator {
       return this.validateAndRegister(provider);
     }
 
-    if (this.broker.hasProviderCredential(provider.id)) {
+    if ((await this.broker.resolve(provider.id)).descriptor.accessible) {
       return this.validateAndRegister(provider);
     }
 
@@ -117,12 +117,14 @@ export class ProviderAutopilotOrchestrator {
     await this.store.update(provider, "VALIDATION");
     try {
       const report = await validateProviderDetailed(provider, this.broker);
+      if (report.status.credential && !report.status.credential.accessible) return this.store.update(provider, 'HUMAN_GATE', { credential: report.status.credential, lastError: report.status.credential.status });
       const validation = {
         status: report.status.validationStatus,
         message: report.status.validationMessage,
         latencyMs: report.latencyMs,
         modelCount: report.modelCount,
-        models: report.models.slice(0, 50),
+        models: report.models,
+        modelMetadata: report.modelMetadata,
         rateLimitHeaders: report.rateLimitHeaders
       };
       if (report.status.validationStatus === "failed") {

@@ -3,6 +3,8 @@ import { Command } from "commander";
 import { existsSync } from "node:fs";
 import {
   DEFAULT_TASK_BUDGET,
+  inspectTaskTrace,
+  classifyFailure,
   classifyEconomicState,
   createRuntime,
   loadConfig,
@@ -153,6 +155,7 @@ intelligence
           risk: inspection.task.risk,
           estimatedTokens: inspection.task.estimatedTokens,
           requirements: inspection.task.requirements,
+          goalContract: inspection.task.goalContract,
           relevantMemories: inspection.relevantMemories.length
         },
         null,
@@ -184,12 +187,17 @@ benchmark
   .option("--smoke", "run the tiny, cheap benchmark set")
   .option("--standard", "run the broader economical benchmark set")
   .option("--db <path>", "benchmark SQLite path")
-  .action(async (options: { smoke?: boolean; standard?: boolean; db?: string }, command: Command) => {
+  .option("--provider <id>", "qualify one configured provider")
+  .option("--models <ids>", "comma-separated explicit live model ids; zero-price eligibility still applies")
+  .option("--categories <names>", "comma-separated capability categories to measure")
+  .option("--reasoning-mode <mode>", "qualify low or disabled optional reasoning; scores remain specific to the measured profile")
+  .action(async (options: { smoke?: boolean; standard?: boolean; db?: string; provider?: string; models?: string; categories?: string; reasoningMode?: string }, command: Command) => {
     const mode = benchmarkMode(options);
+    if (options.reasoningMode && !["low", "disabled"].includes(options.reasoningMode)) throw new Error("reasoning-mode must be low or disabled.");
     const config = loadConfig();
     const state = await new AutopilotStateStore(config.model.providerStatePath).read();
     const broker = await credentialBroker();
-    const targets = selectFreeModelTargets(state, broker);
+    const targets = selectFreeModelTargets(state, broker, { provider: options.provider, models: options.models?.split(",").map(model => model.trim()).filter(Boolean), reasoningMode: options.reasoningMode as "low" | "disabled" | undefined });
     if (!targets.length) {
       console.log("MODEL PERFORMANCE\n\nNo READY zero-cost benchmark models available. monetary cost: $0.00");
       return;
@@ -198,6 +206,7 @@ benchmark
     const results = await runBenchmark({
       mode,
       targets,
+      categories: options.categories?.split(",").map(category => parseBenchmarkCategory(category.trim())),
       client: new OpenAiCompatibleBenchmarkClient(),
       telemetry: new StderrTelemetrySink()
     });
@@ -287,6 +296,7 @@ taskCommand
     const summary = await runtime.ledger.summary(config.monthlyFixedCostUsd);
     const economicState = classifyEconomicState(summary);
     const inspection = await runtime.intelligence.inspect(objective);
+    try {
     const availableTools = await runtime.getAvailableTools({ taskId: inspection.task.id, economicState });
     const plan = await runtime.planner.createPlan({
       objective,
@@ -305,12 +315,20 @@ taskCommand
     const outcome = await runtime.taskExecutor.execute({
       task: inspection.task,
       plan: validation.plan,
+      initialUsage: { monetaryCostUsd: runtime.planner.lastResult?.monetaryCostUsd ?? 0, shadowCostUsd: runtime.planner.lastResult?.shadowCostUsd ?? 0 },
       economicState
     });
     console.log(JSON.stringify({
       taskId: inspection.task.id,
       executionId: outcome.execution.id,
       status: outcome.status,
+      verificationStatus: outcome.verificationStatus,
+      failureReason: outcome.failureReason,
+      failureClass: outcome.execution.failure?.failureClass,
+      phase: outcome.execution.failure?.phase,
+      lastProvider: outcome.execution.attempts?.filter((a) => a.phase !== "TOOL_EXECUTION").at(-1)?.provider,
+      lastModel: outcome.execution.attempts?.filter((a) => a.phase !== "TOOL_EXECUTION").at(-1)?.model,
+      attemptCount: outcome.execution.attempts?.length ?? 0,
       planner: runtime.planner.lastResult ? {
         provider: runtime.planner.lastResult.provider,
         model: runtime.planner.lastResult.model,
@@ -324,7 +342,12 @@ taskCommand
       monetaryCostUsd: outcome.execution.usage.monetaryCostUsd,
       shadowCostUsd: outcome.execution.usage.shadowCostUsd
     }, null, 2));
-    runtime.sqlite.close();
+    } catch (error) {
+      const attempts = await runtime.modelRouter.attemptsFor(inspection.task.id);
+      const last = attempts.at(-1);
+      const failure = classifyFailure(error);
+      console.log(JSON.stringify({ taskId: inspection.task.id, status: "FAILED", failureReason: failure.message, failureClass: failure.failureClass, phase: last?.phase ?? "PLANNING", lastProvider: last?.provider, lastModel: last?.model, attemptCount: attempts.length }, null, 2));
+    } finally { await runtime.browser.closeAll(); if (runtime.sqlite.open) runtime.sqlite.close(); }
   });
 
 taskCommand
@@ -362,22 +385,11 @@ taskCommand
 
 taskCommand
   .command("inspect")
-  .argument("<taskId>", "task id to inspect in memory")
-  .description("Inspect persisted task memories for one task id")
+  .argument("<taskId>", "task id to inspect")
+  .description("Inspect persisted execution, plan, attempts, routes, tools, checkpoints and memory")
   .action(async (taskId: string) => {
     const runtime = createBeyonderRuntime(loadConfig());
-    const memories = (await runtime.memoryStore.all())
-      .filter((memory) => memory.taskId === taskId)
-      .map((memory) => ({
-        id: memory.id,
-        kind: memory.kind,
-        source: memory.source,
-        importance: memory.importance,
-        utility: memory.utility,
-        createdAt: memory.createdAt,
-        content: memory.content
-      }));
-    console.log(JSON.stringify({ taskId, memories }, null, 2));
+    console.log(JSON.stringify(await inspectTaskTrace(runtime, taskId), null, 2));
     runtime.sqlite.close();
   });
 const providers = program.command("providers").description("Manage compute providers");
@@ -549,11 +561,7 @@ providers
   });
 
 async function credentialBroker(): Promise<CredentialBroker> {
-  const vault = new Vault();
-  if (!(await vault.exists())) return new CredentialBroker();
-  const password = process.env.PROVIDER_BOOTSTRAPPER_MASTER_PASSWORD;
-  if (!password) return new CredentialBroker();
-  return new CredentialBroker(await vault.read(password));
+  return new CredentialBroker().prepare();
 }
 
 function createBeyonderRuntime(config: ReturnType<typeof loadConfig>) {

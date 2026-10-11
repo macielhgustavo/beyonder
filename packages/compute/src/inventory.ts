@@ -1,5 +1,5 @@
 import { providers } from "./catalog.js";
-import { eligibleModelsForWorkload, modelsWithMetadata } from "./model-capabilities.js";
+import { isModelMetadataEligibleForWorkload, modelsWithMetadata } from "./model-capabilities.js";
 import type { AutopilotStateFile, ComputeInventoryEntry, ProviderCatalogEntry } from "./types.js";
 
 export function buildComputeInventory(state: AutopilotStateFile): ComputeInventoryEntry[] {
@@ -12,11 +12,18 @@ function buildInventoryEntry(provider: ProviderCatalogEntry, state: AutopilotSta
   const human = progress?.state === "HUMAN_GATE";
   const skipped = progress?.state === "SKIPPED";
   const failed = progress?.state === "FAILED";
-  const validatedModels = progress?.validation?.models;
+  const validatedModels = progress?.validation?.status === "validated" ? progress.validation.models : undefined;
   const models = provider.id === "nvidia-nim"
     ? validatedModels ?? []
-    : validatedModels?.length ? validatedModels : provider.knownFreeModels;
+    : validatedModels ?? provider.knownFreeModels;
+  const modelMetadata = modelsWithMetadata(provider, models).map(model => progress?.validation?.modelMetadata?.find(observed => observed.id === model.id) ?? model);
   return {
+    bootstrapReady: healthy,
+    modelCatalogReady: progress?.validation?.status === "validated",
+    // Bootstrap and public catalogue validation do not perform inference or
+    // independent semantic verification. Preserve those separate qualifications.
+    inferenceQualified: false,
+    verifierQualified: false,
     providerId: provider.id,
     providerName: provider.name,
     status: healthy
@@ -26,10 +33,10 @@ function buildInventoryEntry(provider: ProviderCatalogEntry, state: AutopilotSta
           : failed ? "failed"
             : provider.authType === "keyless" ? "keyless" : "missing-credential",
     auth: provider.authType,
-    cost: provider.billingRisk ? "billing-risk" : provider.classification === "PAID_ONLY" ? "billing-risk" : "$0",
+    cost: provider.billingRisk || provider.classification === "PAID_ONLY" ? "billing-risk" : "unknown",
     models,
-    modelMetadata: modelsWithMetadata(provider, models),
-    eligibleChatModels: eligibleModelsForWorkload(provider, models, "general_chat"),
+    modelMetadata,
+    eligibleChatModels: modelMetadata.filter(model => isModelMetadataEligibleForWorkload(model, "general_chat")).map(model => model.id),
     rpm: provider.freeTierLimits?.rpm,
     tpm: provider.freeTierLimits?.tpm,
     contextWindow: provider.freeTierLimits?.contextWindow,

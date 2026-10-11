@@ -3,6 +3,7 @@ import type { MemoryEngine, RetrievedMemory } from "../memory/memory-engine.js";
 import type { IntelligenceResult, IntelligenceTask } from "./contracts.js";
 import { ComplexityEstimator } from "./complexity-estimator.js";
 import { TaskClassifier } from "./task-classifier.js";
+import { analyzeGoalContract } from "./goal-contract.js";
 
 export interface IntelligenceInspection extends IntelligenceResult {
   relevantMemories: RetrievedMemory[];
@@ -17,7 +18,8 @@ export class IntelligenceLayer {
 
   async inspect(input: string, limit = 6): Promise<IntelligenceInspection> {
     const type = this.classifier.classify(input);
-    const estimate = this.complexity.estimate(input, type);
+    const goalContract = analyzeGoalContract(input, type);
+    const estimate = this.complexity.estimate(input, type, goalContract);
     const task: IntelligenceTask = {
       id: `task_${nanoid()}`,
       input,
@@ -25,7 +27,8 @@ export class IntelligenceLayer {
       complexity: estimate.complexity,
       risk: estimate.risk,
       estimatedTokens: estimate.estimatedTokens,
-      requirements: estimate.requirements
+      requirements: estimate.requirements,
+      goalContract
     };
 
     const relevantMemories = await this.memory.retrieve({ query: input, taskType: type, limit });

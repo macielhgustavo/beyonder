@@ -18,6 +18,14 @@ describe("benchmark evaluators", () => {
     expect(result.success).toBe(true);
   });
 
+  it("requires the complete verdict envelope as well as its expected decision", () => {
+    const schema = testCase("json-schema", { required: ["satisfied", "reason"], equals: { satisfied: false } });
+    expect(evaluateCase(schema, '{"satisfied":false,"reason":"counterexample"}').success).toBe(true);
+    for (const output of ['{"satisfied":false}', '{"satisfied":true,"reason":"counterexample"}', '{"satisfied":false,"reason":"counterexample","complete":false}']) {
+      expect(evaluateCase(schema, output).success).toBe(false);
+    }
+  });
+
   it("runs small code tests", () => {
     const result = evaluateCase(
       testCase("code-test", { functionName: "double", tests: [[ [2], 4 ]] }),

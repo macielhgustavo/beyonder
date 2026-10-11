@@ -5,7 +5,7 @@ const EVALUATED_STATUSES = new Set(["PASS", "FAIL"]);
 export function summarizeResults(results: BenchmarkResult[]): BenchmarkSummary[] {
   const groups = new Map<string, BenchmarkResult[]>();
   for (const result of results) {
-    const key = `${result.provider}\u0000${result.model}\u0000${result.category}`;
+    const key = `${result.provider}\u0000${result.model}\u0000${result.category}\u0000${result.inferenceProfile ?? "legacy"}`;
     groups.set(key, [...(groups.get(key) ?? []), result]);
   }
 
@@ -20,9 +20,12 @@ export function summarizeResults(results: BenchmarkResult[]): BenchmarkSummary[]
     const latestFailure = operationalFailures.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime())[0];
     return {
       provider: first.provider,
+      inferenceProfile: first.inferenceProfile,
+      structuredOutputMode: evaluated.length && evaluated.every(item => item.structuredOutputMode === evaluated[0]!.structuredOutputMode) ? evaluated[0]!.structuredOutputMode : undefined,
       model: first.model,
       category: first.category,
       evaluatedSamples: evaluated.length,
+      distinctEvaluatedCases: new Set(evaluated.map(item => item.caseId)).size,
       operationalFailures: operationalFailures.length,
       successes: evaluated.filter((item) => item.success).length,
       avgQuality: evaluated.length ? average(evaluated.map((item) => item.quality ?? 0)) : null,
@@ -32,7 +35,8 @@ export function summarizeResults(results: BenchmarkResult[]): BenchmarkSummary[]
       latestOperationalStatus: latestFailure?.status,
       latestFailureReason: latestFailure?.failureReason,
       latestHttpStatus: latestFailure?.httpStatus,
-      lastTestedAt: new Date(Math.max(...items.map((item) => item.timestamp.getTime())))
+      lastTestedAt: new Date(Math.max(...items.map((item) => item.timestamp.getTime()))),
+      lastEvaluatedAt: evaluated.length ? new Date(Math.max(...evaluated.map(item => item.timestamp.getTime()))) : undefined
     };
   });
 }

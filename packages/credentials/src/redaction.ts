@@ -1,26 +1,10 @@
-const SECRET_PATTERNS = [
-  /sk-[A-Za-z0-9_-]{12,}/g,
-  /gh[pousr]_[A-Za-z0-9_]{20,}/g,
-  /AIza[0-9A-Za-z_-]{20,}/g,
-  /Bearer\s+[A-Za-z0-9._~+/=-]{12,}/gi,
-  /([A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD)[A-Z0-9_]*=)([^\s]+)/gi
-];
-
-export function redact(value: unknown): string {
-  let text = typeof value === "string" ? value : JSON.stringify(value);
-  if (!text) return "";
-  for (const pattern of SECRET_PATTERNS) {
-    text = text.replace(pattern, (match, prefix?: string) => {
-      if (prefix && match.startsWith(prefix)) {
-        return `${prefix}[REDACTED]`;
-      }
-      return "[REDACTED]";
-    });
-  }
-  return text;
+const sensitive = /^(?:api[_-]?key|token|secret|authorization|bearer|private[_-]?key|credentials?|password|passphrase|cookie)$/i;
+function safe(value: unknown, seen = new WeakSet<object>()): unknown {
+  if (typeof value === 'string') return value.replace(/\b(?:sk-[A-Za-z0-9_-]{12,}|gh[pousr]_[A-Za-z0-9_]{20,}|AIza[0-9A-Za-z_-]{20,})\b/g,'[REDACTED]').replace(/Bearer\s+[^\s,;"']+/gi,'Bearer [REDACTED]').replace(/([A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD)[A-Z0-9_]*=)([^\s]+)/gi,'$1[REDACTED]');
+  if (!value || typeof value !== 'object') return value;
+  if (seen.has(value)) return '[CIRCULAR]'; seen.add(value);
+  if (Array.isArray(value)) return value.map(v => safe(v,seen));
+  return Object.fromEntries(Object.entries(value).map(([key,v])=>[key,sensitive.test(key.replace(/([a-z])([A-Z])/g,'$1_$2')) || /(?:api_?key|token|secret|private_?key|password|authorization|credentials?)$/i.test(key.replace(/[^a-z]/gi,'')) ? '[REDACTED]' : safe(v,seen)]));
 }
-
-export function fingerprint(secret: string): string {
-  if (secret.length <= 8) return "[REDACTED]";
-  return `${secret.slice(0, 3)}…${secret.slice(-4)}`;
-}
+export function redact(value: unknown): string { const result = safe(value); return typeof result === 'string' ? result : JSON.stringify(result) ?? ''; }
+export function fingerprint(_secret: string): string { return '[REDACTED]'; }

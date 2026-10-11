@@ -2,6 +2,12 @@
 
 This project is inspired by public autonomous-agent and agent-payment projects, but v0.1 does not copy third-party code.
 
+For the pinned implementation-level comparison of provider aggregation, routing,
+agent operation and release-candidate gaps, see
+[Release candidate GAP MATRIX](../architecture/release-candidate-gap-matrix.md).
+That audit checked four MIT license files and implements patterns independently;
+it does not import reference code or their financial/autonomous-action scope.
+
 ## License Notes
 
 | Project | Public source checked | License signal | Current use |

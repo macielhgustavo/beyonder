@@ -82,6 +82,16 @@ export type {
   ResourceRequestKind
 } from "./policy/resource-authority.js";
 export { UnboundedLocalResourceAuthority, DeadlineResourceAuthority } from "./policy/resource-authority.js";
+export {
+  BudgetBackedResourceAuthority
+} from "./policy/budget-authority.js";
+export type { BudgetBackedResourceAuthorityOptions } from "./policy/budget-authority.js";
+export {
+  taskToMissionContract,
+  taskToMissionPlan,
+  liftTaskToMission
+} from "./adapters/task-mission-adapter.js";
+export type { TaskMissionAdapterOptions } from "./adapters/task-mission-adapter.js";
 export { MissionPolicyEngine } from "./policy/mission-policy.js";
 export type { MissionPolicyDecision } from "./policy/mission-policy.js";
 export { MissionScheduler } from "./scheduler/mission-scheduler.js";

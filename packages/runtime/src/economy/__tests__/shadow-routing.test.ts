@@ -65,6 +65,9 @@ describe("Compute Economy — Shadow Routing Integration", () => {
     id: "task-code-audit",
     type: "coding",
     complexity: 0.85,
+    risk: 0.5,
+    estimatedTokens: 2000,
+    input: "test",
     requirements: { coding: true, reasoning: true }
   };
 
@@ -77,7 +80,7 @@ describe("Compute Economy — Shadow Routing Integration", () => {
       computeMode: "zero_cost",
       // Model capability priors
       capabilitySource: {
-        getCapability: async ({ model }) => {
+        getCapability: async ({ model }: { provider: string; model: string; taskType: import('../../models/capability-source.js').ModelCapabilityRequest['taskType'] }) => {
           if (model === "anthropic/claude-3.5-sonnet") {
             return { provider: "openrouter", model, taskType: "coding", score: 0.95, samples: 20, updatedAt: "2026-10-10" };
           }

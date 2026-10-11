@@ -8,6 +8,9 @@ describe("Compute Economy — Shadow Report Generator", () => {
     id: "task-test-1",
     type: "coding",
     complexity: 0.8,
+    risk: 0.5,
+    estimatedTokens: 2000,
+    input: "test",
     requirements: { coding: true }
   };
 

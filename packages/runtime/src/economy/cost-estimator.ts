@@ -30,6 +30,10 @@ export interface CostEstimate {
     requestFeeMicros: Microdollars;
   };
   pricingSnapshotId: string;
+  /** Input tokens used for estimation (from CostEstimateInput). */
+  estimatedInputTokens?: number;
+  /** Max output tokens used for estimation (from CostEstimateInput). */
+  maxOutputTokens?: number;
 }
 
 export interface CostEstimator {
@@ -38,6 +42,14 @@ export interface CostEstimator {
 
   /** Quick worst-case cost calculation. */
   worstCase(input: CostEstimateInput): Microdollars;
+
+  /** Calculate actual cost from observed token usage and pricing snapshot. */
+  calculateActual(input: {
+    pricing: PricingSnapshot;
+    actualInputTokens: number;
+    actualOutputTokens: number;
+    cachedInputTokens?: number;
+  }): Microdollars;
 }
 
 export class DefaultCostEstimator implements CostEstimator {
@@ -76,7 +88,9 @@ export class DefaultCostEstimator implements CostEstimator {
         cacheCostMicros,
         requestFeeMicros
       },
-      pricingSnapshotId: pricing.id
+      pricingSnapshotId: pricing.id,
+      estimatedInputTokens,
+      maxOutputTokens
     };
   }
 
@@ -85,5 +99,26 @@ export class DefaultCostEstimator implements CostEstimator {
       return ZERO_MICROS;
     }
     return this.estimate(input).worstCaseCostMicros;
+  }
+
+  calculateActual(input: {
+    pricing: PricingSnapshot;
+    actualInputTokens: number;
+    actualOutputTokens: number;
+    cachedInputTokens?: number;
+  }): Microdollars {
+    const { pricing, actualInputTokens, actualOutputTokens, cachedInputTokens } = input;
+    const effectiveInput = Math.max(0, actualInputTokens - (cachedInputTokens ?? 0));
+    const cachedTokens = cachedInputTokens ?? 0;
+
+    const inputCost = Math.round(effectiveInput * pricing.inputPerMillion / 1_000_000) as Microdollars;
+    const outputCost = Math.round(actualOutputTokens * pricing.outputPerMillion / 1_000_000) as Microdollars;
+    const cacheCost = Math.round(cachedTokens * pricing.cacheReadPerMillion / 1_000_000) as Microdollars;
+    const requestFee = pricing.requestFee;
+
+    return addMicros(
+      addMicros(addMicros(inputCost, outputCost), cacheCost),
+      requestFee
+    );
   }
 }

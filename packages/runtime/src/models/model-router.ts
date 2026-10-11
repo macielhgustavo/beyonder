@@ -58,6 +58,18 @@ export class ModelRouter {
     this.selector = new AdaptiveModelSelector(config.providerStatePath, { ...options, installationPosture: config.installationBillingPosture, quotaSource: options.quotaSource ?? this.quotaSource, credentialAccess: async provider => getProvider(provider) ? (await this.credentials.resolve(provider)).descriptor : undefined, providerAccountPlan: async provider => { if (!getProvider(provider)) return undefined; const resolved = await this.credentials.resolve(provider); return declaredProviderAccountPlan(provider, resolved.apiKey(), resolved.get('CLOUDFLARE_ACCOUNT_ID')); }, billingCapability: async provider => ['gemini', 'groq', 'cloudflare-workers-ai'].includes(provider) ? this.billingInspector.inspect(provider) : undefined, operationalHealth: (provider, model) => this.operationalHealth.get(provider, model), canAttempt: (candidate) => this.canAttempt(candidate), ollamaBaseUrl: config.ollamaBaseUrl, performanceRepository: this.performance });
   }
 
+  get budgetAccountant(): import("../economy/budget-accountant.js").BudgetAccountant | undefined {
+    return this.options.budgetAccountant;
+  }
+
+  get costEstimator(): import("../economy/cost-estimator.js").CostEstimator | undefined {
+    return this.options.costEstimator;
+  }
+
+  get pricingRegistry(): import("../economy/pricing-registry.js").PricingRegistry | undefined {
+    return this.options.pricingRegistry;
+  }
+
   async recordAttempt(attempt: InferenceAttempt): Promise<void> {
     let duplicate = false;
     await this.options.state?.update<InferenceAttempt[]>(`task-attempts:${attempt.taskId}`, [], (previous) => {
@@ -204,10 +216,18 @@ export class ModelRouter {
   }
 
   private async completeAutoCandidate(messages: ModelMessage[], candidate: ModelCandidate, signal?: AbortSignal, structured = false, maxOutputTokens = 2400): Promise<ModelResponse> {
-    const economics = await this.assertZeroCost(candidate);
+    const isPaidCandidate = candidate.costClass === "PAID" || candidate.monetaryCostUsd > 0;
+    let economics: ZeroCostDecision | undefined;
+    if (!isPaidCandidate) {
+      economics = await this.assertZeroCost(candidate);
+    }
     if (candidate.provider === "ollama") return this.completeWithOllama(messages, candidate.model, signal);
     const provider = getProvider(candidate.provider);
     if (!provider?.openAiCompatibleEndpoint) throw new Error(`Provider ${candidate.provider} has no compatible completion endpoint.`);
+    if (isPaidCandidate) {
+      if (this.economicStops.has(candidate.provider)) throw new InferenceError("Economic stop active for provider", "ECONOMIC_POLICY_BLOCKED");
+      if (await this.options.state?.get<boolean>(`economic-stop:${candidate.provider}`, false)) throw new InferenceError("Economic stop active for provider", "ECONOMIC_POLICY_BLOCKED");
+    }
     const credential = await this.credentials.resolve(provider.id);
     if (!credential.descriptor.accessible || credential.descriptor.valid === false) throw new InferenceError(credential.descriptor.status, 'AUTH_REQUIRED');
     const apiKey = credential.apiKey();
@@ -222,7 +242,22 @@ export class ModelRouter {
         headers: { "content-type": "application/json", ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}) },
         signal: AbortSignal.any([controller.signal, ...(signal ? [signal] : [])]),
         redirect: 'error',
-        body: JSON.stringify({ model: candidate.model, messages, temperature: 0, max_tokens: maxOutputTokens, stream: false, ...(candidate.provider === 'openrouter' ? { provider: { max_price: { prompt: 0, completion: 0 }, allow_fallbacks: true } } : candidate.provider === 'kilo-gateway' ? { provider: { max_price: { prompt: 0, completion: 0 }, allow_fallbacks: false } } : {}), ...(candidate.capabilities?.includes("reasoning-control") ? { reasoning: candidate.inferenceProfile === "reasoning-disabled:max-output-2400" && candidate.benchmarkCapability?.inferenceProfile === candidate.inferenceProfile ? { enabled: false } : { effort: "low" } } : {}), ...(structured && (candidate.benchmarkCapability?.structuredOutputMode ?? candidate.structuredOutput) === "native" ? { response_format: { type: "json_object" } } : {}) })
+        body: JSON.stringify({
+          model: candidate.model,
+          messages,
+          temperature: 0,
+          max_tokens: maxOutputTokens,
+          stream: false,
+          ...(candidate.provider === 'openrouter'
+            ? (isPaidCandidate
+                ? { provider: { allow_fallbacks: true } }
+                : { provider: { max_price: { prompt: 0, completion: 0 }, allow_fallbacks: true } })
+            : candidate.provider === 'kilo-gateway'
+            ? { provider: { max_price: { prompt: 0, completion: 0 }, allow_fallbacks: false } }
+            : {}),
+          ...(candidate.capabilities?.includes("reasoning-control") ? { reasoning: candidate.inferenceProfile === "reasoning-disabled:max-output-2400" && candidate.benchmarkCapability?.inferenceProfile === candidate.inferenceProfile ? { enabled: false } : { effort: "low" } } : {}),
+          ...(structured && (candidate.benchmarkCapability?.structuredOutputMode ?? candidate.structuredOutput) === "native" ? { response_format: { type: "json_object" } } : {})
+        })
       });
       this.quotaSource.observe(candidate.provider, candidate.model, response.headers);
       if (!response.ok) {
@@ -234,16 +269,36 @@ export class ModelRouter {
         }
         throw httpFailure(response.status, (await response.text()).replaceAll(apiKey || "\u0000", "[REDACTED]"), response.headers);
       }
-      const json = await response.json() as { error?: unknown; model?: string; provider?: string; choices?: Array<{ finish_reason?: string; message?: { content?: string; tool_calls?: unknown[]; function_call?: unknown; provider_metadata?: { gateway?: { routing?: { resolvedProvider?: string; totalProviderAttemptCount?: number } } } } }>; usage?: { total_tokens?: number; cost?: number | string } };
+      const json = await response.json() as { error?: unknown; model?: string; provider?: string; choices?: Array<{ finish_reason?: string; message?: { content?: string; tool_calls?: unknown[]; function_call?: unknown; provider_metadata?: { gateway?: { routing?: { resolvedProvider?: string; totalProviderAttemptCount?: number } } } } }>; usage?: { total_tokens?: number; prompt_tokens?: number; completion_tokens?: number; cost?: number | string } };
       const completion = json.choices?.[0];
       const reportedCost = json.usage?.cost;
-      const cost = reportedCost === undefined && economics.zeroCostExecutionGuaranteed ? 0 : typeof reportedCost === 'number' || typeof reportedCost === 'string' && reportedCost.trim() ? Number(reportedCost) : undefined;
-      if (cost === undefined || !Number.isFinite(cost) || cost !== 0) {
-        this.economicStops.add(candidate.provider);
-        await this.billingInspector.invalidate(candidate.provider);
-        await this.options.telemetry?.record('error', 'economic.zero_cost_violation', { provider: candidate.provider, model: candidate.model, reportedCostUsd: Number.isFinite(cost) ? cost : 'UNKNOWN' });
-        await this.options.state?.set(`economic-stop:${candidate.provider}`, true);
-        throw new InferenceError('Provider contradicted zero-cost evidence; execution stopped.', 'ECONOMIC_POLICY_BLOCKED', response.status, undefined, undefined, undefined, undefined, cost !== undefined && Number.isFinite(cost) && cost > 0 ? cost : undefined);
+      let cost: number | undefined;
+      if (isPaidCandidate) {
+        if (typeof reportedCost === 'number') {
+          cost = reportedCost;
+        } else if (typeof reportedCost === 'string' && reportedCost.trim()) {
+          cost = Number(reportedCost);
+        } else if (candidate.pricingSnapshot) {
+          const inTokens = json.usage?.prompt_tokens ?? Math.round((json.usage?.total_tokens ?? 0) * 0.75);
+          const outTokens = json.usage?.completion_tokens ?? Math.max(0, (json.usage?.total_tokens ?? 0) - inTokens);
+          const inMicros = inTokens * candidate.pricingSnapshot.inputPerMillion / 1_000_000;
+          const outMicros = outTokens * candidate.pricingSnapshot.outputPerMillion / 1_000_000;
+          cost = (inMicros + outMicros + candidate.pricingSnapshot.requestFee) / 1_000_000;
+        } else {
+          cost = candidate.monetaryCostUsd;
+        }
+        if (cost === undefined || !Number.isFinite(cost) || cost < 0) {
+          throw new InferenceError('Provider reported an invalid monetary cost.', 'ECONOMIC_POLICY_BLOCKED');
+        }
+      } else {
+        cost = reportedCost === undefined && economics?.zeroCostExecutionGuaranteed ? 0 : typeof reportedCost === 'number' || typeof reportedCost === 'string' && reportedCost.trim() ? Number(reportedCost) : undefined;
+        if (cost === undefined || !Number.isFinite(cost) || cost !== 0) {
+          this.economicStops.add(candidate.provider);
+          await this.billingInspector.invalidate(candidate.provider);
+          await this.options.telemetry?.record('error', 'economic.zero_cost_violation', { provider: candidate.provider, model: candidate.model, reportedCostUsd: Number.isFinite(cost) ? cost : 'UNKNOWN' });
+          await this.options.state?.set(`economic-stop:${candidate.provider}`, true);
+          throw new InferenceError('Provider contradicted zero-cost evidence; execution stopped.', 'ECONOMIC_POLICY_BLOCKED', response.status, undefined, undefined, undefined, undefined, cost !== undefined && Number.isFinite(cost) && cost > 0 ? cost : undefined);
+        }
       }
       const diagnostic = () => JSON.stringify(redactSecrets({ model: json.model, error: json.error, usage: json.usage, finishReason: completion?.finish_reason, content: typeof completion?.message?.content === "string" ? completion.message.content.slice(0, 500) : undefined })).slice(0, 1500);
       if (json.error) throw completionEnvelopeFailure(json.error, response.status, response.headers);

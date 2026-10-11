@@ -97,6 +97,9 @@ describe("Compute Economy — Phase 2 Acceptance Suite (15 Scenarios)", () => {
     id: "task-acceptance-coding",
     type: "coding",
     complexity: 0.85,
+    risk: 0.5,
+    estimatedTokens: 2000,
+    input: "test",
     requirements: { coding: true, reasoning: true }
   };
 
@@ -111,7 +114,7 @@ describe("Compute Economy — Phase 2 Acceptance Suite (15 Scenarios)", () => {
       shadowMode: true,
       computeMode: "zero_cost",
       capabilitySource: {
-        getCapability: async ({ model }) => {
+        getCapability: async ({ model }: { provider: string; model: string; taskType: import('../../models/capability-source.js').ModelCapabilityRequest['taskType'] }) => {
           if (model === "llama-3.3-70b-versatile") {
             // Groq free has high score 0.85
             return { provider: "groq", model, taskType: "coding", score: 0.85, samples: 25, updatedAt: "2026-10-10" };
@@ -201,7 +204,7 @@ describe("Compute Economy — Phase 2 Acceptance Suite (15 Scenarios)", () => {
       shadowMode: true,
       computeMode: "zero_cost",
       capabilitySource: {
-        getCapability: async ({ model }) => {
+        getCapability: async ({ model }: { provider: string; model: string; taskType: import('../../models/capability-source.js').ModelCapabilityRequest['taskType'] }) => {
           if (model === "meta-llama/llama-3.3-70b-instruct") {
             // Llama 3.3 70B ($0.12/$0.30 per M) has 0.82 score
             return { provider: "openrouter", model, taskType: "coding", score: 0.82, samples: 20, updatedAt: "2026-10-10" };
@@ -277,7 +280,7 @@ describe("Compute Economy — Phase 2 Acceptance Suite (15 Scenarios)", () => {
       shadowMode: true,
       computeMode: "zero_cost",
       capabilitySource: {
-        getCapability: async ({ model }) => {
+        getCapability: async ({ model }: { provider: string; model: string; taskType: import('../../models/capability-source.js').ModelCapabilityRequest['taskType'] }) => {
           if (model === "llama-3.3-70b-versatile") {
             // Free model only has 0.60 quality on this difficult task
             return { provider: "groq", model, taskType: "coding", score: 0.60, samples: 20, updatedAt: "2026-10-10" };
@@ -295,6 +298,9 @@ describe("Compute Economy — Phase 2 Acceptance Suite (15 Scenarios)", () => {
       id: "task-high-value-audit",
       type: "coding",
       complexity: 0.95,
+      risk: 0.5,
+      estimatedTokens: 2000,
+      input: "test",
       requirements: { coding: true, reasoning: true }
     };
 
@@ -356,6 +362,8 @@ describe("Compute Economy — Phase 2 Acceptance Suite (15 Scenarios)", () => {
       objectiveId: "obj-prior",
       provider: "openrouter",
       model: "anthropic/claude-3.5-sonnet",
+      estimatedInputTokens: 1000,
+      maxOutputTokens: 1000,
       worstCaseMicros: usdToMicros(0.05),
       idempotencyKey: "exhaust-daily-1"
     });
@@ -404,6 +412,8 @@ describe("Compute Economy — Phase 2 Acceptance Suite (15 Scenarios)", () => {
       objectiveId: "obj-race",
       provider: "openrouter",
       model: "deepseek/deepseek-r1",
+      estimatedInputTokens: 1000,
+      maxOutputTokens: 1000,
       worstCaseMicros: usdToMicros(0.03),
       idempotencyKey: "race-key-1"
     });
@@ -415,6 +425,8 @@ describe("Compute Economy — Phase 2 Acceptance Suite (15 Scenarios)", () => {
       objectiveId: "obj-race",
       provider: "openrouter",
       model: "deepseek/deepseek-r1",
+      estimatedInputTokens: 1000,
+      maxOutputTokens: 1000,
       worstCaseMicros: usdToMicros(0.03),
       idempotencyKey: "race-key-2"
     });
@@ -438,6 +450,8 @@ describe("Compute Economy — Phase 2 Acceptance Suite (15 Scenarios)", () => {
       objectiveId: "obj-crash",
       provider: "openrouter",
       model: "deepseek/deepseek-r1",
+      estimatedInputTokens: 1000,
+      maxOutputTokens: 1000,
       worstCaseMicros: usdToMicros(0.02),
       idempotencyKey: "crash-key-1"
     })!;
@@ -447,6 +461,8 @@ describe("Compute Economy — Phase 2 Acceptance Suite (15 Scenarios)", () => {
       objectiveId: "obj-crash",
       provider: "openrouter",
       model: "anthropic/claude-3.5-sonnet",
+      estimatedInputTokens: 1000,
+      maxOutputTokens: 1000,
       worstCaseMicros: usdToMicros(0.03),
       idempotencyKey: "crash-key-2"
     })!;
@@ -481,6 +497,8 @@ describe("Compute Economy — Phase 2 Acceptance Suite (15 Scenarios)", () => {
       objectiveId: "obj-settle",
       provider: "openrouter",
       model: "deepseek/deepseek-chat",
+      estimatedInputTokens: 1000,
+      maxOutputTokens: 1000,
       worstCaseMicros: usdToMicros(0.02), // $0.02 reserved
       idempotencyKey: "settle-key-1"
     })!;
@@ -700,12 +718,12 @@ describe("Compute Economy — Phase 2 Acceptance Suite (15 Scenarios)", () => {
       shadowMode: true,
       computeMode: "zero_cost",
       capabilitySource: {
-        getCapability: async ({ model, taskType }) => {
+        getCapability: async ({ model, taskType }: { provider: string; model: string; taskType: import('../../models/capability-source.js').ModelCapabilityRequest['taskType'] }) => {
           if (taskType === "coding") {
             if (model === "anthropic/claude-3.5-sonnet") return { provider: "openrouter", model, taskType, score: 0.95, samples: 20, updatedAt: "2026-10-10" };
             if (model === "llama-3.3-70b-versatile") return { provider: "groq", model, taskType, score: 0.75, samples: 20, updatedAt: "2026-10-10" };
           }
-          if (taskType === "general_chat") {
+          if (taskType === "chat") {
             if (model === "llama-3.3-70b-versatile") return { provider: "groq", model, taskType, score: 0.88, samples: 20, updatedAt: "2026-10-10" };
             if (model === "anthropic/claude-3.5-sonnet") return { provider: "openrouter", model, taskType, score: 0.90, samples: 20, updatedAt: "2026-10-10" };
           }
@@ -717,10 +735,10 @@ describe("Compute Economy — Phase 2 Acceptance Suite (15 Scenarios)", () => {
     const reportGenerator = new ShadowReportGenerator();
 
     const tasks: IntelligenceTask[] = [
-      { id: "task-code-1", type: "coding", complexity: 0.90, requirements: { coding: true } },
-      { id: "task-code-2", type: "coding", complexity: 0.80, requirements: { coding: true } },
-      { id: "task-chat-1", type: "general_chat", complexity: 0.40, requirements: {} },
-      { id: "task-chat-2", type: "general_chat", complexity: 0.50, requirements: {} }
+      { id: "task-code-1", type: "coding", complexity: 0.90, risk: 0.5, estimatedTokens: 2000, input: "test", requirements: { coding: true } },
+      { id: "task-code-2", type: "coding", complexity: 0.80, risk: 0.5, estimatedTokens: 2000, input: "test", requirements: { coding: true } },
+      { id: "task-chat-1", type: "chat", complexity: 0.40, risk: 0.3, estimatedTokens: 500, input: "test", requirements: {} },
+      { id: "task-chat-2", type: "chat", complexity: 0.50, risk: 0.3, estimatedTokens: 500, input: "test", requirements: {} }
     ];
 
     for (const task of tasks) {

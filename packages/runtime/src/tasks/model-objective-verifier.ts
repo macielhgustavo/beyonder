@@ -134,6 +134,8 @@ export class ModelObjectiveVerifier implements CompletionEvaluator {
         maxMonetaryCostUsd: Math.max(0, remainingMoney - usage.money),
         maxShadowCostUsd: Math.max(0, remainingShadow - usage.shadow),
         maxDurationMs: Math.max(0, remainingTime - (Date.now() - reviewStartedAt)),
+        budgetAccountant: this.router.budgetAccountant,
+        costEstimator: this.router.costEstimator,
         complete: (messages, candidate, signal) => typeof this.router.completeForStructuredCandidate === "function"
           ? this.router.completeForStructuredCandidate(messages, candidate, signal, VERIFIER_SCHEMA)
           : this.router.completeForPlanningCandidate(messages, candidate, signal),

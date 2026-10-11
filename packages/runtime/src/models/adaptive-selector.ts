@@ -44,6 +44,7 @@ export interface AdaptiveSelectorOptions {
   budgetAccountant?: BudgetAccountant;
   shadowMode?: boolean;
   computeMode?: ComputeMode;
+  maxSingleInferenceUsd?: number;
 }
 
 type InventoryEntry = ReturnType<typeof buildComputeInventory>[number];
@@ -225,7 +226,6 @@ export class AdaptiveModelSelector {
           rejectedCandidates.push(rejected);
           const group = `${pair.entry.providerId}:${economics.classification}`;
           costFilterCounts.set(group, (costFilterCounts.get(group) ?? 0) + 1);
-          if (economics.classification === 'FREE_QUOTA_EXHAUSTED') await this.telemetry('info', 'quota.free_tier_exhausted', { provider: pair.entry.providerId, model: pair.model, reason: economics.reason });
           continue;
         }
       } else {
@@ -344,7 +344,10 @@ export class AdaptiveModelSelector {
       const metadata = pair.entry.modelMetadata.find((m) => m.id === pair.model) ?? {
         id: pair.model,
         capabilities: ["text", ...(pair.model.includes("code") ? ["coding"] : []), ...(pair.model.includes("r1") ? ["reasoning"] : [])],
-        costClass: "PAID" as const
+        costClass: "PAID" as const,
+        contextWindow: undefined,
+        toolCalling: "unknown" as const,
+        structuredOutput: "unknown" as const
       };
       const structuredPenalty = task.requirements.structuredOutput && metadata?.structuredOutput !== "native" ? metadata?.structuredOutput === "prompted" ? 0.02 : 0.08 : 0;
       const utility = calculateUtility({
@@ -415,14 +418,17 @@ export class AdaptiveModelSelector {
       };
 
       const capabilityFit = assessCapability(candidate, task, qualityFloor);
-      const allowPaidTier = isPaidCandidate && (isShadowMode || (this.options.computeMode === "bounded" && CLOUD_FIRST_POLICY.paidEscalationEnabled));
+      const allowPaidTier = isPaidCandidate && (isShadowMode || this.options.computeMode === "bounded");
       const tier = computeTier(candidate, capabilityFit, qualityFloor, allowPaidTier);
       const score = routingScore(candidate, capabilityFit, tier, qualityFloor);
       const rejectionReasons: string[] = [];
       // A quality estimate is evidence for ranking, never permission to produce.
       // Unknown and low-sample models must be able to gather real observations.
       if (tier === "PAID_DISABLED" && !paidCandidateAllowed() && !isShadowMode) rejectionReasons.push("paid escalation is architecturally represented but disabled in v0.5");
-      if (!isShadowMode && candidate.monetaryCostUsd > policy.maxMonetaryCostUsd) rejectionReasons.push(`monetary-cost>${policy.maxMonetaryCostUsd}`);
+      const maxAllowedCost = this.options.computeMode === "bounded"
+        ? (this.options.maxSingleInferenceUsd ?? 0.10)
+        : policy.maxMonetaryCostUsd;
+      if (!isShadowMode && candidate.monetaryCostUsd > maxAllowedCost) rejectionReasons.push(`monetary-cost>${maxAllowedCost}`);
       // Shadow cost is a score signal. The hard economic limit is monetary.
 
       Object.assign(candidate, {

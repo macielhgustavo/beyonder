@@ -1,10 +1,11 @@
 # Beyonder v0.6 — Autonomous Compute Economy Architecture
 
 ## Status
-**PHASE 2 COMPLETE** — Shadow Paid Routing & Economic Pricing Discovery (`V06_SHADOW_ROUTING_READY=true`)
+**PHASE 3 COMPLETE** — Live Paid Canary Execution (`V06_LIVE_CANARY_READY=true`)
 - Phase 1: Economic Foundation Ready (`V06_ECONOMIC_FOUNDATION_READY=true`)
 - Phase 2: Shadow Paid Routing & Pricing Discovery Ready (`V06_SHADOW_ROUTING_READY=true`)
-- Phase 3: Live Paid Canary Execution (Ready for operator enablement)
+- Phase 3: Live Paid Canary Execution Ready (`V06_LIVE_CANARY_READY=true`)
+- Phase 4: Full Multi-Provider Economy (Ready for next rollout)
 
 ## Base Commit
 `6ddea2a` on `origin/main` (stable v0.5 HEAD).
@@ -582,11 +583,14 @@ interface SpendDecisionRecord {
 6. `SpendDecisionRecord` and `ShadowReportGenerator` produce structured explainability and multi-task reports
 7. Full 15-scenario acceptance test suite verified (`V06_SHADOW_ROUTING_READY=true`)
 
-### Phase 3: Live canary
-1. Operator sets `mode: 'bounded'`, tiny hard cap
-2. Router can select paid candidate
-3. Reservation → inference → settlement flow active
-4. One provider, one model, minimal budget
+### Phase 3: Live canary (COMPLETED)
+1. Operator sets `mode: 'bounded'`, tiny hard cap ($\le \$0.01$)
+2. Router can select paid candidate (`PAID_CLOUD` eligible in bounded live mode)
+3. Two-Phase Spend-Commit pipeline active in `runCandidates` (reserve $\rightarrow$ markSent $\rightarrow$ settle/release)
+4. Multi-layer canary guardrails: single canary provider pinning (`openrouter`), idempotency key per attempt, economic circuit breaker
+5. Zero-cost mode preserves 100% strict $0.00 spend invariant
+6. Full acceptance test suite verified (`live-canary.test.ts`, 12 scenarios passing)
+7. ADR-008 recorded (`V06_LIVE_CANARY_READY=true`)
 
 ### Phase 4: Full economy
 1. Multiple providers with pricing

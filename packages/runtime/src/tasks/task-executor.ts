@@ -51,6 +51,7 @@ export interface TaskExecutorOptions {
   completionEvaluator?: CompletionEvaluator;
   checkpointStore?: TaskCheckpointStore;
   executionLeaseStore?: TaskExecutionLeaseStore;
+  budgetAccountant?: import("../economy/budget-accountant.js").BudgetAccountant;
   now?: () => number;
   id?: () => string;
 }
@@ -514,6 +515,8 @@ export class AutonomousTaskExecutor {
         maxCandidates: getEconomicRoutingPolicy(request.economicState).maxAttempts,
         ...inferenceAttemptPolicy(request.economicState),
         maxMonetaryCostUsd: budget.monetaryCostUsd, maxShadowCostUsd: budget.shadowCostUsd, maxDurationMs: budget.durationMs,
+        budgetAccountant: this.options.budgetAccountant ?? router.budgetAccountant,
+        costEstimator: router.costEstimator,
         complete: (messages, candidate, signal) => execution.task.goalContract?.outputFormat === "JSON"
           ? router.completeForStructuredCandidate(messages, candidate, signal)
           : router.completeForPlanningCandidate(messages, candidate, signal), record: router.recordAttempt?.bind(router),

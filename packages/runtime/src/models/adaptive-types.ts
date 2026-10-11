@@ -4,7 +4,12 @@ import type { ModelCapabilityEvidence } from "./capability-source.js";
 
 export type ProviderHealth = "healthy" | "keyless" | "unhealthy" | "unknown";
 export type QuotaValue = number | "unknown";
-export type ComputeTier = "STRONG_FREE_CLOUD" | "OTHER_FREE_CLOUD" | "PAID_DISABLED" | "LOCAL_EMERGENCY";
+export type ComputeTier =
+  | "STRONG_FREE_CLOUD"
+  | "OTHER_FREE_CLOUD"
+  | "PAID_CLOUD"
+  | "PAID_DISABLED"
+  | "LOCAL_EMERGENCY";
 export type CapacityStatus = "NORMAL" | "CAPACITY_REDUCED" | "NEEDS_CAPABILITY";
 export type CapabilityDimension =
   | "reasoning"
@@ -94,6 +99,17 @@ export interface CandidateExplanation {
   constraints: string[];
 }
 
+export interface ShadowDecision {
+  shadowMode: boolean;
+  shadowCandidate?: ModelCandidate;
+  selectedCandidate?: ModelCandidate;
+  estimatedPaidCostUsd: number;
+  worstCasePaidCostUsd: number;
+  utilityDifference: number;
+  whyPaidCandidateWon: string;
+  whyNotSelectedForLive: string;
+}
+
 export interface ModelCandidate {
   economics?: import('@beyonder/compute').ZeroCostDecision;
   inferenceProfile?: string;
@@ -116,6 +132,9 @@ export interface ModelCandidate {
   historicalSuccess: number;
   reliability: number;
   monetaryCostUsd: number;
+  worstCaseCostUsd?: number;
+  pricingSnapshot?: import("../economy/pricing-registry.js").PricingSnapshot;
+  costEstimate?: import("../economy/cost-estimator.js").CostEstimate;
   shadowCostUsd: number;
   latencyPenalty: number;
   failureRisk: number;
@@ -140,6 +159,7 @@ export interface RouteDecision {
   consideredCandidates?: ModelCandidate[];
   rejectedCandidates?: RejectedCandidate[];
   paidEscalationEnabled?: boolean;
+  shadowDecision?: ShadowDecision;
 }
 
 export interface RouterTelemetry {

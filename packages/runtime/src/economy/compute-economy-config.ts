@@ -51,9 +51,28 @@ export const DEFAULT_COMPUTE_ECONOMY_CONFIG: ComputeEconomyConfig = {
  * Validates constraints and applies defaults.
  */
 export function resolveComputeEconomy(
-  config: Partial<ComputeEconomyConfig> = {}
+  config: (Partial<ComputeEconomyConfig> & Record<string, any>) = {}
 ): ResolvedComputeEconomy {
-  const merged = { ...DEFAULT_COMPUTE_ECONOMY_CONFIG, ...config };
+  const normalized: Partial<ComputeEconomyConfig> = { ...config };
+  if ("BEYONDER_COMPUTE_MODE" in config && config.BEYONDER_COMPUTE_MODE) {
+    normalized.mode = config.BEYONDER_COMPUTE_MODE as ComputeMode;
+  }
+  if ("BEYONDER_MONTHLY_HARD_CAP_USD" in config && config.BEYONDER_MONTHLY_HARD_CAP_USD !== undefined) {
+    normalized.monthlyHardCapUsd = Number(config.BEYONDER_MONTHLY_HARD_CAP_USD);
+  }
+  if ("BEYONDER_DAILY_HARD_CAP_USD" in config && config.BEYONDER_DAILY_HARD_CAP_USD !== undefined) {
+    normalized.dailyHardCapUsd = Number(config.BEYONDER_DAILY_HARD_CAP_USD);
+  }
+  if ("BEYONDER_OBJECTIVE_HARD_CAP_USD" in config && config.BEYONDER_OBJECTIVE_HARD_CAP_USD !== undefined) {
+    normalized.defaultObjectiveHardCapUsd = Number(config.BEYONDER_OBJECTIVE_HARD_CAP_USD);
+  }
+  if ("BEYONDER_OBJECTIVE_SOFT_TARGET_USD" in config && config.BEYONDER_OBJECTIVE_SOFT_TARGET_USD !== undefined) {
+    normalized.defaultObjectiveSoftTargetUsd = Number(config.BEYONDER_OBJECTIVE_SOFT_TARGET_USD);
+  }
+  if ("BEYONDER_MAX_SINGLE_INFERENCE_USD" in config && config.BEYONDER_MAX_SINGLE_INFERENCE_USD !== undefined) {
+    normalized.maxSingleInferenceUsd = Number(config.BEYONDER_MAX_SINGLE_INFERENCE_USD);
+  }
+  const merged = { ...DEFAULT_COMPUTE_ECONOMY_CONFIG, ...normalized };
 
   // If monthly cap is 0, force zero_cost mode regardless of explicit mode.
   if (merged.monthlyHardCapUsd <= 0 && merged.mode !== "zero_cost") {

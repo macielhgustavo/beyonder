@@ -109,6 +109,24 @@ export class BudgetAccountant {
   }
 
   /**
+   * Check if worst-case cost can be afforded hypothetically under target objective and inference limits.
+   * Used in Shadow Mode to evaluate whether a candidate would have been authorized if paid mode was live.
+   */
+  canAffordHypothetical(
+    scope: BudgetScope,
+    worstCaseMicros: Microdollars,
+    hypotheticalObjectiveCapMicros?: Microdollars
+  ): boolean {
+    if (worstCaseMicros === 0) return true;
+    const targetCap = hypotheticalObjectiveCapMicros ?? this.config.defaultObjectiveHardCapMicros;
+    if (worstCaseMicros > targetCap) return false;
+    if (this.config.maxSingleInferenceMicros && worstCaseMicros > this.config.maxSingleInferenceMicros) {
+      return false;
+    }
+    return true;
+  }
+
+  /**
    * Get remaining available budget for a given scope.
    * Available = min(available across all accounts in scope hierarchy).
    */
@@ -215,8 +233,8 @@ export class BudgetAccountant {
           params.phase ?? null,
           params.provider,
           params.model,
-          params.estimatedInputTokens,
-          params.maxOutputTokens,
+          params.estimatedInputTokens ?? 0,
+          params.maxOutputTokens ?? 0,
           params.worstCaseMicros,
           params.idempotencyKey,
           params.pricingSnapshotId ?? null,

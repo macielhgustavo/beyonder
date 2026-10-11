@@ -11,10 +11,15 @@ export interface UtilityInputs {
   failureRisk: number;
 }
 
-export function calculateUtility(input: UtilityInputs, economicState: EconomicState): number {
+export function calculateUtility(
+  input: UtilityInputs,
+  economicState: EconomicState,
+  options?: { monetaryReferenceUsd?: number }
+): number {
   const weights = ROUTER_CONFIG.utilityWeights;
   const policy = getEconomicRoutingPolicy(economicState);
-  const monetaryPenalty = normalizeCost(input.monetaryCostUsd, ROUTER_CONFIG.costNormalization.monetaryReferenceUsd);
+  const monetaryReference = options?.monetaryReferenceUsd ?? ROUTER_CONFIG.costNormalization.monetaryReferenceUsd;
+  const monetaryPenalty = normalizeCost(input.monetaryCostUsd, monetaryReference);
   const shadowPenalty = normalizeCost(input.shadowCostUsd, ROUTER_CONFIG.costNormalization.shadowReferenceUsd);
   const positive =
     weights.predictedQuality * clamp(input.predictedQuality * policy.qualityBias) +

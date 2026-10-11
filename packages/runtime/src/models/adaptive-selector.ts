@@ -3,7 +3,7 @@ import type { IntelligenceTask } from "../intelligence/contracts.js";
 import type { EconomicState } from "../types.js";
 import type { ModelCapabilitySource } from "./capability-source.js";
 import { NullCapabilitySource, predictCapability } from "./capability-source.js";
-import type { CapabilityPredictionEvidence, HistoricalPerformance, ModelCandidate, RejectedCandidate, RouteDecision, RouterTelemetry } from "./adaptive-types.js";
+import type { CapabilityPredictionEvidence, HistoricalPerformance, ModelCandidate, RejectedCandidate, RouteDecision, RouterTelemetry, ShadowDecision } from "./adaptive-types.js";
 import { CLOUD_FIRST_POLICY, assessCapability, computeTier, paidCandidateAllowed, resolveQualityFloor, routingScore } from "./compute-policy.js";
 import type { PerformanceRepository } from "./performance-repository.js";
 import { EmptyPerformanceRepository } from "./performance-repository.js";
@@ -15,6 +15,11 @@ import { ROUTER_CONFIG, getEconomicRoutingPolicy } from "./router-config.js";
 import { ShadowCostCalculator } from "./shadow-cost.js";
 import { calculateEffectiveResourceCost, calculateUtility } from "./utility.js";
 import { discoverOllama } from "./ollama-discovery.js";
+import type { PricingRegistry, PricingSnapshot } from "../economy/pricing-registry.js";
+import { type CostEstimator, DefaultCostEstimator } from "../economy/cost-estimator.js";
+import type { BudgetAccountant } from "../economy/budget-accountant.js";
+import { microsToUsd } from "../economy/money.js";
+import type { ComputeMode } from "../economy/compute-economy-config.js";
 
 export interface AdaptiveSelectorOptions {
   /** Trusted account/price evidence adapter. Never a score adjustment or paid opt-in. */
@@ -34,6 +39,11 @@ export interface AdaptiveSelectorOptions {
   shadowCostCalculator?: ShadowCostCalculator;
   random?: RandomSource;
   telemetry?: RouterTelemetry;
+  pricingRegistry?: PricingRegistry;
+  costEstimator?: CostEstimator;
+  budgetAccountant?: BudgetAccountant;
+  shadowMode?: boolean;
+  computeMode?: ComputeMode;
 }
 
 type InventoryEntry = ReturnType<typeof buildComputeInventory>[number];
@@ -44,6 +54,9 @@ export class AdaptiveModelSelector {
   private readonly quotaSource: QuotaSource;
   private readonly shadowCost: ShadowCostCalculator;
   private readonly random: RandomSource;
+  private readonly pricingRegistry?: PricingRegistry;
+  private readonly costEstimator: CostEstimator;
+  private readonly budgetAccountant?: BudgetAccountant;
 
   constructor(
     private readonly providerStatePath: string,
@@ -54,6 +67,9 @@ export class AdaptiveModelSelector {
     this.quotaSource = options.quotaSource ?? new AutopilotQuotaSource(providerStatePath);
     this.shadowCost = options.shadowCostCalculator ?? new ShadowCostCalculator();
     this.random = options.random ?? new MathRandomSource();
+    this.pricingRegistry = options.pricingRegistry;
+    this.costEstimator = options.costEstimator ?? new DefaultCostEstimator();
+    this.budgetAccountant = options.budgetAccountant;
   }
 
   async route(task: IntelligenceTask, economicState: EconomicState): Promise<RouteDecision> {
@@ -120,22 +136,107 @@ export class AdaptiveModelSelector {
         ? this.quotaSource.getFromState(pair.entry.providerId, pair.model, state)
         : await this.quotaSource.get(pair.entry.providerId, pair.model);
       const provider = getProvider(pair.entry.providerId) ?? { id: 'ollama' as const, openAiCompatibleEndpoint: this.options.ollamaBaseUrl };
-      const modelMetadata = pair.entry.modelMetadata.find(m => m.id === pair.model)!;
+      const modelMetadata = pair.entry.modelMetadata.find(m => m.id === pair.model) ?? {
+        id: pair.model,
+        capabilities: ["CHAT", "REASONING", "CODING"],
+        costClass: "PAID" as const
+      };
       const accountEvidence = evidence.find(e => e.provider === pair.entry.providerId && e.model === pair.model);
       const observedEconomics = resolveZeroCostExecution({ provider, model: modelMetadata, credential: access, accountPlan: await accountPlan(pair.entry.providerId), billingCapability: await billingCapability(pair.entry.providerId), installationPosture: this.options.installationPosture, accountEvidence, quota: economicQuota });
       const economics = ['FREE_QUOTA_EXHAUSTED', 'PAID', 'BILLING_RISK', 'DEV_EVAL_ONLY'].includes(observedEconomics.classification) ? observedEconomics : await this.options.economicEvidence?.(pair.entry.providerId, pair.model) ?? observedEconomics;
       let costAllowed = true;
       try { requireZeroCostDecision(economics, pair.entry.providerId, pair.model); } catch { costAllowed = false; }
-      if (!costAllowed || modelMetadata.costClass === 'PAID' && !['PROVIDER_FREE_PLAN', 'PROVIDER_BILLING_API', 'INSTALLATION_ZERO_BILLING_POSTURE'].includes(economics.source) || pair.entry.cost === 'billing-risk') {
-        const rejected: RejectedCandidate = { provider: pair.entry.providerId, model: pair.model, inferenceProfile: pair.inferenceProfile, computeTier: modelMetadata.costClass === 'PAID' ? 'PAID_DISABLED' : 'OTHER_FREE_CLOUD', economics, reasons: [`economic:${economics.classification}; ${economics.reason}`] };
+
+      const isShadowMode = this.options.shadowMode ?? (this.options.computeMode === "zero_cost" || this.options.computeMode === undefined);
+      const isEconomyActive = Boolean(this.pricingRegistry);
+      let isPaidCandidate = false;
+      let pricingSnapshot: PricingSnapshot | null = null;
+      let costEstimate: import("../economy/cost-estimator.js").CostEstimate | undefined = undefined;
+      let worstCaseCostUsd = 0;
+      let monetaryCostUsd = 0;
+      if (economics.classification === 'FREE_QUOTA_EXHAUSTED') {
+        const rejected: RejectedCandidate = {
+          provider: pair.entry.providerId,
+          model: pair.model,
+          inferenceProfile: pair.inferenceProfile,
+          computeTier: modelMetadata.costClass === 'PAID' ? 'PAID_DISABLED' : 'OTHER_FREE_CLOUD',
+          economics,
+          reasons: [`economic:${economics.classification}; ${economics.reason}`]
+        };
         rejectedCandidates.push(rejected);
         const group = `${pair.entry.providerId}:${economics.classification}`;
         costFilterCounts.set(group, (costFilterCounts.get(group) ?? 0) + 1);
-        if (economics.classification === 'FREE_QUOTA_EXHAUSTED') await this.telemetry('info', 'quota.free_tier_exhausted', { provider: pair.entry.providerId, model: pair.model, reason: economics.reason });
+        await this.telemetry('info', 'quota.free_tier_exhausted', { provider: pair.entry.providerId, model: pair.model, reason: economics.reason });
         continue;
       }
+
+      if (!costAllowed || modelMetadata.costClass === 'PAID' && !['PROVIDER_FREE_PLAN', 'PROVIDER_BILLING_API', 'INSTALLATION_ZERO_BILLING_POSTURE'].includes(economics.source) || pair.entry.cost === 'billing-risk') {
+        if (isEconomyActive && this.pricingRegistry) {
+          pricingSnapshot = this.pricingRegistry.getPrice(pair.entry.providerId, pair.model);
+          if (!pricingSnapshot || !this.pricingRegistry.isFresh(pricingSnapshot)) {
+            const rejected: RejectedCandidate = {
+              provider: pair.entry.providerId,
+              model: pair.model,
+              inferenceProfile: pair.inferenceProfile,
+              computeTier: 'PAID_DISABLED',
+              economics,
+              reasons: ['pricing: unknown or stale price snapshot; Invariant I-4 blocks billable route without verified pricing']
+            };
+            rejectedCandidates.push(rejected);
+            await this.telemetry('debug', 'router.candidate_rejected', { taskId: task.id, ...rejected });
+            continue;
+          }
+
+          const estimatedInputTokens = task.requirements.contextWindow ? Math.min(task.requirements.contextWindow, 2000) : 1500;
+          const maxOutputTokens = task.requirements.structuredOutput ? 2400 : 1200;
+          costEstimate = this.costEstimator.estimate({
+            pricing: pricingSnapshot,
+            estimatedInputTokens,
+            maxOutputTokens
+          });
+          monetaryCostUsd = microsToUsd(costEstimate.estimatedCostMicros);
+          worstCaseCostUsd = microsToUsd(costEstimate.worstCaseCostMicros);
+
+          let affordable = true;
+          if (this.budgetAccountant) {
+            if (isShadowMode) {
+              affordable = this.budgetAccountant.canAffordHypothetical({ objectiveId: task.id }, costEstimate.worstCaseCostMicros);
+            } else {
+              affordable = this.budgetAccountant.canAfford({ objectiveId: task.id }, costEstimate.worstCaseCostMicros);
+            }
+          }
+          if (!affordable) {
+            const rejected: RejectedCandidate = {
+              provider: pair.entry.providerId,
+              model: pair.model,
+              inferenceProfile: pair.inferenceProfile,
+              computeTier: 'PAID_DISABLED',
+              economics,
+              reasons: ['NEEDS_BUDGET: worst-case cost exceeds remaining applicable budget']
+            };
+            rejectedCandidates.push(rejected);
+            await this.telemetry('debug', 'router.candidate_rejected', { taskId: task.id, ...rejected });
+            continue;
+          }
+
+          isPaidCandidate = true;
+        } else {
+          const rejected: RejectedCandidate = { provider: pair.entry.providerId, model: pair.model, inferenceProfile: pair.inferenceProfile, computeTier: modelMetadata.costClass === 'PAID' ? 'PAID_DISABLED' : 'OTHER_FREE_CLOUD', economics, reasons: [`economic:${economics.classification}; ${economics.reason}`] };
+          rejectedCandidates.push(rejected);
+          const group = `${pair.entry.providerId}:${economics.classification}`;
+          costFilterCounts.set(group, (costFilterCounts.get(group) ?? 0) + 1);
+          if (economics.classification === 'FREE_QUOTA_EXHAUSTED') await this.telemetry('info', 'quota.free_tier_exhausted', { provider: pair.entry.providerId, model: pair.model, reason: economics.reason });
+          continue;
+        }
+      } else {
+        monetaryCostUsd = 0;
+        worstCaseCostUsd = 0;
+      }
+
       await this.telemetry('debug', 'economic.cost_evidence_resolved', { taskId: task.id, ...economics });
-      await this.telemetry('debug', 'economic.zero_cost_guarantee', { taskId: task.id, ...economics });
+      if (!isPaidCandidate) {
+        await this.telemetry('debug', 'economic.zero_cost_guarantee', { taskId: task.id, ...economics });
+      }
       const unsafeVerdicts = task.inferencePhase === "OBJECTIVE_VERIFICATION"
         ? await this.capabilitySource.getVerificationSafetyEvidence?.(pair.model) : undefined;
       if (unsafeVerdicts?.falseApprovals) {
@@ -231,14 +332,20 @@ export class AdaptiveModelSelector {
       const latencyMs = health?.samples ? health.latencyMs : (performance.avgLatencyMs > 0 ? performance.avgLatencyMs : benchmarkCapability?.latencyMs);
       const latencyPenalty = latencyMs === undefined ? 1 : clamp(latencyMs / ROUTER_CONFIG.costNormalization.latencyReferenceMs);
       // Rejected/unknown executions never reach scoring or acquire a $0 value.
-      const monetaryCostUsd = economics.monetaryCost.state === 'CONFIRMED_ZERO' ? economics.monetaryCost.usd : undefined;
-      if (monetaryCostUsd !== 0) continue;
+      if (!isPaidCandidate) {
+        const confirmedCost = economics.monetaryCost.state === 'CONFIRMED_ZERO' ? economics.monetaryCost.usd : undefined;
+        if (confirmedCost !== 0) continue;
+      }
       const effectiveResourceCost = calculateEffectiveResourceCost({
         monetaryCostUsd,
         shadowCostUsd: shadow.shadowCostUsd,
         latencyPenalty
       });
-      const metadata = pair.entry.modelMetadata.find((m) => m.id === pair.model);
+      const metadata = pair.entry.modelMetadata.find((m) => m.id === pair.model) ?? {
+        id: pair.model,
+        capabilities: ["text", ...(pair.model.includes("code") ? ["coding"] : []), ...(pair.model.includes("r1") ? ["reasoning"] : [])],
+        costClass: "PAID" as const
+      };
       const structuredPenalty = task.requirements.structuredOutput && metadata?.structuredOutput !== "native" ? metadata?.structuredOutput === "prompted" ? 0.02 : 0.08 : 0;
       const utility = calculateUtility({
         predictedQuality,
@@ -256,7 +363,7 @@ export class AdaptiveModelSelector {
         metadataQuality: ROUTER_CONFIG.qualityClassDefaults[pair.entry.qualityClass],
         local: pair.entry.providerId === "ollama",
         externalQuotaConsumption: pair.entry.providerId !== "ollama",
-        costClass: ['PROVIDER_FREE_PLAN', 'PROVIDER_BILLING_API', 'INSTALLATION_ZERO_BILLING_POSTURE'].includes(economics.source) ? 'FREE_TIER_ELIGIBLE' : metadata?.costClass,
+        costClass: isPaidCandidate ? 'PAID' : (['PROVIDER_FREE_PLAN', 'PROVIDER_BILLING_API', 'INSTALLATION_ZERO_BILLING_POSTURE'].includes(economics.source) ? 'FREE_TIER_ELIGIBLE' : metadata?.costClass),
         structuredOutput: metadata?.structuredOutput ?? "unknown",
         provider: pair.entry.providerId,
         model: pair.model,
@@ -267,6 +374,9 @@ export class AdaptiveModelSelector {
         historicalSuccess: performance.successRate,
         reliability,
         monetaryCostUsd,
+        worstCaseCostUsd,
+        pricingSnapshot: pricingSnapshot ?? undefined,
+        costEstimate,
         shadowCostUsd: shadow.shadowCostUsd,
         latencyPenalty,
         failureRisk,
@@ -285,14 +395,15 @@ export class AdaptiveModelSelector {
             { signal: "real samples", value: performance.samples },
             { signal: "historical success", value: performance.successRate },
             { signal: "reliability", value: reliability },
-            { signal: "monetary cost", value: "$0" }
+            { signal: "monetary cost", value: isPaidCandidate ? `$${monetaryCostUsd.toFixed(4)}` : "$0" }
           ],
           penalties: [
             { signal: "structured output uncertainty", value: structuredPenalty },
             { signal: "quota scarcity", value: shadow.scarcity },
             { signal: "shadow cost", value: shadow.shadowCostUsd },
             { signal: "latency", value: latencyPenalty },
-            { signal: "failure risk", value: failureRisk }
+            { signal: "failure risk", value: failureRisk },
+            ...(isPaidCandidate ? [{ signal: "monetary cost penalty", value: monetaryCostUsd }] : [])
           ],
           constraints: [
             `economic-state=${economicState}`,
@@ -304,13 +415,14 @@ export class AdaptiveModelSelector {
       };
 
       const capabilityFit = assessCapability(candidate, task, qualityFloor);
-      const tier = computeTier(candidate, capabilityFit, qualityFloor);
+      const allowPaidTier = isPaidCandidate && (isShadowMode || (this.options.computeMode === "bounded" && CLOUD_FIRST_POLICY.paidEscalationEnabled));
+      const tier = computeTier(candidate, capabilityFit, qualityFloor, allowPaidTier);
       const score = routingScore(candidate, capabilityFit, tier, qualityFloor);
       const rejectionReasons: string[] = [];
       // A quality estimate is evidence for ranking, never permission to produce.
       // Unknown and low-sample models must be able to gather real observations.
-      if (tier === "PAID_DISABLED" && !paidCandidateAllowed()) rejectionReasons.push("paid escalation is architecturally represented but disabled in v0.5");
-      if (candidate.monetaryCostUsd > policy.maxMonetaryCostUsd) rejectionReasons.push(`monetary-cost>${policy.maxMonetaryCostUsd}`);
+      if (tier === "PAID_DISABLED" && !paidCandidateAllowed() && !isShadowMode) rejectionReasons.push("paid escalation is architecturally represented but disabled in v0.5");
+      if (!isShadowMode && candidate.monetaryCostUsd > policy.maxMonetaryCostUsd) rejectionReasons.push(`monetary-cost>${policy.maxMonetaryCostUsd}`);
       // Shadow cost is a score signal. The hard economic limit is monetary.
 
       Object.assign(candidate, {
@@ -378,14 +490,78 @@ export class AdaptiveModelSelector {
     }
 
     const cloudCandidates = candidates.filter((candidate) => !candidate.local);
-    let selected = candidates[0];
+    const isShadowMode = this.options.shadowMode ?? (this.options.computeMode === "zero_cost" || this.options.computeMode === undefined);
+    const isEconomyActive = Boolean(this.pricingRegistry);
+    const overallBest = candidates[0];
+    const freeCandidates = candidates.filter((candidate) => candidate.monetaryCostUsd === 0);
+    const bestFree = freeCandidates[0];
+
+    let selected: ModelCandidate | undefined = candidates[0];
+    let shadowDecision: ShadowDecision | undefined = undefined;
+
+    if (isShadowMode && isEconomyActive) {
+      if (overallBest && overallBest.monetaryCostUsd > 0) {
+        // Paid candidate achieved highest utility! In shadow mode, defer live execution to best free candidate.
+        selected = bestFree;
+        shadowDecision = {
+          shadowMode: true,
+          shadowCandidate: overallBest,
+          selectedCandidate: bestFree,
+          estimatedPaidCostUsd: overallBest.monetaryCostUsd,
+          worstCasePaidCostUsd: overallBest.worstCaseCostUsd ?? overallBest.monetaryCostUsd,
+          utilityDifference: Number((overallBest.routingScore! - (bestFree?.routingScore ?? 0)).toFixed(6)),
+          whyPaidCandidateWon: `Superior task-adjusted utility (${overallBest.routingScore?.toFixed(4)} vs ${bestFree?.routingScore?.toFixed(4) ?? 'none'}) justifying estimated cost of $${overallBest.monetaryCostUsd.toFixed(4)}`,
+          whyNotSelectedForLive: "Shadow mode active: zero-cost invariant enforced (monetary spend = $0)."
+        };
+        await this.telemetry("info", "router.shadow_decision_recorded", {
+          taskId: task.id,
+          ...shadowDecision
+        });
+      } else if (overallBest) {
+        selected = overallBest;
+        shadowDecision = {
+          shadowMode: true,
+          shadowCandidate: undefined,
+          selectedCandidate: overallBest,
+          estimatedPaidCostUsd: 0,
+          worstCasePaidCostUsd: 0,
+          utilityDifference: 0,
+          whyPaidCandidateWon: "Free candidate had optimal utility; paid candidates did not justify additional cost.",
+          whyNotSelectedForLive: "Free candidate selected directly."
+        };
+      }
+    }
+
     let explored = false;
-    const explorationPool = candidates.length > 1 ? candidates : [];
+    const explorationPool = (isShadowMode ? freeCandidates : candidates).length > 1 ? (isShadowMode ? freeCandidates : candidates) : [];
     if (this.options.allowExploration === true && explorationPool.length > 1 && this.random.next() < policy.explorationRate) {
       const offset = Math.floor(this.random.next() * (explorationPool.length - 1));
       selected = explorationPool[1 + offset] ?? selected;
-      explored = selected !== candidates[0];
-      if (explored) await this.telemetry("info", "router.exploration_selected", serializeCandidate(selected, task.id, task.inferencePhase));
+      explored = selected !== (isShadowMode ? bestFree : candidates[0]);
+      if (explored && selected) await this.telemetry("info", "router.exploration_selected", serializeCandidate(selected, task.id, task.inferencePhase));
+    }
+
+    if (!selected) {
+      const reason = shadowDecision?.shadowCandidate
+        ? `Free compute capacity exhausted; shadow paid candidate ${shadowDecision.shadowCandidate.provider}/${shadowDecision.shadowCandidate.model} ($${shadowDecision.estimatedPaidCostUsd.toFixed(4)}) would have satisfied objective under bounded paid routing.`
+        : "No operationally and economically eligible model is available";
+      await this.telemetry("warn", "router.needs_capability", {
+        taskId: task.id,
+        taskType: task.type,
+        qualityFloor,
+        shadowDecision,
+        rejectedCandidates: rejectedCandidates.map((c) => ({ provider: c.provider, model: c.model, tier: c.computeTier, reasons: c.reasons }))
+      });
+      return {
+        ...baseDecision,
+        candidates,
+        consideredCandidates,
+        rejectedCandidates,
+        explored: false,
+        capacityStatus: "NEEDS_CAPABILITY",
+        reason,
+        shadowDecision
+      };
     }
 
     const capacityStatus = cloudCandidates.length > 0 ? "NORMAL" : "CAPACITY_REDUCED";
@@ -411,7 +587,8 @@ export class AdaptiveModelSelector {
         ? "only local zero-cost compute is available"
         : explored
           ? `controlled cloud exploration within ${economicState} safety and quality constraints`
-          : `highest task-adjusted score under ${economicState} zero-money constraints`
+          : `highest task-adjusted score under ${economicState} zero-money constraints`,
+      shadowDecision
     };
   }
 
@@ -431,10 +608,22 @@ export class AdaptiveModelSelector {
     if (task.requirements.contextWindow && typeof entry.contextWindow === "number" && entry.contextWindow < task.requirements.contextWindow) return [];
     if (task.requirements.vision) return [];
     const workload = workloadForTask(task.type);
-    return entry.models
+
+    const availableModels = new Set(entry.models);
+    if (this.pricingRegistry) {
+      for (const snapshot of this.pricingRegistry.listForProvider(entry.providerId)) {
+        availableModels.add(snapshot.model);
+      }
+    }
+
+    return Array.from(availableModels)
       .filter((model) => {
-        const metadata = entry.modelMetadata.find((m) => m.id === model);
-        return metadata && isModelMetadataEligibleForWorkload(metadata, workload) && (!task.requirements.structuredOutput || metadata.structuredOutput !== "unsupported");
+        const metadata = entry.modelMetadata.find((m) => m.id === model) ?? {
+          id: model,
+          capabilities: ["CHAT", "REASONING", ...(model.includes("code") ? ["CODING" as const] : [])],
+          costClass: "PAID" as const
+        };
+        return isModelMetadataEligibleForWorkload(metadata, workload) && (!task.requirements.structuredOutput || metadata.structuredOutput !== "unsupported");
       })
       .map((model) => ({ entry, model }));
   }

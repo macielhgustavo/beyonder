@@ -1,133 +1,111 @@
 # Beyonder
 
-Beyonder é um runtime experimental para agentes autônomos orientados a objetivos, com foco em execução verificável, aquisição de capacidade computacional e uso responsável de ferramentas externas.
+A TypeScript agent runtime that separates task execution from evidence-based completion, with bounded tool use and persistent execution state.
 
-O projeto nasceu para explorar uma pergunta prática: **como construir um agente que não apenas gera respostas, mas executa trabalho real, mede o que aconteceu e evita declarar sucesso quando o objetivo não foi cumprido?**
+Experimental software. A completed model response is not proof that a task succeeded.
 
-## Visão geral
+## Why this exists
 
-O Beyonder organiza execução autônoma em torno de objetivos, capacidades, ferramentas, provedores de IA e evidências de resultado. Em vez de tratar uma chamada de modelo como sinônimo de conclusão, o runtime separa planejamento, execução, verificação e estado final.
+Multi-step agents need more than a model API: they need explicit state, permission boundaries, recoverable execution, and a way to reject unsupported success claims. Beyonder explores those problems in a local runtime.
 
-Entre os principais pontos do projeto estão:
+## What it does
 
-- execução de objetivos por etapas;
-- seleção e roteamento entre diferentes provedores de IA;
-- política de compute com prioridade para recursos de baixo custo;
-- ferramentas de navegador, shell e filesystem protegidas por políticas;
-- benchmark de modelos e provedores;
-- avaliação de tarefas reais e testes de autonomia;
-- persistência local com SQLite;
-- mecanismos para reduzir **false success**, isto é, casos em que um agente afirma ter concluído algo sem evidência suficiente.
+- Plans and executes bounded tasks through a tool registry and policy layer.
+- Tracks retries, checkpoints, execution leases, and reconciliation requirements.
+- Routes model requests across configured providers and records capability and cost observations.
+- Checks completion against tool results, required evidence, requested output formats, and optional semantic verification.
+- Persists state, memory, audit events, and budgets in SQLite.
+- Exposes a CLI and a Next.js Control Center for inspection and operator commands.
 
-## Arquitetura
+## Architecture
 
-O repositório é organizado como um monorepo TypeScript.
-
-```text
-apps/
-  cli/               interface de linha de comando
-
-packages/
-  runtime/           loop principal de execução
-  compute/           seleção e aquisição de capacidade computacional
-  economy/           estado econômico e políticas relacionadas
-  tools/             ferramentas disponíveis ao agente
-  benchmark/         benchmark e avaliação de modelos
-  browser-agent/     automação e políticas de navegador
-  web-evals/         avaliações de tarefas e autonomia
-
-tests/
-  integration/       testes de integração do runtime
+```mermaid
+flowchart TD
+  UI["CLI / Control Center"] --> R["Task runtime"]
+  R --> M["Model routing and memory"]
+  R --> T["Tool executor and policy"]
+  T --> V["Completion verification"]
+  M --> V
+  R --> S["SQLite state, checkpoints and audit"]
+  V --> S
 ```
 
-## Stack
+The current task executor lives in `packages/runtime/src/tasks/`. It records observed tool outcomes before evaluating completion. The newer mission kernel in `packages/runtime/src/missions/` adds validated plans, scheduling, events, and budget authority; it is a foundation under integration, not a claim that every product flow uses it.
 
-- TypeScript
-- Node.js 22+
-- pnpm workspaces
-- SQLite
-- better-sqlite3
-- Drizzle ORM
-- Vitest
-- Zod
-- Commander
+| Component | Code |
+| --- | --- |
+| Task execution and recovery | `packages/runtime/src/tasks/` |
+| Mission kernel | `packages/runtime/src/missions/` |
+| Provider discovery and routing | `packages/compute/`, `packages/runtime/src/models/` |
+| Tool contracts and policy | `packages/tools/` |
+| Browser isolation and SSRF boundaries | `packages/browser-agent/` |
+| Memory, budget accounting, audit | `packages/runtime/src/{memory,economy,audit}/` |
+| Controlled evaluation fixtures | `packages/web-evals/`, `packages/benchmark/` |
+| Operator interface | `apps/dashboard/` |
 
-## Como executar
+## Tech stack
 
-Requisitos:
+TypeScript, Node.js 22+, pnpm workspaces, SQLite, better-sqlite3, Drizzle, Zod, Vitest, Playwright, Next.js and React.
 
-- Node.js 22 ou superior
-- pnpm 9 ou superior
+## Engineering highlights
 
-Instale as dependências:
+- **Execution and success are separate states.** The objective verifier can reject a finished execution when evidence or requested tool use is missing.
+- **Bounded recovery.** Step, retry, replan, time, and cost budgets constrain execution.
+- **Persistent accounting.** Spend reservations have unique idempotency keys; tests cover concurrency and crash recovery.
+- **Browser boundaries.** URL policy and pinned transport are tested against private-network access, redirects, and DNS rebinding.
+- **Controlled evaluation.** Fixture-based tests exercise failure and recovery without treating a live model response as a deterministic test oracle.
+
+## Getting started
 
 ```bash
-pnpm install
+git clone https://github.com/macielhgustavo/beyonder.git
+cd beyonder
+pnpm install --frozen-lockfile
+pnpm build
+BEYONDER_MODEL_PROVIDER=none pnpm beyonder status
 ```
 
-Valide o projeto:
+Use Node.js 22 and pnpm 9 for parity with the existing CI. The SQLite native binding must be available; if your installer suppresses dependency build scripts and reports a missing binding, run `npm rebuild better-sqlite3` before building.
+
+Copy `.env.example` to `.env` to configure providers. Start with `BEYONDER_MODEL_PROVIDER=none` for inspection without model calls. This does not demonstrate live autonomous task success.
+
+The Control Center has [its own setup and authentication guide](apps/dashboard/README.md).
+
+## Tests
 
 ```bash
 pnpm typecheck
 pnpm test
+pnpm control-center:typecheck
+pnpm control-center:test
 ```
 
-Alguns comandos disponíveis:
+Browser E2E is separate and requires Chromium:
 
 ```bash
-pnpm beyonder status
-pnpm beyonder economy
-pnpm beyonder run "Verifique o runtime sem efeitos externos" --steps 1
+pnpm --filter @beyonder/browser-agent exec playwright install chromium
+pnpm test:browser:e2e
 ```
 
-## Provedores e compute
+Live-provider and public-web smokes depend on credentials, provider availability, and network conditions. Keep those distinct from controlled regression tests.
 
-O Beyonder possui uma camada própria para descoberta, inventário e roteamento de provedores.
+## Technical decisions
 
-```bash
-pnpm beyonder providers autopilot
-pnpm beyonder providers resume
-pnpm beyonder providers inventory
-pnpm beyonder providers discover
-pnpm beyonder providers status
-```
+- **SQLite over a remote service:** simpler local operation and transactional accounting; this is not a distributed multi-worker deployment.
+- **Explicit tool contracts:** validation and policy enforcement sit outside model prompting.
+- **Independent completion checks:** deterministic invariants are useful but cannot establish semantic correctness for every arbitrary task.
+- **Incremental kernel migration:** legacy task execution remains while mission contracts are introduced and tested.
 
-Também existem atalhos equivalentes via scripts do `package.json`.
+## Limitations
 
-## Testes e avaliações
+- Experimental and under active integration; no claim of production adoption, measured revenue, or general autonomous reliability.
+- Live task quality depends on model capability and available tools.
+- Policies reduce risk; they do not make arbitrary tool execution a security sandbox.
+- Mission action intent/receipt contracts are not proof that all external actions have a complete reconciliation implementation.
+- The repository contains parallel legacy and newer modules that still need consolidation.
 
-A suíte cobre diferentes partes do sistema separadamente:
+## Roadmap
 
-```bash
-pnpm test:compute
-pnpm test:tools
-pnpm test:runtime
-pnpm test:benchmark
-pnpm test:browser
-pnpm test:web-evals
-pnpm test:integration
-```
-
-O projeto também possui smokes específicos para autonomia, oportunidades, marketplace, approvals e work loop.
-
-## Segurança
-
-Ferramentas com efeitos externos não são assumidas como seguras por padrão. Shell, navegador e filesystem são controlados por políticas, e dados como secrets, cookies, sessões, bancos locais, arquivos `.env` e cofres de provedores ficam fora do versionamento.
-
-O objetivo é que o agente consiga evoluir em capacidade sem transformar autonomia em execução irrestrita.
-
-## O que este projeto demonstra
-
-Este projeto concentra principalmente trabalho em:
-
-- arquitetura de agentes;
-- sistemas modulares em TypeScript;
-- integração com múltiplos provedores de IA;
-- persistência e observabilidade de execução;
-- desenho de políticas de segurança;
-- testes de comportamento autônomo;
-- avaliação de confiabilidade de sistemas baseados em LLMs.
-
-## Status
-
-Em desenvolvimento ativo. A arquitetura e as políticas continuam evoluindo conforme novos fluxos reais de execução são testados.
+- Consolidate task and mission execution without weakening completion checks.
+- Maintain reproducible, credential-free product examples.
+- Qualify recovery and verification against a small, explicit acceptance corpus.

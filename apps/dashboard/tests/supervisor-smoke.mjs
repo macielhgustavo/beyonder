@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, copyFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -7,10 +8,14 @@ import { fileURLToPath } from "node:url";
 import { createServer } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 const dir = mkdtempSync(join(tmpdir(), "beyonder-supervisor-test-"));
+const authDir = join(dir, "auth");
+const authToken = randomBytes(32).toString("hex");
+mkdirSync(authDir, { mode: 0o700 });
+writeFileSync(join(authDir, "auth-token.json"), JSON.stringify({ token: authToken, createdAt: new Date().toISOString() }), { mode: 0o600 });
 const launcher = fileURLToPath(new URL("../bin/launch-control-center.mjs", import.meta.url));
 const port = await availablePort();
 const url = `http://127.0.0.1:${port}`;
-const env = { ...process.env, BEYONDER_CONTROL_PORT: String(port), BEYONDER_CONTROL_RUNTIME_DIR: dir, BEYONDER_DB_PATH: join(dir, "runtime.sqlite"), BEYONDER_PROVIDER_STATE_PATH: join(dir, "providers.json"), BEYONDER_CONTROL_NO_OPEN: "1", BEYONDER_CONTROL_FIXTURE: "1", BEYONDER_MODEL_PROVIDER: "none" };
+const env = { ...process.env, BEYONDER_CONTROL_AUTH_DIR: authDir, BEYONDER_CONTROL_PORT: String(port), BEYONDER_CONTROL_RUNTIME_DIR: dir, BEYONDER_DB_PATH: join(dir, "runtime.sqlite"), BEYONDER_PROVIDER_STATE_PATH: join(dir, "providers.json"), BEYONDER_CONTROL_NO_OPEN: "1", BEYONDER_CONTROL_FIXTURE: "1", BEYONDER_MODEL_PROVIDER: "none" };
 async function availablePort() {
   const server = createServer();
   await new Promise((accept, reject) => { server.once("error", reject); server.listen(0, "127.0.0.1", accept); });
@@ -20,7 +25,13 @@ async function availablePort() {
   return address.port;
 }
 function launch() { return new Promise((accept, reject) => { let output = ""; const child = spawn(process.execPath, [launcher], { env, stdio: ["ignore", "pipe", "pipe"] }); child.stdout.on("data", (data) => output += data); child.stderr.on("data", (data) => output += data); child.once("error", reject); child.once("exit", (code) => accept({ code, output })); }); }
-async function command(body) { const response = await fetch(`${url}/api/control/command`, { method: "POST", headers: { "content-type": "application/json", origin: url }, body: JSON.stringify(body) }); return response.json(); }
+async function command(body) { const response = await fetch(`${url}/api/control/command`, { method: "POST", headers: { "content-type": "application/json", origin: url, authorization: `Bearer ${authToken}` }, body: JSON.stringify(body) }); return response.json(); }
+async function gotoAuthenticated(target) {
+  await page.goto(target);
+  await page.getByLabel("Token local", { exact: true }).fill(authToken);
+  await page.getByRole("button", { name: "Autorizar comandos", exact: true }).click();
+  await page.getByRole("button", { name: "Bloquear comandos", exact: true }).waitFor();
+}
 async function health() { try { return await (await fetch(`${url}/api/control/health`, { signal: AbortSignal.timeout(1000) })).json(); } catch { return null; } }
 async function completedMission(taskId) {
   for (let i = 0; i < 60; i++) {
@@ -65,6 +76,8 @@ try {
   result = await launch(); assert(result.code === 0, result.output);
   const first = await health(); assert(first?.service === "beyonder-control-center" && first.status.global === "READY", "Runtime heartbeat must report READY");
   result = await launch(); assert(result.code === 0, "Duplicate launch should reuse the process"); assert((await health()).pid === first.pid, "Duplicate must not create another server");
+  const unauthenticated = await fetch(`${url}/api/control/command`, { method: "POST", headers: { "content-type": "application/json", origin: url }, body: JSON.stringify({ type: "pauseRuntime" }) });
+  assert(unauthenticated.status === 401, "Commands must still reject unauthenticated callers in fixture mode");
   const objectiveResult = await command({ type: "submitObjective", objective: "Execute deterministic objective" });
   assert(objectiveResult.status === "PLANNING" && objectiveResult.taskId, `Fixture objective must be durably queued: ${JSON.stringify(objectiveResult)}`);
   assert((await completedMission(objectiveResult.taskId)).status === "succeeded", "Fixture objective must complete asynchronously");
@@ -77,7 +90,7 @@ try {
   page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  await page.goto(url);
+  await gotoAuthenticated(url);
   // A transient missed update must recover through the real polling lifecycle.
   let missedPoll = false;
   await page.route("**/api/control/missions/*", async (route) => {
@@ -103,14 +116,14 @@ try {
   await assertMissionCard(page.locator(".home-recent").locator(missionSelector), browserMission, true);
   await page.goto(`${url}/missions`);
   await assertMissionCard(page.locator(".mission-list").locator(missionSelector), browserMission);
-  await page.goto(`${url}/opportunities`);
+  await gotoAuthenticated(`${url}/opportunities`);
   const [prepared] = await Promise.all([
     page.waitForResponse((response) => response.url().endsWith("/api/control/command") && response.request().method() === "POST"),
     page.getByRole("button", { name: "Preparar candidatura" }).first().click()
   ]);
   const application = await prepared.json();
   assert(application.ok && application.workRunId && application.approvalId, "Browser application preparation");
-  await page.goto(`${url}/decisions`);
+  await gotoAuthenticated(`${url}/decisions`);
   const approvalSelector = `[data-approval-id="${application.approvalId}"]`;
   await page.locator(`${approvalSelector}[data-state="PENDING"]`).waitFor();
   page.once("dialog", (dialog) => dialog.accept());
@@ -124,7 +137,7 @@ try {
   await page.locator(`[data-work-run-id="${application.workRunId}"][data-state="APPLICATION_SENT"][data-application-status="SENT"]`).waitFor();
   await page.screenshot({ path: join(tmpdir(), "beyonder-control-hardening.png"), fullPage: true });
   assert(errors.length === 0, `Browser errors: ${errors.join(", ")}`);
-  await page.goto(`${url}/settings`);
+  await gotoAuthenticated(`${url}/settings`);
   await page.getByRole("button", { name: "Parar Beyonder", exact: true }).click();
   await page.getByRole("button", { name: "Cancelar", exact: true }).click();
   assert((await health())?.ok, "Cancelled shutdown must keep the server alive");

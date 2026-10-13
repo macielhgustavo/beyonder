@@ -32,7 +32,7 @@ jobs:
         run: pnpm typecheck
       - name: Test full suite
         run: pnpm test
-      - name: Seed three free provider candidates for dry routing
+      - name: Seed registry entries without live capability qualification
         shell: bash
         run: |
           cat > "$BEYONDER_PROVIDER_STATE_PATH" <<'JSON'
@@ -87,22 +87,20 @@ jobs:
             }
           }
           JSON
-      - name: Dry-run adaptive routing with explanation and three candidates
+      - name: Reject unqualified inventory during dry routing
         shell: bash
         run: |
           output=$(pnpm -s beyonder intelligence route "Implement a TypeScript parser with tests")
           echo "$output"
-          echo "$output" | grep -q '"rank": 3'
-          echo "$output" | grep -q '"shadowCostUsd"'
-          echo "$output" | grep -q '"effectiveResourceCost"'
-          echo "$output" | grep -q '"reason"'
-      - name: Dry-run model ranking
+          echo "$output" | node -e 'let s=""; process.stdin.on("data", c => s += c); process.stdin.on("end", () => { const r=JSON.parse(s); if (r.selected !== null || !Array.isArray(r.candidates) || r.candidates.length !== 0 || !r.reason) process.exit(1); });'
+      - name: Reject unqualified inventory during model ranking
         shell: bash
         run: |
           output=$(pnpm -s beyonder models rank coding)
           echo "$output"
-          echo "$output" | grep -q '"selected"'
-          echo "$output" | grep -q '"utility"'
+          echo "$output" | node -e 'let s=""; process.stdin.on("data", c => s += c); process.stdin.on("end", () => { const r=JSON.parse(s); if (r.selected !== null || !Array.isArray(r.candidates) || r.candidates.length !== 0 || !r.reason) process.exit(1); });'
+      - name: Verify positive routing with controlled capability evidence
+        run: pnpm exec vitest run packages/runtime/src/economy/__tests__/shadow-routing-acceptance.test.ts
       - name: Zero-cost end-to-end execution
         shell: bash
         run: |
